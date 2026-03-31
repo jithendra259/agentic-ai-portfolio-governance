@@ -11,21 +11,26 @@ scs==3.2.0
 # Graph Analysis (Critical for Agent 2)
 networkx>=3.0
 
-# Visualization
-matplotlib>=3.5.0
-seaborn>=0.12.0
+# Backend API and Frontend
+fastapi
+uvicorn
+requests
+gradio>=6.0.0
 
-# Data Sources (Live & Historical)
-yfinance==0.2.32
+# Data Sources and Storage
 pymongo==4.6.0
 
 # Configuration
 python-dotenv==1.0.0
 certifi==2024.2.2
 
-# LLM & Orchestration (For the Chatbot UI)
+# LLM & Orchestration
 langchain>=0.1.0
 langchain-ollama>=0.1.0
 langgraph>=0.1.0
 langchain-core>=0.1.0
-gradio>=4.0.0
+
+# Optional research / notebook dependencies retained for the local thesis workflow
+matplotlib>=3.5.0
+seaborn>=0.12.0
+yfinance==0.2.32
