@@ -1,3 +1,5 @@
+import json
+import re
 from typing import Annotated, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_ollama import ChatOllama
@@ -7,6 +9,7 @@ from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 
 # Import MongoDB-backed historical tools only.
+from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.agents.live_data_tools import (
     get_stock_database_snapshot,
     get_stocks_by_sector,
@@ -44,13 +47,15 @@ You strictly use historical data (2005-2025) from your local MongoDB.
 ABSOLUTE RULE: You are an advisory system. ZERO execution, buying, or selling.
 ABSOLUTE RULE: NEVER hallucinate or invent data. If a tool fails, tell the user the tool failed.
 
-YOUR STRUCTURED PIPELINE:
-When a user asks for a portfolio analysis or optimization, you MUST follow this exact sequence:
+RESPONSE MODES:
+1. Fast mode is the default.
+2. Multimodal mode is only for explicit visualization requests.
 
 STEP 1: Identify the Portfolio & Date
 - Check if the user has provided stock tickers and a historical target date (for example, 2008-09-15).
 - If either is missing, politely ask the user for the missing information.
 - Do NOT proceed to Step 2 without both tickers and a historical target date.
+- If the user provides a custom list of stock tickers such as AAPL, MSFT, and NVDA, you MUST bypass predefined universe lookup and pass that exact custom ticker list directly into run_full_governance_pipeline.
 - If the user asks for available sectors, use the list_available_sectors tool.
 - If the user asks for stocks by sector, use the get_stocks_by_sector tool.
 - If the user asks for stocks in a universe such as U1 through U11, use the get_stocks_by_universe tool.
@@ -60,10 +65,13 @@ STEP 1: Identify the Portfolio & Date
 STEP 2: Run Governance Pipeline
 - Use the run_full_governance_pipeline tool exactly once for the heavy deterministic analysis.
 - The tool already performs the historical price lookup, institutional network analysis, and historical G-CVaR optimization back-to-back using local MongoDB data only.
+- The tool returns structured JSON. Read it carefully instead of inventing any values.
+- In fast mode, stop after the governance pipeline and present the result clearly in text.
 
-STEP 3: Human-in-the-Loop Governance Report
-- Present the final results to the user in a professional, structured report.
-- Clearly state the historical date, the prices found, the network risk scores, and the final recommended G-CVaR allocation percentages based on the tool output.
+STEP 3: Multimodal Mode Only When Explicitly Requested
+- Only enter multimodal mode if the user explicitly asks for a chart, plot, graph, heatmap, network view, or visualization.
+- If the user does not explicitly ask for visuals, do not request charts.
+- When the user does ask for visuals, the system may generate one or two relevant charts after the governance pipeline.
 
 GENERAL RULES:
 1. Use only MongoDB-backed historical tools. No live internet data and no yfinance.
@@ -89,28 +97,10 @@ def chatbot_node(state: AgentState):
     return {"messages": [response]}
 
 
-def tool_result_router(state: AgentState):
-    """Short-circuit the expensive second LLM pass for the heavy governance macro-tool."""
-    messages = state["messages"]
-    if not messages:
-        return "chatbot"
-
-    last_message = messages[-1]
-    if isinstance(last_message, ToolMessage) and last_message.name == "run_full_governance_pipeline":
-        return "finalize_governance"
-
-    return "chatbot"
-
-
-def finalize_governance_node(state: AgentState):
-    """Return the macro-tool output directly as the final assistant reply."""
-    messages = state["messages"]
-    if not messages:
-        return {"messages": [AIMessage(content="Unable to generate a response for this request.")]}
-
-    last_message = messages[-1]
-    content = getattr(last_message, "content", "")
-
+def _message_content_to_text(message_or_content) -> str:
+    content = getattr(message_or_content, "content", message_or_content)
+    if isinstance(content, str):
+        return content
     if isinstance(content, list):
         parts = []
         for item in content:
@@ -118,14 +108,237 @@ def finalize_governance_node(state: AgentState):
                 parts.append(item)
             elif isinstance(item, dict) and item.get("type") == "text":
                 parts.append(item.get("text", ""))
-        content = "".join(parts)
-    elif not isinstance(content, str):
-        content = str(content)
+        return "".join(parts)
+    return str(content) if content is not None else ""
 
-    if not content:
-        content = "Unable to generate a response for this request."
 
-    return {"messages": [AIMessage(content=content)]}
+def _latest_user_text(messages: list[BaseMessage]) -> str:
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return _message_content_to_text(message)
+    return ""
+
+
+def _has_visual_intent(user_text: str) -> bool:
+    if not user_text:
+        return False
+
+    patterns = [
+        r"\bplot\b",
+        r"\bchart\b",
+        r"\bvisual\b",
+        r"\bvisualize\b",
+        r"\bheatmap\b",
+        r"\bgraph\b",
+        r"\bnetwork\b",
+        r"\bpie\b",
+        r"\bbar\b",
+        r"\bline chart\b",
+        r"\bshow .*chart\b",
+        r"\bshow .*plot\b",
+    ]
+    lowered = user_text.lower()
+    return any(re.search(pattern, lowered) for pattern in patterns)
+
+
+def _select_plot_recommendations(messages: list[BaseMessage], payload: dict | None) -> list[dict]:
+    if not payload or payload.get("status") not in {"success", "partial_success"}:
+        return []
+
+    recommendations = payload.get("plot_recommendations", [])
+    if not isinstance(recommendations, list) or not recommendations:
+        return []
+
+    user_text = _latest_user_text(messages).lower()
+    if not _has_visual_intent(user_text):
+        return []
+
+    recommendations_by_type = {
+        rec.get("plot_type"): rec
+        for rec in recommendations
+        if isinstance(rec, dict) and rec.get("plot_type")
+    }
+
+    selected_types = []
+    keyword_map = {
+        "heatmap": ["heatmap", "correlation", "covariance"],
+        "line": ["line chart", "price chart", "price comparison", "historical comparison", "trend"],
+        "bar": ["bar", "risk chart", "risk comparison", "systemic risk"],
+        "network": ["network", "bipartite", "holder graph", "institutional graph", "institutional network"],
+        "pie": ["pie", "allocation chart", "allocation breakdown", "weight chart", "weights chart"],
+    }
+
+    for plot_type, keywords in keyword_map.items():
+        if any(keyword in user_text for keyword in keywords) and plot_type in recommendations_by_type:
+            selected_types.append(plot_type)
+
+    if not selected_types:
+        for fallback_type in ["pie", "bar"]:
+            if fallback_type in recommendations_by_type:
+                selected_types.append(fallback_type)
+
+    selected = []
+    seen = set()
+    for plot_type in selected_types:
+        if plot_type in seen:
+            continue
+        seen.add(plot_type)
+        selected.append(recommendations_by_type[plot_type])
+
+    return selected[:2]
+
+
+def _extract_latest_governance_payload(messages: list[BaseMessage]) -> tuple[dict | None, str]:
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage) and message.name == "run_full_governance_pipeline":
+            raw = _message_content_to_text(message)
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    return parsed, raw
+            except Exception:
+                return None, raw
+    return None, ""
+
+
+def _collect_recent_plot_outputs(messages: list[BaseMessage]) -> list[str]:
+    plot_outputs = []
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage) and message.name == "generate_financial_plot":
+            plot_outputs.append(_message_content_to_text(message))
+            continue
+        if plot_outputs:
+            break
+    plot_outputs.reverse()
+    return plot_outputs
+
+
+def _build_governance_markdown(payload: dict | None, raw_text: str) -> str:
+    if not payload:
+        return raw_text or "Unable to generate a response for this request."
+
+    lines = [
+        "## Historical Governance Report",
+        f"- Status: {payload.get('status', 'unknown')}",
+        f"- Target date: {payload.get('target_date', 'unknown')}",
+        f"- Requested tickers: {', '.join(payload.get('requested_tickers', [])) or 'None'}",
+        f"- Valid tickers used: {', '.join(payload.get('valid_tickers', [])) or 'None'}",
+    ]
+
+    dropped = payload.get("dropped_tickers", [])
+    if dropped:
+        lines.append("- Dropped tickers:")
+        for item in dropped:
+            lines.append(f"  - {item.get('ticker', 'UNKNOWN')}: {item.get('reason', 'unspecified reason')}")
+
+    price_snapshot = payload.get("price_snapshot", [])
+    if price_snapshot:
+        lines.append("- Historical prices used:")
+        for item in price_snapshot:
+            lines.append(
+                f"  - {item.get('ticker', 'UNKNOWN')}: {item.get('close', 'N/A')} on {item.get('effective_date', 'N/A')}"
+            )
+
+    systemic_risk = payload.get("systemic_risk", {})
+    scores = systemic_risk.get("scores", {}) if isinstance(systemic_risk, dict) else {}
+    if scores:
+        lines.append("- Structural risk scores:")
+        for ticker, score in sorted(scores.items(), key=lambda item: item[1], reverse=True):
+            lines.append(f"  - {ticker}: {score:.4f}")
+
+    optimization = payload.get("optimization", {})
+    if isinstance(optimization, dict):
+        optimization_type = optimization.get("optimization_type")
+        if optimization_type:
+            lines.append(f"- Optimizer: {optimization_type}")
+
+        instability_index = optimization.get("instability_index")
+        lambda_t = optimization.get("lambda_t")
+        if instability_index is not None:
+            lines.append(f"- Instability index (I_t): {instability_index:.4f}")
+        if lambda_t is not None:
+            lines.append(f"- Graph penalty (lambda_t): {lambda_t:.4f}")
+
+        weights = optimization.get("weights", {})
+        if weights:
+            lines.append("- Recommended allocation weights:")
+            for ticker, weight in weights.items():
+                lines.append(f"  - {ticker}: {weight:.2%}")
+
+        expected_return = optimization.get("expected_annualized_return")
+        expected_cvar = optimization.get("expected_cvar_95")
+        if expected_return is not None:
+            lines.append(f"- Expected annualized return: {expected_return:.2%}")
+        if expected_cvar is not None:
+            lines.append(f"- Expected 95% CVaR: {expected_cvar:.2%}")
+
+    message = payload.get("message")
+    if message:
+        lines.extend(["", message])
+
+    return "\n".join(lines)
+
+
+def tool_result_router(state: AgentState):
+    """Default to fast text mode, only branching to visuals on explicit user request."""
+    messages = state["messages"]
+    if not messages:
+        return "chatbot"
+
+    last_message = messages[-1]
+    if isinstance(last_message, ToolMessage) and last_message.name == "run_full_governance_pipeline":
+        payload, _ = _extract_latest_governance_payload(messages)
+        if _select_plot_recommendations(messages, payload):
+            return "generate_visuals"
+        return "finalize_governance"
+
+    if isinstance(last_message, ToolMessage) and last_message.name == "generate_financial_plot":
+        return "finalize_governance"
+
+    return "chatbot"
+
+
+def generate_visuals_node(state: AgentState):
+    """Generate a small set of requested visuals without another LLM turn."""
+    messages = state["messages"]
+    payload, _ = _extract_latest_governance_payload(messages)
+    plot_requests = _select_plot_recommendations(messages, payload)
+
+    tool_messages = []
+    for index, request in enumerate(plot_requests, start=1):
+        plot_output = generate_financial_plot.invoke(
+            {
+                "data": request.get("data", {}),
+                "plot_type": request.get("plot_type", ""),
+                "title": request.get("title", "Financial Plot"),
+            }
+        )
+        tool_messages.append(
+            ToolMessage(
+                content=plot_output,
+                tool_call_id=f"deterministic-plot-{index}",
+                name="generate_financial_plot",
+            )
+        )
+
+    return {"messages": tool_messages}
+
+
+def finalize_governance_node(state: AgentState):
+    """Combine governance JSON and generated plot markdown into a final assistant reply."""
+    messages = state["messages"]
+    if not messages:
+        return {"messages": [AIMessage(content="Unable to generate a response for this request.")]}
+
+    governance_payload, raw_text = _extract_latest_governance_payload(messages)
+    plot_outputs = _collect_recent_plot_outputs(messages)
+    content_parts = [_build_governance_markdown(governance_payload, raw_text)]
+
+    if plot_outputs:
+        content_parts.append("## Generated Visuals")
+        content_parts.extend(plot_outputs)
+
+    return {"messages": [AIMessage(content="\n\n".join(part for part in content_parts if part))]}
 
 # 5. Build the LangGraph State Machine
 builder = StateGraph(AgentState)
@@ -133,6 +346,7 @@ builder = StateGraph(AgentState)
 # Add the nodes
 builder.add_node("chatbot", chatbot_node)
 builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
+builder.add_node("generate_visuals", generate_visuals_node)
 builder.add_node("finalize_governance", finalize_governance_node)
 
 # Define the routing logic
@@ -150,10 +364,12 @@ builder.add_conditional_edges(
     "tools",
     tool_result_router,
     {
+        "generate_visuals": "generate_visuals",
         "finalize_governance": "finalize_governance",
         "chatbot": "chatbot",
     },
 )
+builder.add_edge("generate_visuals", "finalize_governance")
 builder.add_edge("finalize_governance", END)
 
 # 6. Add Conversational Memory (Crucial for the Thesis!)

@@ -1,5 +1,8 @@
+import json
+import logging
 import os
 import re
+import warnings
 from functools import lru_cache
 
 import cvxpy as cp
@@ -16,6 +19,7 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "Stock_data"
 COLLECTION_NAME = "ticker"
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -85,6 +89,309 @@ def _normalize_tickers(tickers: list[str]) -> list[str]:
 
 def _build_price_frames(docs_by_ticker: dict[str, dict]) -> dict[str, pd.DataFrame]:
     return {ticker: _extract_price_frame(doc) for ticker, doc in docs_by_ticker.items()}
+
+
+def _warn_drop_ticker(ticker: str, reason: str, dropped_tickers: list[dict]) -> None:
+    message = f"Dropping {ticker} from governance pipeline: {reason}"
+    logger.warning(message)
+    warnings.warn(message, RuntimeWarning, stacklevel=2)
+    dropped_tickers.append({"ticker": ticker, "reason": reason})
+
+
+def _prepare_portfolio_inputs(
+    docs_by_ticker: dict[str, dict],
+    price_frames: dict[str, pd.DataFrame],
+    cleaned_tickers: list[str],
+    target_dt: pd.Timestamp,
+    target_date: str,
+    lookback_window: int = 90,
+    min_history: int = 20,
+) -> dict:
+    valid_tickers = []
+    dropped_tickers = []
+    price_snapshot = []
+    price_history = {}
+    effective_dates = {}
+    price_series = {}
+
+    for ticker in cleaned_tickers:
+        doc = docs_by_ticker.get(ticker)
+        if not doc:
+            _warn_drop_ticker(ticker, "ticker not found in MongoDB", dropped_tickers)
+            continue
+
+        df = price_frames.get(ticker, pd.DataFrame())
+        if df.empty:
+            _warn_drop_ticker(ticker, "no historical price series stored", dropped_tickers)
+            continue
+
+        eligible = df[df["Date"] <= target_dt].copy()
+        if eligible.empty:
+            _warn_drop_ticker(ticker, f"no price data on or before {target_date}", dropped_tickers)
+            continue
+
+        trailing_window = eligible.tail(lookback_window).copy()
+        if len(trailing_window) < min_history:
+            _warn_drop_ticker(
+                ticker,
+                f"insufficient {lookback_window}-day lookback history before {target_date}",
+                dropped_tickers,
+            )
+            continue
+
+        valid_tickers.append(ticker)
+        effective_row = eligible.iloc[-1]
+        effective_date = effective_row["Date"].strftime("%Y-%m-%d")
+        effective_dates[ticker] = effective_date
+        price_snapshot.append(
+            {
+                "ticker": ticker,
+                "close": round(float(effective_row["Close"]), 6),
+                "effective_date": effective_date,
+            }
+        )
+        price_history[ticker] = [
+            {
+                "date": row["Date"].strftime("%Y-%m-%d"),
+                "close": round(float(row["Close"]), 6),
+            }
+            for _, row in trailing_window.iterrows()
+        ]
+        price_series[ticker] = trailing_window.set_index("Date")["Close"].rename(ticker)
+
+    overlapping_prices = pd.DataFrame()
+    if price_series:
+        overlapping_prices = pd.concat(price_series.values(), axis=1).sort_index()
+        overlapping_prices = overlapping_prices.ffill().dropna(how="any")
+
+    return {
+        "valid_tickers": valid_tickers,
+        "dropped_tickers": dropped_tickers,
+        "price_snapshot": price_snapshot,
+        "price_history": price_history,
+        "effective_dates": effective_dates,
+        "overlapping_prices": overlapping_prices,
+    }
+
+
+def _build_network_analysis_payload(docs_by_ticker: dict[str, dict], valid_tickers: list[str]) -> dict:
+    graph = nx.Graph()
+    holder_edges = []
+    missing_network_data = []
+
+    for ticker in valid_tickers:
+        graph.add_node(ticker, bipartite=0)
+        doc = docs_by_ticker.get(ticker)
+        holders = doc.get("graph_relationships", {}).get("institutional_holders", []) if doc else []
+
+        if not holders:
+            missing_network_data.append({"ticker": ticker, "reason": "no institutional holder data"})
+            continue
+
+        for holder in holders:
+            holder_name = holder.get("Holder")
+            pct_str = str(holder.get("pctHeld", "0")).replace("%", "").strip()
+            try:
+                weight = float(pct_str)
+            except ValueError:
+                weight = 0.0
+
+            if holder_name and weight > 0:
+                graph.add_node(holder_name, bipartite=1)
+                graph.add_edge(ticker, holder_name, weight=weight)
+                holder_edges.append(
+                    {
+                        "ticker": ticker,
+                        "holder": holder_name,
+                        "weight": round(weight, 6),
+                    }
+                )
+
+    if not valid_tickers:
+        return {
+            "method": "No eligible tickers",
+            "scores": {},
+            "holder_edges": [],
+            "missing_network_data": missing_network_data,
+        }
+
+    if graph.number_of_edges() == 0:
+        scores = {ticker: 0.0 for ticker in valid_tickers}
+        method = "No holder data available"
+    else:
+        try:
+            centrality = nx.eigenvector_centrality(graph, max_iter=2000, weight="weight")
+            method = "Eigenvector Centrality"
+        except Exception:
+            centrality = nx.degree_centrality(graph)
+            method = "Degree Centrality fallback"
+
+        stock_centrality = {node: float(centrality.get(node, 0.0)) for node in valid_tickers}
+        c_series = pd.Series(stock_centrality, dtype=float)
+        c_min, c_max = c_series.min(), c_series.max()
+        if c_max > c_min:
+            normalized = (c_series - c_min) / (c_max - c_min)
+        else:
+            normalized = pd.Series(0.0, index=c_series.index, dtype=float)
+
+        scores = {ticker: round(float(normalized.get(ticker, 0.0)), 6) for ticker in valid_tickers}
+
+    return {
+        "method": method,
+        "scores": scores,
+        "holder_edges": holder_edges,
+        "missing_network_data": missing_network_data,
+    }
+
+
+def _build_optimization_payload(
+    overlapping_prices: pd.DataFrame,
+    effective_dates: dict[str, str],
+    target_date: str,
+    risk_tolerance: str = "moderate",
+    network_scores: dict[str, float] | None = None,
+    lambda_max: float = 0.5,
+    k: float = 10.0,
+    i_thresh: float = 0.5,
+) -> dict:
+    if overlapping_prices.empty or overlapping_prices.shape[1] < 2:
+        return {
+            "status": "error",
+            "message": (
+                f"Not enough overlapping historical prices remained to run optimization for {target_date}."
+            ),
+        }
+
+    if len(overlapping_prices) < 20:
+        return {
+            "status": "error",
+            "message": (
+                f"Fewer than 20 overlapping historical observations remained before {target_date}."
+            ),
+        }
+
+    log_returns = np.log(overlapping_prices / overlapping_prices.shift(1))
+    log_returns = log_returns.replace([np.inf, -np.inf], np.nan).dropna(how="any")
+    if log_returns.empty or len(log_returns) < 20:
+        return {
+            "status": "error",
+            "message": f"Insufficient clean return history remained to run optimization for {target_date}.",
+        }
+
+    asset_names = list(log_returns.columns)
+    returns_matrix = log_returns.to_numpy()
+    num_periods, num_assets = returns_matrix.shape
+    beta = 0.95
+    c_vector = np.array(
+        [float((network_scores or {}).get(ticker, 0.0)) for ticker in asset_names],
+        dtype=float,
+    )
+
+    mean_daily_returns = log_returns.mean().to_numpy()
+    mean_annual_returns = mean_daily_returns * 252.0
+    covariance_matrix = log_returns.cov().round(6)
+    correlation_matrix = log_returns.corr().round(6)
+
+    try:
+        eigenvalues = np.linalg.eigvalsh(correlation_matrix.to_numpy())
+        instability_index = float(np.max(eigenvalues) / max(1, num_assets))
+    except Exception:
+        instability_index = 0.0
+
+    profile = (risk_tolerance or "moderate").strip().lower()
+    if profile not in {"conservative", "moderate", "aggressive"}:
+        profile = "moderate"
+
+    percentile_map = {
+        "conservative": 25,
+        "moderate": 50,
+        "aggressive": 75,
+    }
+    target_annual_return = float(np.percentile(mean_annual_returns, percentile_map[profile]))
+    target_daily_return = target_annual_return / 252.0
+
+    weights = cp.Variable(num_assets)
+    alpha = cp.Variable()
+    tail_excess = cp.Variable(num_periods, nonneg=True)
+
+    portfolio_returns = returns_matrix @ weights
+    losses = -portfolio_returns
+    cvar_95 = alpha + (1.0 / ((1.0 - beta) * num_periods)) * cp.sum(tail_excess)
+    lambda_t = float(lambda_max / (1.0 + np.exp(-k * (instability_index - i_thresh))))
+    graph_penalty = lambda_t * (c_vector @ weights)
+
+    constraints = [
+        cp.sum(weights) == 1,
+        weights >= 0,
+        tail_excess >= losses - alpha,
+        mean_daily_returns @ weights >= target_daily_return,
+    ]
+
+    problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
+
+    try:
+        problem.solve(solver=cp.ECOS, verbose=False)
+    except Exception:
+        problem.solve(solver=cp.SCS, verbose=False)
+
+    if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or weights.value is None:
+        return {
+            "status": "error",
+            "message": (
+                f"Historical CVaR optimization could not find a stable solution for {target_date}. "
+                f"Solver status: {problem.status}."
+            ),
+        }
+
+    optimal_weights = np.maximum(np.asarray(weights.value).reshape(-1), 0.0)
+    optimal_weights[optimal_weights < 0.01] = 0.0
+
+    if float(optimal_weights.sum()) <= 0:
+        return {
+            "status": "error",
+            "message": (
+                f"Historical CVaR optimization failed for {target_date}: all weights were negligible after cleanup."
+            ),
+        }
+
+    optimal_weights = optimal_weights / optimal_weights.sum()
+    weights_map = {
+        ticker: round(float(weight), 6)
+        for ticker, weight in sorted(zip(asset_names, optimal_weights), key=lambda item: item[1], reverse=True)
+        if weight > 0
+    }
+
+    expected_annualized_return = float(mean_annual_returns @ optimal_weights)
+    realized_portfolio_returns = returns_matrix @ optimal_weights
+    portfolio_losses = -realized_portfolio_returns
+    var_95 = float(np.quantile(portfolio_losses, beta))
+    tail_losses = portfolio_losses[portfolio_losses >= var_95]
+    expected_cvar_95 = float(tail_losses.mean()) if len(tail_losses) > 0 else var_95
+
+    return {
+        "status": "success",
+        "optimization_type": "graph_regularized_cvar",
+        "risk_tolerance": profile,
+        "weights": weights_map,
+        "expected_annualized_return": round(expected_annualized_return, 6),
+        "expected_cvar_95": round(expected_cvar_95, 6),
+        "target_annual_return_floor": round(target_annual_return, 6),
+        "instability_index": round(instability_index, 6),
+        "lambda_t": round(lambda_t, 6),
+        "graph_scores_used": {
+            ticker: round(float(score), 6)
+            for ticker, score in zip(asset_names, c_vector)
+        },
+        "objective_value": round(float(problem.value), 6) if problem.value is not None else None,
+        "effective_window_end": overlapping_prices.index.max().strftime("%Y-%m-%d"),
+        "historical_pricing_dates": {
+            ticker: effective_dates[ticker]
+            for ticker in asset_names
+            if ticker in effective_dates
+        },
+        "correlation_matrix": correlation_matrix.to_dict(),
+        "covariance_matrix": covariance_matrix.to_dict(),
+    }
 
 
 def _run_price_snapshot_from_frames(
@@ -1037,15 +1344,34 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
     """
     Run the full deterministic governance pipeline against local MongoDB only:
     historical prices, institutional network analysis, and historical CVaR optimization.
-    This tool is advisory only and never executes trades.
+    This tool is advisory only, never executes trades, and returns a JSON payload
+    that downstream plotting tools can consume directly.
     """
     try:
         if not tickers:
-            return "Unable to run full governance pipeline: no tickers were provided."
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "Unable to run full governance pipeline: no tickers were provided.",
+                    "requested_tickers": [],
+                    "valid_tickers": [],
+                    "dropped_tickers": [],
+                },
+                indent=2,
+            )
 
         cleaned_tickers = _normalize_tickers(tickers)
         if not cleaned_tickers:
-            return "Unable to run full governance pipeline: no valid tickers were provided."
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": "Unable to run full governance pipeline: no valid tickers were provided.",
+                    "requested_tickers": [],
+                    "valid_tickers": [],
+                    "dropped_tickers": [],
+                },
+                indent=2,
+            )
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
         collection = _get_collection()
@@ -1060,46 +1386,132 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
             )
         )
         if not docs:
-            return (
-                f"Unable to run full governance pipeline: none of the requested tickers were found "
-                f"in MongoDB for {target_date}."
+            return json.dumps(
+                {
+                    "status": "error",
+                    "message": (
+                        f"Unable to run full governance pipeline: none of the requested tickers were found "
+                        f"in MongoDB for {target_date}."
+                    ),
+                    "target_date": target_date,
+                    "requested_tickers": cleaned_tickers,
+                    "valid_tickers": [],
+                    "dropped_tickers": [
+                        {"ticker": ticker, "reason": "ticker not found in MongoDB"}
+                        for ticker in cleaned_tickers
+                    ],
+                },
+                indent=2,
             )
 
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         price_frames = _build_price_frames(docs_by_ticker)
-
-        prices_output = _run_price_snapshot_from_frames(price_frames, cleaned_tickers, target_dt, target_date)
-        if prices_output.startswith("Unable to fetch historical prices"):
-            return prices_output
-
-        network_output = _run_network_analysis_from_docs(docs_by_ticker, cleaned_tickers)
-        optimization_output = _run_historical_cvar_from_frames(
-            price_frames,
-            cleaned_tickers,
-            target_dt,
-            target_date,
+        prepared = _prepare_portfolio_inputs(
+            docs_by_ticker=docs_by_ticker,
+            price_frames=price_frames,
+            cleaned_tickers=cleaned_tickers,
+            target_dt=target_dt,
+            target_date=target_date,
         )
 
-        response = [
-            "Full Historical Governance Pipeline",
-            f"- Requested target date: {target_date}",
-            f"- Requested tickers: {', '.join(cleaned_tickers)}",
-            "",
-            "## Step 1: Historical Prices",
-            prices_output if isinstance(prices_output, str) else str(prices_output),
-            "",
-            "## Step 2: Institutional Network Risk",
-            network_output if isinstance(network_output, str) else str(network_output),
-            "",
-            "## Step 3: Historical G-CVaR Optimization",
-            optimization_output if isinstance(optimization_output, str) else str(optimization_output),
-            "",
-            "## Governance Note",
-            "This pipeline is strictly advisory, uses only local MongoDB historical data, "
-            "and does not execute trades.",
-        ]
+        valid_tickers = prepared["valid_tickers"]
+        dropped_tickers = prepared["dropped_tickers"]
 
-        return "\n".join(response)
+        if len(valid_tickers) < 2:
+            payload = {
+                "status": "error",
+                "message": (
+                    "Unable to complete optimization because fewer than two requested tickers had valid "
+                    f"historical coverage through {target_date}."
+                ),
+                "advisory_only": True,
+                "data_source": "local_mongodb_historical_only",
+                "target_date": target_date,
+                "requested_tickers": cleaned_tickers,
+                "valid_tickers": valid_tickers,
+                "dropped_tickers": dropped_tickers,
+                "price_snapshot": prepared["price_snapshot"],
+                "price_history": prepared["price_history"],
+            }
+            return json.dumps(payload, indent=2)
+
+        network_payload = _build_network_analysis_payload(docs_by_ticker, valid_tickers)
+        optimization_payload = _build_optimization_payload(
+            overlapping_prices=prepared["overlapping_prices"],
+            effective_dates=prepared["effective_dates"],
+            target_date=target_date,
+            network_scores=network_payload.get("scores", {}),
+        )
+
+        status = optimization_payload.get("status", "error")
+        message = (
+            "Full historical governance pipeline completed successfully."
+            if status == "success"
+            else optimization_payload.get("message", "Governance pipeline completed with errors.")
+        )
+        if dropped_tickers:
+            message += " Some requested tickers were dropped due to missing or insufficient local history."
+
+        payload = {
+            "status": "partial_success" if status == "success" and dropped_tickers else status,
+            "message": message,
+            "advisory_only": True,
+            "data_source": "local_mongodb_historical_only",
+            "target_date": target_date,
+            "requested_tickers": cleaned_tickers,
+            "valid_tickers": valid_tickers,
+            "dropped_tickers": dropped_tickers,
+            "price_snapshot": prepared["price_snapshot"],
+            "price_history": prepared["price_history"],
+            "systemic_risk": network_payload,
+            "optimization": optimization_payload,
+        }
+
+        if optimization_payload.get("status") == "success":
+            payload["plot_recommendations"] = [
+                {
+                    "plot_type": "pie",
+                    "title": f"Optimal Allocation Weights as of {target_date}",
+                    "data": {"weights": optimization_payload["weights"]},
+                },
+                {
+                    "plot_type": "bar",
+                    "title": f"Systemic Risk Scores as of {target_date}",
+                    "data": {"scores": network_payload["scores"]},
+                },
+                {
+                    "plot_type": "line",
+                    "title": f"Historical Price Comparison into {target_date}",
+                    "data": {"price_history": prepared["price_history"]},
+                },
+                {
+                    "plot_type": "heatmap",
+                    "title": f"Correlation Heatmap into {target_date}",
+                    "data": {"correlation_matrix": optimization_payload["correlation_matrix"]},
+                },
+                {
+                    "plot_type": "network",
+                    "title": f"Institutional Risk Network as of {target_date}",
+                    "data": {
+                        "holder_edges": network_payload["holder_edges"],
+                        "risk_scores": network_payload["scores"],
+                    },
+                },
+            ]
+
+        return json.dumps(payload, indent=2)
 
     except Exception as e:
-        return f"Unable to run full governance pipeline due to an internal error: {type(e).__name__}: {str(e)}"
+        return json.dumps(
+            {
+                "status": "error",
+                "message": (
+                    f"Unable to run full governance pipeline due to an internal error: "
+                    f"{type(e).__name__}: {str(e)}"
+                ),
+                "requested_tickers": _normalize_tickers(tickers or []),
+                "valid_tickers": [],
+                "dropped_tickers": [],
+            },
+            indent=2,
+        )
