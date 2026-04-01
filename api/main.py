@@ -1,11 +1,13 @@
 import logging
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.orchestrator.llm_router import portfolio_assistant
 
@@ -18,6 +20,10 @@ app = FastAPI(
     description="Advisory-only backend for historical portfolio governance using local MongoDB data.",
     version="1.0.0",
 )
+
+OUTPUTS_DIR = Path("outputs")
+OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
 
 
 class ChatRequest(BaseModel):

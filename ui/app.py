@@ -2,6 +2,8 @@ import logging
 import os
 import uuid
 import json
+import re
+from urllib.parse import urlparse
 
 import gradio as gr
 import requests
@@ -16,6 +18,30 @@ logger = logging.getLogger(__name__)
 
 def create_session_id() -> str:
     return str(uuid.uuid4())
+
+
+def _backend_base_url() -> str:
+    parsed = urlparse(STREAM_API_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _rewrite_plot_markdown(content: str) -> str:
+    if not content:
+        return content
+
+    base_url = _backend_base_url().rstrip("/")
+
+    def replace_relative(match: re.Match) -> str:
+        path = match.group(1).lstrip("./")
+        return f"]({base_url}/{path})"
+
+    def replace_rooted(match: re.Match) -> str:
+        path = match.group(1)
+        return f"]({base_url}{path})"
+
+    content = re.sub(r"\]\((outputs/[^)]+)\)", replace_relative, content)
+    content = re.sub(r"\]\((/outputs/[^)]+)\)", replace_rooted, content)
+    return content
 
 
 def chat_with_api(user_message: str, history, session_id: str):
@@ -46,19 +72,19 @@ def chat_with_api(user_message: str, history, session_id: str):
             if event_type == "status":
                 status_message = content
                 if not accumulated_response:
-                    yield status_message
+                    yield _rewrite_plot_markdown(status_message)
             elif event_type == "token":
                 accumulated_response += content
-                yield accumulated_response
+                yield _rewrite_plot_markdown(accumulated_response)
             elif event_type == "final":
                 accumulated_response = content or accumulated_response
-                yield accumulated_response
+                yield _rewrite_plot_markdown(accumulated_response)
             elif event_type == "error":
-                yield f"System Error: {content}"
+                yield _rewrite_plot_markdown(f"System Error: {content}")
                 return
 
         if not accumulated_response and status_message:
-            yield status_message
+            yield _rewrite_plot_markdown(status_message)
         elif not accumulated_response:
             yield "No response returned from backend."
     except requests.exceptions.ConnectionError:
@@ -85,8 +111,13 @@ def build_demo() -> gr.Blocks:
 
         gr.Markdown("# Agentic Portfolio Governance Assistant")
         gr.Markdown(
-            "This system is strictly advisory-only. It uses historical data from a local MongoDB "
-            "database and does not execute trades, place orders, or use live market APIs."
+            """
+            ### Advisory-Only System
+            - No live market data: all analysis uses historical MongoDB snapshots.
+            - No trade execution: this is a research prototype, not a live portfolio manager.
+            - Historical analysis only: governance pipeline backtests scenarios from 2005 to 2025.
+            - Human in the loop: elevated instability regimes are intended for researcher review.
+            """
         )
 
         gr.ChatInterface(

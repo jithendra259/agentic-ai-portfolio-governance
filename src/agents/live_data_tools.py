@@ -12,6 +12,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from pymongo import MongoClient
+from src.agents.generate_dynamic_plot import generate_financial_plot
 
 load_dotenv()
 
@@ -391,6 +392,79 @@ def _build_optimization_payload(
         },
         "correlation_matrix": correlation_matrix.to_dict(),
         "covariance_matrix": covariance_matrix.to_dict(),
+    }
+
+
+def _generate_inline_governance_plots(
+    target_date: str,
+    weights: dict[str, float],
+    network_payload: dict,
+) -> list[str]:
+    generated_plots = []
+    plot_requests = []
+    risk_scores = network_payload.get("scores", {}) if isinstance(network_payload, dict) else {}
+    holder_edges = network_payload.get("holder_edges", []) if isinstance(network_payload, dict) else []
+
+    if weights:
+        plot_requests.append(
+            {
+                "plot_type": "pie",
+                "title": f"Optimal Allocation Weights as of {target_date}",
+                "data": {"weights": weights},
+            }
+        )
+
+    if risk_scores or holder_edges:
+        plot_requests.append(
+            {
+                "plot_type": "network",
+                "title": f"Institutional Risk Network as of {target_date}",
+                "data": {
+                    "holder_edges": holder_edges,
+                    "risk_scores": risk_scores,
+                },
+            }
+        )
+
+    for request in plot_requests:
+        try:
+            plot_output = generate_financial_plot.invoke(request)
+        except Exception as exc:
+            logger.warning("Unable to generate %s plot inline: %s", request["plot_type"], exc)
+            continue
+
+        if isinstance(plot_output, str) and "![" in plot_output:
+            generated_plots.append(plot_output)
+            continue
+
+        logger.warning(
+            "Plot tool returned a non-markdown response for %s: %s",
+            request["plot_type"],
+            plot_output,
+        )
+
+    return generated_plots
+
+
+def _build_lightweight_governance_payload(
+    status: str,
+    message: str,
+    target_date: str,
+    valid_tickers: list[str],
+    dropped_tickers: list[dict] | None = None,
+    systemic_risk: dict | None = None,
+    optimization: dict | None = None,
+    generated_plots: list[str] | None = None,
+) -> dict:
+    return {
+        "status": status,
+        "message": message,
+        "target_date": str(target_date or ""),
+        "valid_tickers": valid_tickers or [],
+        "dropped_tickers": dropped_tickers or [],
+        "systemic_risk": systemic_risk or {"method": "Unavailable", "scores": {}},
+        "optimization": optimization or {},
+        "generated_plots": generated_plots or [],
     }
 
 
@@ -781,6 +855,52 @@ def list_available_sectors() -> str:
 
 
 @tool
+def list_available_universes() -> str:
+    """List distinct universes available in the MongoDB stock database, with ticker counts and sector mix."""
+    try:
+        collection = _get_collection()
+        docs = list(collection.find({}, {"universes": 1, "sector": 1, "info.sector": 1}))
+
+        universe_counts = {}
+        universe_sector_counts = {}
+
+        for doc in docs:
+            info = doc.get("info", {}) if isinstance(doc.get("info"), dict) else {}
+            sector = info.get("sector") or doc.get("sector") or "Unknown"
+            universes = doc.get("universes", []) if isinstance(doc.get("universes"), list) else []
+
+            for universe in {str(item).strip().upper() for item in universes if str(item).strip()}:
+                universe_counts[universe] = universe_counts.get(universe, 0) + 1
+                sector_map = universe_sector_counts.setdefault(universe, {})
+                sector_map[sector] = sector_map.get(sector, 0) + 1
+
+        if not universe_counts:
+            return "No universes were found in the MongoDB database."
+
+        universe_keys = sorted(
+            universe_counts,
+            key=lambda item: (int(item[1:]) if re.fullmatch(r"U\d+", item) else float("inf"), item),
+        )
+
+        lines = ["Here are the available universes found in the database:"]
+        for universe in universe_keys:
+            sector_map = universe_sector_counts.get(universe, {})
+            dominant_sector = (
+                max(sector_map.items(), key=lambda item: item[1])[0]
+                if sector_map
+                else "Unknown"
+            )
+            lines.append(
+                f"- {universe}: {universe_counts[universe]} tickers, dominant sector {dominant_sector}"
+            )
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        return f"Unable to list available universes due to a database or query error: {type(e).__name__}: {str(e)}"
+
+
+@tool
 def get_stocks_by_universe(universe: str) -> str:
     """Fetch stocks from MongoDB that belong to a requested universe such as U1 or U7."""
     try:
@@ -836,6 +956,122 @@ def get_stocks_by_universe(universe: str) -> str:
 
     except Exception as e:
         return f"Unable to search stocks by universe due to a database or query error: {type(e).__name__}: {str(e)}"
+
+
+@tool
+def plot_historical_prices(
+    tickers: list[str],
+    start_date: str = "2005-01-01",
+    end_date: str = "2025-12-31",
+) -> str:
+    """Plot historical prices from local MongoDB for the requested tickers over a date range."""
+    try:
+        if not tickers:
+            return "Unable to generate the historical price plot: no tickers were provided."
+
+        cleaned_tickers = _normalize_tickers(tickers)
+        if not cleaned_tickers:
+            return "Unable to generate the historical price plot: no valid tickers were provided."
+
+        start_dt = pd.to_datetime(start_date, format="%Y-%m-%d", errors="raise")
+        end_dt = pd.to_datetime(end_date, format="%Y-%m-%d", errors="raise")
+        if start_dt > end_dt:
+            return "Unable to generate the historical price plot: start_date must be on or before end_date."
+
+        collection = _get_collection()
+        docs = list(
+            collection.find(
+                {"ticker": {"$in": cleaned_tickers}},
+                {"ticker": 1, "historical_prices": 1},
+            )
+        )
+        if not docs:
+            return (
+                "Unable to generate the historical price plot: none of the requested tickers were found "
+                "in MongoDB."
+            )
+
+        docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
+        included = {}
+        excluded = []
+
+        for ticker in cleaned_tickers:
+            doc = docs_by_ticker.get(ticker)
+            if not doc:
+                excluded.append(f"- {ticker}: ticker not found in MongoDB")
+                continue
+
+            df = _extract_price_frame(doc)
+            if df.empty:
+                excluded.append(f"- {ticker}: no stored historical price series")
+                continue
+
+            filtered = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)].copy()
+            if filtered.empty:
+                excluded.append(
+                    f"- {ticker}: no historical prices between {start_date} and {end_date}"
+                )
+                continue
+
+            included[ticker] = [
+                {
+                    "date": row["Date"].strftime("%Y-%m-%d"),
+                    "close": round(float(row["Close"]), 6),
+                }
+                for _, row in filtered.iterrows()
+            ]
+
+        if not included:
+            lines = [
+                "Unable to generate the historical price plot because no requested tickers had usable data in the selected date range."
+            ]
+            if excluded:
+                lines.extend(["", "Excluded tickers:"])
+                lines.extend(excluded)
+            return "\n".join(lines)
+
+        plot_output = generate_financial_plot.invoke(
+            {
+                "data": {"price_history": included},
+                "plot_type": "line",
+                "title": f"Historical Price Comparison {start_date} to {end_date}",
+            }
+        )
+
+        coverage_lines = [
+            f"- {ticker}: {rows[0]['date']} to {rows[-1]['date']} ({len(rows)} observations)"
+            for ticker, rows in included.items()
+            if rows
+        ]
+        response = [
+            "Historical Price Plot",
+            f"- Date range: {start_date} to {end_date}",
+            f"- Included tickers: {', '.join(included.keys())}",
+            "- Coverage used:",
+            *coverage_lines,
+            "",
+            plot_output,
+        ]
+
+        if excluded:
+            response.extend(["", "Excluded tickers:"])
+            response.extend(excluded)
+
+        if len(included) > 12:
+            response.extend(
+                [
+                    "",
+                    "Note: this chart contains many tickers, so visual overlap can make it dense.",
+                ]
+            )
+
+        return "\n".join(response)
+
+    except Exception as e:
+        return (
+            "Unable to generate the historical price plot due to an internal error: "
+            f"{type(e).__name__}: {str(e)}"
+        )
 
 
 @tool
@@ -1344,36 +1580,46 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
     """
     Run the full deterministic governance pipeline against local MongoDB only:
     historical prices, institutional network analysis, and historical CVaR optimization.
-    This tool is advisory only, never executes trades, and returns a JSON payload
-    that downstream plotting tools can consume directly.
+    This tool is advisory only, never executes trades, generates plots inline,
+    and returns a lightweight JSON payload to avoid LLM context bloat.
     """
     try:
         if not tickers:
             return json.dumps(
-                {
-                    "status": "error",
-                    "message": "Unable to run full governance pipeline: no tickers were provided.",
-                    "requested_tickers": [],
-                    "valid_tickers": [],
-                    "dropped_tickers": [],
-                },
-                indent=2,
+                _build_lightweight_governance_payload(
+                    status="error_no_tickers_provided",
+                    message="Unable to run full governance pipeline: no tickers were provided.",
+                    target_date=target_date,
+                    valid_tickers=[],
+                    dropped_tickers=[],
+                )
             )
 
         cleaned_tickers = _normalize_tickers(tickers)
         if not cleaned_tickers:
             return json.dumps(
-                {
-                    "status": "error",
-                    "message": "Unable to run full governance pipeline: no valid tickers were provided.",
-                    "requested_tickers": [],
-                    "valid_tickers": [],
-                    "dropped_tickers": [],
-                },
-                indent=2,
+                _build_lightweight_governance_payload(
+                    status="error_no_valid_tickers_provided",
+                    message="Unable to run full governance pipeline: no valid tickers were provided.",
+                    target_date=target_date,
+                    valid_tickers=[],
+                    dropped_tickers=[],
+                )
             )
 
-        target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
+        try:
+            target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
+        except Exception:
+            return json.dumps(
+                _build_lightweight_governance_payload(
+                    status="error_invalid_target_date",
+                    message="Unable to run full governance pipeline: target_date must use the YYYY-MM-DD format.",
+                    target_date=target_date,
+                    valid_tickers=[],
+                    dropped_tickers=[],
+                )
+            )
+
         collection = _get_collection()
         docs = list(
             collection.find(
@@ -1387,21 +1633,19 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
         )
         if not docs:
             return json.dumps(
-                {
-                    "status": "error",
-                    "message": (
-                        f"Unable to run full governance pipeline: none of the requested tickers were found "
-                        f"in MongoDB for {target_date}."
+                _build_lightweight_governance_payload(
+                    status="error_no_requested_tickers_found_in_local_mongodb",
+                    message=(
+                        "Unable to run full governance pipeline: none of the requested tickers "
+                        f"were found in local MongoDB for {target_date}."
                     ),
-                    "target_date": target_date,
-                    "requested_tickers": cleaned_tickers,
-                    "valid_tickers": [],
-                    "dropped_tickers": [
+                    target_date=target_date,
+                    valid_tickers=[],
+                    dropped_tickers=[
                         {"ticker": ticker, "reason": "ticker not found in MongoDB"}
                         for ticker in cleaned_tickers
                     ],
-                },
-                indent=2,
+                )
             )
 
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
@@ -1416,26 +1660,34 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
 
         valid_tickers = prepared["valid_tickers"]
         dropped_tickers = prepared["dropped_tickers"]
+        network_payload = _build_network_analysis_payload(docs_by_ticker, valid_tickers)
+        lightweight_systemic_risk = {
+            "method": network_payload.get("method", "Unavailable"),
+            "scores": network_payload.get("scores", {}),
+        }
 
         if len(valid_tickers) < 2:
-            payload = {
-                "status": "error",
-                "message": (
-                    "Unable to complete optimization because fewer than two requested tickers had valid "
-                    f"historical coverage through {target_date}."
-                ),
-                "advisory_only": True,
-                "data_source": "local_mongodb_historical_only",
-                "target_date": target_date,
-                "requested_tickers": cleaned_tickers,
-                "valid_tickers": valid_tickers,
-                "dropped_tickers": dropped_tickers,
-                "price_snapshot": prepared["price_snapshot"],
-                "price_history": prepared["price_history"],
-            }
-            return json.dumps(payload, indent=2)
+            generated_plots = _generate_inline_governance_plots(
+                target_date=target_date,
+                weights={},
+                network_payload=network_payload,
+            )
+            return json.dumps(
+                _build_lightweight_governance_payload(
+                    status="error_fewer_than_two_valid_tickers_after_history_validation",
+                    message=(
+                        "Unable to complete optimization because fewer than two requested tickers had valid "
+                        f"historical coverage through {target_date}."
+                    ),
+                    target_date=target_date,
+                    valid_tickers=valid_tickers,
+                    dropped_tickers=dropped_tickers,
+                    systemic_risk=lightweight_systemic_risk,
+                    optimization={},
+                    generated_plots=generated_plots,
+                )
+            )
 
-        network_payload = _build_network_analysis_payload(docs_by_ticker, valid_tickers)
         optimization_payload = _build_optimization_payload(
             overlapping_prices=prepared["overlapping_prices"],
             effective_dates=prepared["effective_dates"],
@@ -1443,75 +1695,63 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
             network_scores=network_payload.get("scores", {}),
         )
 
-        status = optimization_payload.get("status", "error")
-        message = (
-            "Full historical governance pipeline completed successfully."
-            if status == "success"
-            else optimization_payload.get("message", "Governance pipeline completed with errors.")
+        optimization_succeeded = optimization_payload.get("status") == "success"
+        generated_plots = _generate_inline_governance_plots(
+            target_date=target_date,
+            weights=optimization_payload.get("weights", {}) if optimization_succeeded else {},
+            network_payload=network_payload,
         )
+
+        if dropped_tickers:
+            status = (
+                "partial_success_some_requested_tickers_were_dropped_due_to_missing_data"
+                if optimization_succeeded
+                else "error_optimization_failed_some_requested_tickers_were_dropped_due_to_missing_data"
+            )
+        else:
+            status = "success" if optimization_succeeded else "error_optimization_failed"
+
+        if optimization_succeeded:
+            message = "Full historical governance pipeline completed successfully."
+        else:
+            message = optimization_payload.get("message", "Governance pipeline completed with errors.")
+
         if dropped_tickers:
             message += " Some requested tickers were dropped due to missing or insufficient local history."
 
-        payload = {
-            "status": "partial_success" if status == "success" and dropped_tickers else status,
-            "message": message,
-            "advisory_only": True,
-            "data_source": "local_mongodb_historical_only",
-            "target_date": target_date,
-            "requested_tickers": cleaned_tickers,
-            "valid_tickers": valid_tickers,
-            "dropped_tickers": dropped_tickers,
-            "price_snapshot": prepared["price_snapshot"],
-            "price_history": prepared["price_history"],
-            "systemic_risk": network_payload,
-            "optimization": optimization_payload,
-        }
+        lightweight_optimization = {}
+        if optimization_succeeded:
+            lightweight_optimization = {
+                "weights": optimization_payload.get("weights", {}),
+                "expected_annualized_return": optimization_payload.get("expected_annualized_return"),
+                "expected_cvar_95": optimization_payload.get("expected_cvar_95"),
+                "instability_index": optimization_payload.get("instability_index"),
+                "lambda_t": optimization_payload.get("lambda_t"),
+            }
 
-        if optimization_payload.get("status") == "success":
-            payload["plot_recommendations"] = [
-                {
-                    "plot_type": "pie",
-                    "title": f"Optimal Allocation Weights as of {target_date}",
-                    "data": {"weights": optimization_payload["weights"]},
-                },
-                {
-                    "plot_type": "bar",
-                    "title": f"Systemic Risk Scores as of {target_date}",
-                    "data": {"scores": network_payload["scores"]},
-                },
-                {
-                    "plot_type": "line",
-                    "title": f"Historical Price Comparison into {target_date}",
-                    "data": {"price_history": prepared["price_history"]},
-                },
-                {
-                    "plot_type": "heatmap",
-                    "title": f"Correlation Heatmap into {target_date}",
-                    "data": {"correlation_matrix": optimization_payload["correlation_matrix"]},
-                },
-                {
-                    "plot_type": "network",
-                    "title": f"Institutional Risk Network as of {target_date}",
-                    "data": {
-                        "holder_edges": network_payload["holder_edges"],
-                        "risk_scores": network_payload["scores"],
-                    },
-                },
-            ]
-
-        return json.dumps(payload, indent=2)
+        return json.dumps(
+            _build_lightweight_governance_payload(
+                status=status,
+                message=message,
+                target_date=target_date,
+                valid_tickers=valid_tickers,
+                dropped_tickers=dropped_tickers,
+                systemic_risk=lightweight_systemic_risk,
+                optimization=lightweight_optimization,
+                generated_plots=generated_plots,
+            )
+        )
 
     except Exception as e:
         return json.dumps(
-            {
-                "status": "error",
-                "message": (
+            _build_lightweight_governance_payload(
+                status=f"error_internal_governance_pipeline_failure_{type(e).__name__.lower()}",
+                message=(
                     f"Unable to run full governance pipeline due to an internal error: "
                     f"{type(e).__name__}: {str(e)}"
                 ),
-                "requested_tickers": _normalize_tickers(tickers or []),
-                "valid_tickers": [],
-                "dropped_tickers": [],
-            },
-            indent=2,
+                target_date=target_date,
+                valid_tickers=[],
+                dropped_tickers=[],
+            )
         )
