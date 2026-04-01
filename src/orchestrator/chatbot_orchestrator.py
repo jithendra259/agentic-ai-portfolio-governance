@@ -1,5 +1,5 @@
 from typing import Annotated, TypedDict
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -8,14 +8,12 @@ from langgraph.checkpoint.memory import MemorySaver
 
 # Import MongoDB-backed historical tools only.
 from src.agents.live_data_tools import (
-    analyze_institutional_network,
-    get_historical_prices,
     get_stock_database_snapshot,
     get_stocks_by_sector,
     get_stocks_by_universe,
     get_universe_overview,
     list_available_sectors,
-    run_historical_cvar_optimization,
+    run_full_governance_pipeline,
 )
 
 # Define the State: This is the Chatbot's Memory!
@@ -36,9 +34,7 @@ tools = [
     get_stocks_by_universe,
     get_universe_overview,
     get_stock_database_snapshot,
-    get_historical_prices,
-    analyze_institutional_network,
-    run_historical_cvar_optimization,
+    run_full_governance_pipeline,
 ]
 llm_with_tools = llm.bind_tools(tools)
 
@@ -61,19 +57,13 @@ STEP 1: Identify the Portfolio & Date
 - If the user asks what sector a universe belongs to or asks for a universe summary, use the get_universe_overview tool.
 - If the user asks for all stored MongoDB data or a full ticker snapshot, use the get_stock_database_snapshot tool.
 
-STEP 2: Fetch Historical Data (Agent 1)
-- Use the get_historical_prices tool to query MongoDB for the tickers on the target date.
-- Wait for the tool to return the actual database prices.
+STEP 2: Run Governance Pipeline
+- Use the run_full_governance_pipeline tool exactly once for the heavy deterministic analysis.
+- The tool already performs the historical price lookup, institutional network analysis, and historical G-CVaR optimization back-to-back using local MongoDB data only.
 
-STEP 3: Analyze Systemic Risk (Agent 2)
-- Use the analyze_institutional_network tool to calculate the bipartite graph centrality risk scores for those tickers.
-
-STEP 4: G-CVaR Optimization (Agent 3)
-- Use the run_historical_cvar_optimization tool to calculate the mathematically safest allocation weights for that historical point in time.
-
-STEP 5: Human-in-the-Loop Governance Report (Agent 4)
+STEP 3: Human-in-the-Loop Governance Report
 - Present the final results to the user in a professional, structured report.
-- Clearly state the historical date, the prices found, the network risk scores, and the final recommended G-CVaR allocation percentages.
+- Clearly state the historical date, the prices found, the network risk scores, and the final recommended G-CVaR allocation percentages based on the tool output.
 
 GENERAL RULES:
 1. Use only MongoDB-backed historical tools. No live internet data and no yfinance.
@@ -98,12 +88,52 @@ def chatbot_node(state: AgentState):
     response = llm_with_tools.invoke(messages)
     return {"messages": [response]}
 
+
+def tool_result_router(state: AgentState):
+    """Short-circuit the expensive second LLM pass for the heavy governance macro-tool."""
+    messages = state["messages"]
+    if not messages:
+        return "chatbot"
+
+    last_message = messages[-1]
+    if isinstance(last_message, ToolMessage) and last_message.name == "run_full_governance_pipeline":
+        return "finalize_governance"
+
+    return "chatbot"
+
+
+def finalize_governance_node(state: AgentState):
+    """Return the macro-tool output directly as the final assistant reply."""
+    messages = state["messages"]
+    if not messages:
+        return {"messages": [AIMessage(content="Unable to generate a response for this request.")]}
+
+    last_message = messages[-1]
+    content = getattr(last_message, "content", "")
+
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        content = "".join(parts)
+    elif not isinstance(content, str):
+        content = str(content)
+
+    if not content:
+        content = "Unable to generate a response for this request."
+
+    return {"messages": [AIMessage(content=content)]}
+
 # 5. Build the LangGraph State Machine
 builder = StateGraph(AgentState)
 
 # Add the nodes
 builder.add_node("chatbot", chatbot_node)
 builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
+builder.add_node("finalize_governance", finalize_governance_node)
 
 # Define the routing logic
 builder.set_entry_point("chatbot")
@@ -115,8 +145,16 @@ builder.add_conditional_edges(
     tools_condition,
 )
 
-# After the tool runs, always go back to the chatbot so it can read the result and reply
-builder.add_edge("tools", "chatbot")
+# Fast-path the heavy governance tool so we do not pay for a second LLM pass.
+builder.add_conditional_edges(
+    "tools",
+    tool_result_router,
+    {
+        "finalize_governance": "finalize_governance",
+        "chatbot": "chatbot",
+    },
+)
+builder.add_edge("finalize_governance", END)
 
 # 6. Add Conversational Memory (Crucial for the Thesis!)
 memory = MemorySaver()
