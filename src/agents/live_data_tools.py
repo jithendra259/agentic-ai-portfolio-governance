@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from langchain_core.tools import tool
 from pymongo import MongoClient
 from src.agents.generate_dynamic_plot import generate_financial_plot
+from src.memory.mongodb_memory_layer import MongoMemoryManager
 
 load_dotenv()
 
@@ -21,6 +22,8 @@ MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "Stock_data"
 COLLECTION_NAME = "ticker"
 logger = logging.getLogger(__name__)
+memory_manager = MongoMemoryManager()
+memory_manager.setup_indexes()
 
 
 @lru_cache(maxsize=1)
@@ -1728,6 +1731,17 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
                 "instability_index": optimization_payload.get("instability_index"),
                 "lambda_t": optimization_payload.get("lambda_t"),
             }
+            instability_index = float(optimization_payload.get("instability_index", 0.0))
+            lambda_t = float(optimization_payload.get("lambda_t", 0.0))
+            weights = optimization_payload.get("weights", {})
+            regime_type = "crisis" if instability_index > 0.5 else "calm"
+            memory_manager.store_regime_pattern(
+                target_date=target_date,
+                regime_type=regime_type,
+                instability_index=instability_index,
+                lambda_t=lambda_t,
+                weights=weights if isinstance(weights, dict) else {},
+            )
 
         return json.dumps(
             _build_lightweight_governance_payload(

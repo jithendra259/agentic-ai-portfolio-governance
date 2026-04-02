@@ -1,12 +1,21 @@
 import json
+import logging
+import os
 import re
-from typing import Annotated, TypedDict
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from typing import Annotated, Any, Optional, Tuple, TypedDict
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
+from pymongo import MongoClient
+
+try:
+    from langgraph.checkpoint.mongodb import MongoDBSaver
+except Exception:  # pragma: no cover - fallback for environments missing mongodb checkpointer package
+    MongoDBSaver = None
 
 # Import MongoDB-backed historical tools only.
 from src.agents.live_data_tools import (
@@ -19,13 +28,86 @@ from src.agents.live_data_tools import (
     plot_historical_prices,
     run_full_governance_pipeline,
 )
+from src.intent.intent_classifier import IntentClassifier
+from src.intent.intent_router import IntentRouter
+from src.memory.mongodb_memory_layer import MongoMemoryManager
+
+
+logger = logging.getLogger(__name__)
+
+
+def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
+    mongo_uri = (os.getenv("MONGO_URI") or "").strip()
+
+    if not mongo_uri:
+        logger.warning("MONGO_URI is not set; falling back to in-memory LangGraph checkpointing.")
+        return MongoMemoryManager(mongo_uri=""), MemorySaver()
+
+    try:
+        mongo_client = MongoClient(
+            mongo_uri,
+            tls=True,
+            tlsAllowInvalidCertificates=True,
+            serverSelectionTimeoutMS=5000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000,
+            appname="agentic-ai-portfolio-governance-chatbot",
+        )
+        mongo_client.admin.command("ping")
+    except Exception as exc:
+        logger.warning("MongoDB connection failed for checkpointer; using MemorySaver. Error: %s", exc)
+        return MongoMemoryManager(mongo_uri=""), MemorySaver()
+
+    memory_manager = MongoMemoryManager(client=mongo_client)
+    memory_manager.setup_indexes()
+
+    if MongoDBSaver is None:
+        logger.warning("MongoDBSaver is unavailable in this environment; using MemorySaver fallback.")
+        return memory_manager, MemorySaver()
+
+    try:
+        checkpointer = MongoDBSaver(mongo_client)
+    except TypeError:
+        # Supports alternate constructor signatures across LangGraph versions.
+        checkpointer = MongoDBSaver(client=mongo_client)
+
+    return memory_manager, checkpointer
+
+
+memory_manager, checkpointer = _init_mongo_memory()
+intent_classifier = IntentClassifier(verbose=True)
+intent_router = IntentRouter(classifier=intent_classifier)
+
+
+@tool("run_full_governance_pipeline")
+def governance_pipeline_with_cache(tickers: list[str], target_date: str) -> str:
+    """
+    Governance wrapper with L2 semantic cache.
+    Reuses plans for seven days via MongoDB TTL index.
+    """
+    query_hash = memory_manager.compute_query_hash(tickers=tickers, target_date=target_date)
+    cached = memory_manager.retrieve_cached_plan(query_hash)
+    if cached:
+        logger.info("Cache Hit (-46%% cost) | query_hash=%s", query_hash)
+        return cached
+
+    result = run_full_governance_pipeline.invoke({"tickers": tickers, "target_date": target_date})
+    if isinstance(result, str):
+        memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
+        return result
+
+    serialized = json.dumps(result)
+    memory_manager.cache_governance_plan(query_hash=query_hash, payload=serialized, ttl_days=7)
+    return serialized
 
 # Define the State: This is the Chatbot's Memory!
-class AgentState(TypedDict):
+class AgentState(TypedDict, total=False):
     # 'add_messages' ensures new chat messages are appended, not overwritten
     messages: Annotated[list[BaseMessage], add_messages]
     user_portfolio: list[str]
     risk_profile: str
+    route_status: str
+    route_result: dict[str, Any]
 
 # 1. Initialize the LLM (Your Local Qwen 2.5)
 llm = ChatOllama(model="qwen2.5:7b", temperature=0.2)
@@ -40,7 +122,7 @@ tools = [
     get_universe_overview,
     get_stock_database_snapshot,
     plot_historical_prices,
-    run_full_governance_pipeline,
+    governance_pipeline_with_cache,
 ]
 llm_with_tools = llm.bind_tools(tools)
 
@@ -126,6 +208,64 @@ def chatbot_node(state: AgentState):
     return {"messages": [response], "user_portfolio": remembered_portfolio}
 
 
+def classify_and_route_node(state: AgentState):
+    """
+    Deterministic intent gate that runs before the conversational LLM.
+    """
+    messages = state["messages"]
+    if not messages:
+        return {"route_status": "chatbot"}
+
+    latest_msg = messages[-1]
+    if not isinstance(latest_msg, HumanMessage):
+        return {"route_status": "chatbot"}
+
+    user_input = _message_content_to_text(latest_msg)
+    route_result = intent_router.handle(user_input)
+    logger.info("Intent route selected: %s (%s)", route_result["intent"], route_result["risk_tier"])
+
+    status = route_result.get("status")
+    if status == "success":
+        return {
+            "messages": [AIMessage(content=str(route_result["result"]))],
+            "route_status": "end",
+            "route_result": route_result,
+        }
+
+    if status == "pending_governance_review":
+        governance_summary = route_result.get("governance_summary", {})
+        tickers = ", ".join(governance_summary.get("tickers", [])) or "None"
+        universes = ", ".join(governance_summary.get("universes", [])) or "None"
+        content = (
+            f"Governance Request Blocked Pending Approval\n"
+            f"Request ID: {route_result['request_id']}\n"
+            f"Risk Tier: {route_result['risk_tier']}\n"
+            f"Intent: {route_result['intent']}\n"
+            f"Tickers: {tickers}\n"
+            f"Universes: {universes}\n"
+            f"Target date: {governance_summary.get('target_date') or 'None'}\n\n"
+            f"{route_result['message']}"
+        )
+        return {
+            "messages": [AIMessage(content=content)],
+            "route_status": "end",
+            "route_result": route_result,
+        }
+
+    if status == "rejected":
+        return {
+            "messages": [AIMessage(content=route_result["reason"])],
+            "route_status": "end",
+            "route_result": route_result,
+        }
+
+    return {"route_status": "chatbot", "route_result": route_result}
+
+
+def _route_after_classification(state: AgentState):
+    return state.get("route_status", "chatbot")
+
+
 def _message_content_to_text(message_or_content) -> str:
     content = getattr(message_or_content, "content", message_or_content)
     if isinstance(content, str):
@@ -179,7 +319,7 @@ def _extract_portfolio_from_messages(messages: list[BaseMessage]) -> list[str]:
     return []
 
 
-def _extract_latest_governance_payload(messages: list[BaseMessage]) -> tuple[dict | None, str]:
+def _extract_latest_governance_payload(messages: list[BaseMessage]) -> Tuple[Optional[dict], str]:
     for message in reversed(messages):
         if isinstance(message, ToolMessage) and message.name == "run_full_governance_pipeline":
             raw = _message_content_to_text(message)
@@ -224,7 +364,7 @@ def _humanize_status(status: str) -> str:
     return status.replace("_", " ").strip().capitalize() or "Governance pipeline returned an unknown status."
 
 
-def _build_governance_markdown(payload: dict | None, raw_text: str) -> str:
+def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
     if not payload:
         return raw_text or "Unable to generate a response for this request."
 
@@ -310,12 +450,21 @@ def finalize_governance_node(state: AgentState):
 builder = StateGraph(AgentState)
 
 # Add the nodes
+builder.add_node("classify_and_route", classify_and_route_node)
 builder.add_node("chatbot", chatbot_node)
 builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
 builder.add_node("finalize_governance", finalize_governance_node)
 
 # Define the routing logic
-builder.set_entry_point("chatbot")
+builder.set_entry_point("classify_and_route")
+builder.add_conditional_edges(
+    "classify_and_route",
+    _route_after_classification,
+    {
+        "chatbot": "chatbot",
+        "end": END,
+    },
+)
 
 # If the LLM decides it needs a MongoDB-backed historical tool, route to 'tools'
 # Otherwise, route to END to output the chat response to the user
@@ -327,10 +476,7 @@ builder.add_conditional_edges(
 builder.add_edge("tools", "finalize_governance")
 builder.add_edge("finalize_governance", END)
 
-# 6. Add Conversational Memory (Crucial for the Thesis!)
-memory = MemorySaver()
-
-# Compile the final conversational agent
-portfolio_assistant = builder.compile(checkpointer=memory)
+# 6. Add Conversational Memory (L1 with MongoDBSaver, fallback to MemorySaver)
+portfolio_assistant = builder.compile(checkpointer=checkpointer)
 
 print("Conversational Agentic Supervisor Initialized with Memory!")

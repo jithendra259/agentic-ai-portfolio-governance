@@ -11,13 +11,14 @@ import requests
 
 API_URL = os.getenv("PORTFOLIO_API_URL", "http://127.0.0.1:8000/chat")
 STREAM_API_URL = os.getenv("PORTFOLIO_STREAM_API_URL", "http://127.0.0.1:8000/chat/stream")
+SESSION_ID = os.getenv("PORTFOLIO_SESSION_ID", str(uuid.uuid4()))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def create_session_id() -> str:
-    return str(uuid.uuid4())
+    return SESSION_ID
 
 
 def _backend_base_url() -> str:

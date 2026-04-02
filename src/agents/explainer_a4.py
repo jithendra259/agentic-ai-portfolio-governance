@@ -9,7 +9,7 @@ class GenerativeExplainerAgent:
     """
     def __init__(self):
         # Update this model name to match exactly what you pulled via `ollama run ...`
-        self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.2)
+        self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
         
         # The strict template prevents hallucination and enforces ADVISORY ONLY rules
         self.prompt = PromptTemplate(
