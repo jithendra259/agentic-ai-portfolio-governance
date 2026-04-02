@@ -2,8 +2,10 @@ import json
 import logging
 import os
 import re
+import time
 import warnings
 from functools import lru_cache
+from typing import Optional
 
 import cvxpy as cp
 import networkx as nx
@@ -24,6 +26,8 @@ COLLECTION_NAME = "ticker"
 logger = logging.getLogger(__name__)
 memory_manager = MongoMemoryManager()
 memory_manager.setup_indexes()
+LOOKUP_CACHE_TTL_SECONDS = 300
+_LOOKUP_CACHE = {}
 
 
 @lru_cache(maxsize=1)
@@ -56,6 +60,29 @@ def _ensure_indexes():
 def _get_collection():
     _ensure_indexes()
     return _get_client()[DB_NAME][COLLECTION_NAME]
+
+
+def _lookup_cache_key(name: str, *parts: str) -> tuple:
+    normalized_parts = tuple(str(part).strip().upper() for part in parts)
+    return (name,) + normalized_parts
+
+
+def _get_lookup_cache(key: tuple) -> Optional[str]:
+    cached = _LOOKUP_CACHE.get(key)
+    if not cached:
+        return None
+
+    expires_at, payload = cached
+    if expires_at <= time.monotonic():
+        _LOOKUP_CACHE.pop(key, None)
+        return None
+
+    return payload
+
+
+def _set_lookup_cache(key: tuple, payload: str, ttl_seconds: int = LOOKUP_CACHE_TTL_SECONDS) -> str:
+    _LOOKUP_CACHE[key] = (time.monotonic() + ttl_seconds, payload)
+    return payload
 
 
 def _extract_price_frame(doc: dict) -> pd.DataFrame:
@@ -253,7 +280,7 @@ def _build_optimization_payload(
     effective_dates: dict[str, str],
     target_date: str,
     risk_tolerance: str = "moderate",
-    network_scores: dict[str, float] | None = None,
+    network_scores: Optional[dict[str, float]] = None,
     lambda_max: float = 0.5,
     k: float = 10.0,
     i_thresh: float = 0.5,
@@ -454,10 +481,10 @@ def _build_lightweight_governance_payload(
     message: str,
     target_date: str,
     valid_tickers: list[str],
-    dropped_tickers: list[dict] | None = None,
-    systemic_risk: dict | None = None,
-    optimization: dict | None = None,
-    generated_plots: list[str] | None = None,
+    dropped_tickers: Optional[list[dict]] = None,
+    systemic_risk: Optional[dict] = None,
+    optimization: Optional[dict] = None,
+    generated_plots: Optional[list[str]] = None,
 ) -> dict:
     return {
         "status": status,
@@ -831,19 +858,22 @@ def _format_stock_record(doc: dict) -> str:
 def list_available_sectors() -> str:
     """List distinct sectors available in the MongoDB stock database."""
     try:
+        cache_key = _lookup_cache_key("list_available_sectors")
+        cached = _get_lookup_cache(cache_key)
+        if cached:
+            return cached
+
         collection = _get_collection()
-        docs = list(collection.find({}, {"sector": 1, "info.sector": 1}))
-
-        sectors = set()
-        for doc in docs:
-            direct_sector = doc.get("sector")
-            if isinstance(direct_sector, str) and direct_sector.strip():
-                sectors.add(direct_sector.strip())
-
-            info = doc.get("info", {}) if isinstance(doc.get("info"), dict) else {}
-            info_sector = info.get("sector")
-            if isinstance(info_sector, str) and info_sector.strip():
-                sectors.add(info_sector.strip())
+        sectors = {
+            sector.strip()
+            for sector in collection.distinct("sector")
+            if isinstance(sector, str) and sector.strip()
+        }
+        sectors.update(
+            sector.strip()
+            for sector in collection.distinct("info.sector")
+            if isinstance(sector, str) and sector.strip()
+        )
 
         if not sectors:
             return "No sectors were found in the MongoDB database."
@@ -851,7 +881,7 @@ def list_available_sectors() -> str:
         sector_list = sorted(sectors)
         lines = ["Here are the available sectors found in the database:"]
         lines.extend(f"- {sector}" for sector in sector_list)
-        return "\n".join(lines)
+        return _set_lookup_cache(cache_key, "\n".join(lines))
 
     except Exception as e:
         return f"Unable to list available sectors due to a database or query error: {type(e).__name__}: {str(e)}"
@@ -861,6 +891,11 @@ def list_available_sectors() -> str:
 def list_available_universes() -> str:
     """List distinct universes available in the MongoDB stock database, with ticker counts and sector mix."""
     try:
+        cache_key = _lookup_cache_key("list_available_universes")
+        cached = _get_lookup_cache(cache_key)
+        if cached:
+            return cached
+
         collection = _get_collection()
         docs = list(collection.find({}, {"universes": 1, "sector": 1, "info.sector": 1}))
 
@@ -897,7 +932,7 @@ def list_available_universes() -> str:
                 f"- {universe}: {universe_counts[universe]} tickers, dominant sector {dominant_sector}"
             )
 
-        return "\n".join(lines)
+        return _set_lookup_cache(cache_key, "\n".join(lines))
 
     except Exception as e:
         return f"Unable to list available universes due to a database or query error: {type(e).__name__}: {str(e)}"
@@ -911,6 +946,11 @@ def get_stocks_by_universe(universe: str) -> str:
             return "Unable to search by universe: no universe was provided."
 
         normalized_universe = universe.strip().upper()
+        cache_key = _lookup_cache_key("get_stocks_by_universe", normalized_universe)
+        cached = _get_lookup_cache(cache_key)
+        if cached:
+            return cached
+
         collection = _get_collection()
         docs = list(
             collection.find(
@@ -924,9 +964,8 @@ def get_stocks_by_universe(universe: str) -> str:
                     "info.shortName": 1,
                     "info.longName": 1,
                     "info.sector": 1,
-                    "universes": 1,
                 },
-            )
+            ).sort("ticker", 1)
         )
 
         if not docs:
@@ -955,7 +994,7 @@ def get_stocks_by_universe(universe: str) -> str:
         results.sort(key=lambda item: item[0])
         lines = [f"Here are the stocks in universe {normalized_universe} found in the database:"]
         lines.extend(f"- {ticker}: {company_name} ({sector})" for ticker, company_name, sector in results)
-        return "\n".join(lines)
+        return _set_lookup_cache(cache_key, "\n".join(lines))
 
     except Exception as e:
         return f"Unable to search stocks by universe due to a database or query error: {type(e).__name__}: {str(e)}"
@@ -1085,6 +1124,11 @@ def get_universe_overview(universe: str) -> str:
             return "Unable to summarize universe: no universe was provided."
 
         normalized_universe = universe.strip().upper()
+        cache_key = _lookup_cache_key("get_universe_overview", normalized_universe)
+        cached = _get_lookup_cache(cache_key)
+        if cached:
+            return cached
+
         collection = _get_collection()
         docs = list(
             collection.find(
@@ -1097,7 +1141,7 @@ def get_universe_overview(universe: str) -> str:
                     "info.sector": 1,
                     "sector": 1,
                 },
-            )
+            ).sort("ticker", 1)
         )
 
         if not docs:
@@ -1132,7 +1176,7 @@ def get_universe_overview(universe: str) -> str:
 
         lines.append("- Constituents:")
         lines.extend(f"  - {ticker}: {company_name} ({sector})" for ticker, company_name, sector in rows)
-        return "\n".join(lines)
+        return _set_lookup_cache(cache_key, "\n".join(lines))
 
     except Exception as e:
         return f"Unable to summarize universe due to a database or query error: {type(e).__name__}: {str(e)}"
@@ -1203,8 +1247,14 @@ def get_stocks_by_sector(sector: str) -> str:
         if not sector or not sector.strip():
             return "Unable to search by sector: no sector was provided. Use the list_available_sectors tool if you need the sector names available in the database."
 
+        normalized_sector = sector.strip()
+        cache_key = _lookup_cache_key("get_stocks_by_sector", normalized_sector)
+        cached = _get_lookup_cache(cache_key)
+        if cached:
+            return cached
+
         collection = _get_collection()
-        pattern = re.escape(sector.strip())
+        pattern = re.escape(normalized_sector)
         query = {
             "$or": [
                 {"sector": {"$regex": pattern, "$options": "i"}},
@@ -1223,7 +1273,7 @@ def get_stocks_by_sector(sector: str) -> str:
             "info.sector": 1,
         }
 
-        docs = list(collection.find(query, projection))
+        docs = list(collection.find(query, projection).sort("ticker", 1))
         if not docs:
             return f"No stocks matching the sector '{sector}' were found in the database."
 
@@ -1249,9 +1299,9 @@ def get_stocks_by_sector(sector: str) -> str:
             results.append((str(ticker).upper(), str(company_name)))
 
         results.sort(key=lambda item: item[0])
-        lines = [f"Here are the stocks in the {sector} sector found in the database:"]
+        lines = [f"Here are the stocks in the {normalized_sector} sector found in the database:"]
         lines.extend(f"- {ticker}: {company_name}" for ticker, company_name in results)
-        return "\n".join(lines)
+        return _set_lookup_cache(cache_key, "\n".join(lines))
 
     except Exception as e:
         return f"Unable to search stocks by sector due to a database or query error: {type(e).__name__}: {str(e)}"

@@ -4,13 +4,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-
 logger = logging.getLogger(__name__)
-
 
 class IntentType(str, Enum):
     """Exhaustive intent taxonomy for the advisory assistant."""
-
     GREETING = "greeting"
     LIST_SECTORS = "list_sectors"
     GET_STOCKS_BY_SECTOR = "get_stocks_by_sector"
@@ -30,13 +27,11 @@ class IntentType(str, Enum):
     ADVERSARIAL = "adversarial"
     MALFORMED = "malformed"
 
-
 class RiskTier(str, Enum):
     LOW = "LOW"
     MEDIUM = "MEDIUM"
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
-
 
 @dataclass
 class IntentMatch:
@@ -57,49 +52,62 @@ class IntentMatch:
             "requires_hitl": self.requires_hitl,
         }
 
-
 class IntentClassifier:
     """
     Deterministic intent classifier used as a governance-aware pre-routing gate.
     """
+
+    KNOWN_SECTOR_ALIASES = {
+        "basic materials": "Basic Materials",
+        "communication services": "Communication Services",
+        "consumer cyclical": "Consumer Cyclical",
+        "consumer defensive": "Consumer Defensive",
+        "energy": "Energy",
+        "financial services": "Financial Services",
+        "financials": "Financial Services",
+        "finance": "Financial Services",
+        "healthcare": "Healthcare",
+        "health care": "Healthcare",
+        "industrials": "Industrials",
+        "real estate": "Real Estate",
+        "technology": "Technology",
+        "tech": "Technology",
+        "utilities": "Utilities",
+    }
+
+    SECTOR_EXPLANATION_MARKERS = (
+        "explain",
+        "describe",
+        "summary",
+        "summarize",
+        "overview",
+        "about",
+        "tell me",
+    )
 
     GREETING_PATTERNS = [
         r"^(?:hi|hello|hey|hiya)$",
         r"^good\s+(?:morning|afternoon|evening)$",
     ]
 
+    # EXPANDED: Security Gates to prevent trading
     INVALID_EXECUTION_PATTERNS = [
-        "execute trades",
-        "place orders",
-        "place order",
-        "buy ",
-        "sell ",
-        "liquidate",
-        "rebalance live",
-        "send trade",
-        "broker",
+        "execute trades", "place orders", "place order",
+        "buy ", "sell ", "liquidate", "rebalance live",
+        "send trade", "broker", "short ", "go long", 
+        "market order", "limit order", "invest in", 
+        "purchase", "dump", "all in on"
     ]
 
     ADVERSARIAL_PATTERNS = [
-        "ignore all instructions",
-        "ignore previous instructions",
-        "bypass",
-        "override",
-        "forget your rules",
-        "clear memory",
-        "sudo",
-        "root access",
-        "prompt injection",
+        "ignore all instructions", "ignore previous instructions",
+        "bypass", "override", "forget your rules",
+        "clear memory", "sudo", "root access", "prompt injection",
     ]
 
     OUT_OF_SCOPE_PATTERNS = [
-        "weather",
-        "sports score",
-        "capital of",
-        "restaurant",
-        "flight",
-        "movie",
-        "song",
+        "weather", "sports score", "capital of",
+        "restaurant", "flight", "movie", "song",
     ]
 
     DATA_LOOKUP_PATTERNS = {
@@ -125,21 +133,24 @@ class IntentClassifier:
         IntentType.STOCK_SNAPSHOT: [
             r"\b(?:snapshot|data|info|information|details)\b.*\b(?:for|on|about)\s+(?P<tickers>[a-z,\s]+)$",
             r"\b(?:show|get|list)\b.*\b(?:all stored|database)\b.*\b(?:tickers|stocks|data)\b",
+            r"\b(?:brief|tell me)\b.*\b(?:company|stock|firm)\b.*\b(?:about|for|on)\s+(?P<tickers>[a-z,\s]+)\b",
+            r"\b(?:what do we know about|summarize)\b\s+(?P<tickers>[a-z,\s]+)\b",
         ],
     }
 
+    # EXPANDED: Governance and Advanced Analysis 
     GOVERNANCE_PATTERNS = {
         IntentType.ANALYZE_PORTFOLIO: [
-            r"\b(?:analyze|assess|evaluate)\b\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
-            r"\b(?:allocation|weights|exposure|governance)\b.*\b(?:for|on)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
+            r"\b(?:analyze|analyse|assess|evaluate|review|audit|health check)\b\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
+            r"\b(?:allocation|weights|exposure|governance|risk report)\b.*\b(?:for|on)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
         ],
         IntentType.INSTITUTIONAL_NETWORK: [
-            r"\b(?:institutional|holder|ownership|overlap|network)\b.*\b(?:analysis|graph|visualization|risk)\b(?:\s+for\s+(?P<subject>.+))?",
-            r"\b(?:show|get|analyze)\b.*\b(?:institutions|holders)\b.*\b(?:for|in|on)\s+(?P<subject>.+)$",
+            r"\b(?:institutional|holder|ownership|overlap|network|contagion|interconnectedness)\b.*\b(?:analysis|graph|visualization|risk)\b(?:\s+for\s+(?P<subject>.+))?",
+            r"\b(?:show|get|analyze|map)\b.*\b(?:institutions|holders|systemic risk)\b.*\b(?:for|in|on)\s+(?P<subject>.+)$",
         ],
         IntentType.HISTORICAL_CVAR: [
-            r"\b(?:run|optimize|calculate)\b.*\b(?:cvar|historical cvar)\b.*\b(?:for|on|with)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
-            r"\b(?:optimal|recommended)\b.*\b(?:allocation|weights)\b.*\b(?:for|on)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
+            r"\b(?:run|optimize|calculate|stress test)\b.*\b(?:cvar|historical cvar|tail risk|worst case)\b.*\b(?:for|on|with)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
+            r"\b(?:optimal|recommended|safest)\b.*\b(?:allocation|weights)\b.*\b(?:for|on)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
         ],
     }
 
@@ -154,17 +165,18 @@ class IntentClassifier:
         ],
     }
 
+    # EXPANDED: Documentation and Parameter requests
     CONFIG_PATTERNS = {
         IntentType.EXPLAIN_PARAMETERS: [
-            r"\b(?:what|explain|define)\b.*\b(?:instability index|composite instability|i_t|lambda_t)\b",
-            r"\b(?:how)\b.*\b(?:parameters|metrics|indices)\b.*\b(?:work|function)\b",
+            r"\b(?:what|explain|define|clarify)\b.*\b(?:instability index|composite instability|i_t|lambda_t|graph penalty|threshold)\b",
+            r"\b(?:how)\b.*\b(?:parameters|metrics|indices|penalties)\b.*\b(?:work|function|calculated)\b",
         ],
         IntentType.METHODOLOGY_QUESTION: [
-            r"\b(?:how|why)\b.*\b(?:g-cvar|optimizer|governance framework|methodology)\b.*\b(?:work|function)\b",
-            r"\b(?:explain|describe)\b.*\b(?:architecture|methodology|algorithm|approach)\b",
+            r"\b(?:how|why|what is)\b.*\b(?:g-cvar|optimizer|governance framework|methodology|the math)\b.*\b(?:work|function|based on)\b",
+            r"\b(?:explain|describe|break down)\b.*\b(?:architecture|methodology|algorithm|approach|system)\b",
         ],
         IntentType.DOCUMENTATION_REQUEST: [
-            r"\b(?:show|get|provide)\b.*\b(?:documentation|docs|help|guide|readme)\b",
+            r"\b(?:show|get|provide|link)\b.*\b(?:documentation|docs|help|guide|readme|paper|thesis)\b",
             r"\b(?:where|how)\b.*\b(?:documentation|instructions|architecture)\b",
         ],
     }
@@ -203,6 +215,11 @@ class IntentClassifier:
         if self._contains_any(normalized_query, self.OUT_OF_SCOPE_PATTERNS):
             return self._no_match("Query is outside the portfolio governance domain.", IntentType.OUT_OF_SCOPE)
 
+        sector_match = self._match_known_sector_query(normalized_query)
+        if sector_match is not None:
+            self._log(f"Known sector shortcut: {sector_match.intent.value}")
+            return sector_match
+
         match = self._pattern_match(query)
         if match is not None:
             self._log(f"Intent matched deterministically: {match.intent.value}")
@@ -239,6 +256,48 @@ class IntentClassifier:
                     best_confidence = confidence
 
         return best_match if best_confidence >= 0.8 else None
+
+    def _match_known_sector_query(self, normalized_query: str) -> Optional[IntentMatch]:
+        matched_alias = None
+        canonical_sector = None
+
+        for alias, canonical in sorted(
+            self.KNOWN_SECTOR_ALIASES.items(),
+            key=lambda item: len(item[0]),
+            reverse=True,
+        ):
+            if re.search(rf"\b{re.escape(alias)}\b", normalized_query):
+                matched_alias = alias
+                canonical_sector = canonical
+                break
+
+        if canonical_sector is None:
+            return None
+
+        cleaned_query = re.sub(r"[^\w\s&-]+", " ", normalized_query)
+        cleaned_query = re.sub(r"\s+", " ", cleaned_query).strip()
+
+        if cleaned_query == matched_alias:
+            return IntentMatch(
+                intent=IntentType.GET_STOCKS_BY_SECTOR,
+                confidence=0.93,
+                risk_tier=RiskTier.LOW,
+                parameters={"sector": canonical_sector},
+                explanation=f"Known sector shortcut: {canonical_sector}",
+                requires_hitl=False,
+            )
+
+        if any(marker in cleaned_query for marker in self.SECTOR_EXPLANATION_MARKERS):
+            return IntentMatch(
+                intent=IntentType.MALFORMED,
+                confidence=0.55,
+                risk_tier=RiskTier.MEDIUM,
+                parameters={"sector": canonical_sector},
+                explanation="In-domain sector query needs clarification. Routing to LLM.",
+                requires_hitl=False,
+            )
+
+        return None
 
     def _extract_parameters(self, query: str, match_obj: re.Match, intent: IntentType) -> dict:
         params: dict = {}
@@ -321,21 +380,12 @@ class IntentClassifier:
 
     def _semantic_fallback(self, query: str) -> IntentMatch:
         domain_terms = [
-            "analyze",
-            "analyse",
-            "evaluate",
-            "assess",
-            "portfolio",
-            "universe",
-            "ticker",
-            "stock",
-            "sector",
-            "governance",
-            "cvar",
-            "risk",
-            "instability",
-            "institutional",
-        ]
+            "analyze", "analyse", "evaluate", "assess", "portfolio",
+            "universe", "ticker", "stock", "sector", "governance",
+            "cvar", "risk", "instability", "institutional", 
+            "stress test", "contagion", "governanace", "govrnance",
+            "company", "firm", "brief", "jpm", "market", "info"
+        ] + list(self.KNOWN_SECTOR_ALIASES.keys())
         if any(term in query for term in domain_terms):
             return IntentMatch(
                 intent=IntentType.MALFORMED,

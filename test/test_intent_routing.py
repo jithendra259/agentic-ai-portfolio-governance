@@ -17,6 +17,17 @@ def _stub_result(name):
     return StubTool()
 
 
+def _func_first_stub(name):
+    class FuncFirstTool:
+        def func(self, **payload):
+            return {"tool": name, "payload": payload, "path": "func"}
+
+        def invoke(self, payload=None):
+            raise AssertionError("invoke should not be used when func is available")
+
+    return FuncFirstTool()
+
+
 class IntentClassifierTests(unittest.TestCase):
     def setUp(self):
         self.classifier = IntentClassifier(verbose=False)
@@ -44,6 +55,21 @@ class IntentClassifierTests(unittest.TestCase):
         self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_UNIVERSE)
         self.assertEqual(result.parameters["universe"], "U1")
 
+    def test_classifies_bare_known_sector_as_sector_lookup(self):
+        result = self.classifier.classify("Industrials")
+        self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_SECTOR)
+        self.assertEqual(result.parameters["sector"], "Industrials")
+
+    def test_classifies_conversational_stock_snapshot_request(self):
+        result = self.classifier.classify("tell me about the company for jpm")
+        self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
+        self.assertIn("JPM", result.parameters["tickers"])
+
+    def test_classifies_summarize_stock_snapshot_request(self):
+        result = self.classifier.classify("summarize jpm")
+        self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
+        self.assertIn("JPM", result.parameters["tickers"])
+
     def test_classifies_governance_request(self):
         result = self.classifier.classify("Analyze AAPL, MSFT, NVDA for 2008-10-15")
         self.assertEqual(result.intent, IntentType.ANALYZE_PORTFOLIO)
@@ -55,6 +81,11 @@ class IntentClassifierTests(unittest.TestCase):
         result = self.classifier.classify("analyse")
         self.assertEqual(result.intent, IntentType.MALFORMED)
         self.assertEqual(result.explanation, "In-domain query missing parameters. Routing to LLM.")
+
+    def test_sector_explain_query_becomes_conversational_fallback(self):
+        result = self.classifier.classify("Industrials explain")
+        self.assertEqual(result.intent, IntentType.MALFORMED)
+        self.assertEqual(result.parameters["sector"], "Industrials")
 
     def test_blocks_trade_execution(self):
         result = self.classifier.classify("Buy AAPL immediately")
@@ -113,6 +144,30 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["result"]["payload"]["universe"], "U1")
 
+    def test_routes_bare_known_sector_without_hitl(self):
+        result = self.router.handle("Industrials")
+        self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_SECTOR.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["sector"], "Industrials")
+
+    def test_router_prefers_raw_func_for_fast_lookup_path(self):
+        router = IntentRouter(
+            classifier=IntentClassifier(verbose=False),
+            handlers={
+                "list_available_sectors": _stub_result("list_available_sectors"),
+                "get_stocks_by_sector": _stub_result("get_stocks_by_sector"),
+                "get_stocks_by_universe": _func_first_stub("get_stocks_by_universe"),
+                "get_universe_overview": _stub_result("get_universe_overview"),
+                "get_stock_database_snapshot": _stub_result("get_stock_database_snapshot"),
+                "analyze_institutional_network": _stub_result("analyze_institutional_network"),
+                "run_historical_cvar_optimization": _stub_result("run_historical_cvar_optimization"),
+            },
+        )
+        result = router.handle("stocks in U1")
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["path"], "func")
+        self.assertEqual(result["result"]["payload"]["universe"], "U1")
+
     def test_routes_universe_overview_with_correct_payload_key(self):
         result = self.router.handle("summary of U1")
         self.assertEqual(result["intent"], IntentType.UNIVERSE_OVERVIEW.value)
@@ -130,6 +185,12 @@ class IntentRouterTests(unittest.TestCase):
         result = self.router.handle("analyse")
         self.assertEqual(result["intent"], IntentType.MALFORMED.value)
         self.assertEqual(result["status"], "conversational_fallback")
+
+    def test_routes_sector_explain_query_to_conversational_fallback(self):
+        result = self.router.handle("Industrials explain")
+        self.assertEqual(result["intent"], IntentType.MALFORMED.value)
+        self.assertEqual(result["status"], "conversational_fallback")
+        self.assertEqual(result["parameters"]["sector"], "Industrials")
 
     def test_gates_backtest_requests_as_critical(self):
         result = self.router.handle("Run full governance pipeline across all 11 universes")

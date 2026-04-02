@@ -132,6 +132,11 @@ class IntentRouter:
 
     def _invoke(self, handler_name: str, payload: Optional[dict] = None) -> Any:
         handler = self.handlers[handler_name]
+        raw_func = getattr(handler, "func", None)
+        if callable(raw_func):
+            if payload:
+                return raw_func(**payload)
+            return raw_func()
         if hasattr(handler, "invoke"):
             return handler.invoke(payload or {})
         if payload:

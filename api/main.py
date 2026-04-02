@@ -10,7 +10,8 @@ from starlette.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.orchestrator.llm_router import portfolio_assistant
-
+# NEW: Import your MongoDB Memory Manager
+from src.memory.mongodb_memory_layer import MongoMemoryManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,20 +22,28 @@ app = FastAPI(
     version="1.0.0",
 )
 
+# NEW: Build database indexes the moment the server starts
+@app.on_event("startup")
+def startup_db_indexes():
+    logger.info("Initializing MongoDB indexes to fix search latency...")
+    try:
+        memory = MongoMemoryManager()
+        memory.setup_indexes()
+        logger.info("✅ MongoDB indexes are active! Search will now be instant.")
+    except Exception as e:
+        logger.error(f"❌ Failed to build MongoDB indexes: {e}")
+
 OUTPUTS_DIR = Path("outputs")
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
-
 
 class ChatRequest(BaseModel):
     session_id: str
     user_message: str
 
-
 class ChatResponse(BaseModel):
     session_id: str
     response: str
-
 
 def _message_to_text(message: Any) -> str:
     if message is None:
@@ -55,7 +64,6 @@ def _message_to_text(message: Any) -> str:
 
     return str(content) if content else ""
 
-
 def _chunk_to_text(chunk: Any) -> str:
     if chunk is None:
         return ""
@@ -75,10 +83,8 @@ def _chunk_to_text(chunk: Any) -> str:
 
     return str(content) if content else ""
 
-
 def _stream_event(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
-
 
 @app.get("/health")
 def health_check() -> dict:
@@ -87,7 +93,6 @@ def health_check() -> dict:
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
     }
-
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
@@ -122,7 +127,6 @@ def chat(request: ChatRequest) -> ChatResponse:
             status_code=500,
             detail=f"Backend error while processing advisory request: {exc}",
         ) from exc
-
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
@@ -185,7 +189,6 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             )
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
-
 
 if __name__ == "__main__":
     import uvicorn
