@@ -53,6 +53,9 @@ class IntentRouter:
             intent_match.risk_tier.value,
         )
 
+        if intent_match.intent == IntentType.GREETING:
+            return self._success(intent_match, self._greeting_help())
+
         if intent_match.intent == IntentType.LIST_SECTORS:
             return self._success(intent_match, self._invoke("list_available_sectors"))
 
@@ -65,13 +68,13 @@ class IntentRouter:
         if intent_match.intent == IntentType.GET_STOCKS_BY_UNIVERSE:
             return self._success(
                 intent_match,
-                self._invoke("get_stocks_by_universe", {"universe_id": intent_match.parameters.get("universe", "")}),
+                self._invoke("get_stocks_by_universe", {"universe": intent_match.parameters.get("universe", "")}),
             )
 
         if intent_match.intent == IntentType.UNIVERSE_OVERVIEW:
             return self._success(
                 intent_match,
-                self._invoke("get_universe_overview", {"universe_id": intent_match.parameters.get("universe", "")}),
+                self._invoke("get_universe_overview", {"universe": intent_match.parameters.get("universe", "")}),
             )
 
         if intent_match.intent == IntentType.STOCK_SNAPSHOT:
@@ -110,7 +113,14 @@ class IntentRouter:
             return self._rejected(intent_match, "Invalid request detected by the security gate.")
 
         if intent_match.intent == IntentType.MALFORMED:
-            return self._rejected(intent_match, "Could not understand your query. Please try again.")
+            # Pass to LLM to ask follow-up questions instead of rejecting
+            return {
+                "intent": intent_match.intent.value,
+                "confidence": intent_match.confidence,
+                "risk_tier": intent_match.risk_tier.value,
+                "status": "conversational_fallback",
+                "parameters": intent_match.parameters,
+            }
 
         if intent_match.intent == IntentType.OUT_OF_SCOPE:
             return self._rejected(
@@ -227,3 +237,13 @@ class IntentRouter:
             "explainer_agent": "src/agents/explainer_a4.py",
         }
         return json.dumps(docs, indent=2)
+
+    def _greeting_help(self) -> str:
+        return (
+            "Hi. You can ask for things like:\n"
+            "- sectors\n"
+            "- stocks in U1\n"
+            "- show me tech stocks\n"
+            "- analyze AAPL, MSFT, NVDA for 2008-10-15\n"
+            "- how does G-CVaR work?"
+        )

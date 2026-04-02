@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 class IntentType(str, Enum):
     """Exhaustive intent taxonomy for the advisory assistant."""
 
+    GREETING = "greeting"
     LIST_SECTORS = "list_sectors"
     GET_STOCKS_BY_SECTOR = "get_stocks_by_sector"
     GET_STOCKS_BY_UNIVERSE = "get_stocks_by_universe"
@@ -62,6 +63,11 @@ class IntentClassifier:
     Deterministic intent classifier used as a governance-aware pre-routing gate.
     """
 
+    GREETING_PATTERNS = [
+        r"^(?:hi|hello|hey|hiya)$",
+        r"^good\s+(?:morning|afternoon|evening)$",
+    ]
+
     INVALID_EXECUTION_PATTERNS = [
         "execute trades",
         "place orders",
@@ -100,6 +106,8 @@ class IntentClassifier:
         IntentType.LIST_SECTORS: [
             r"\b(?:what|which|show|list|get)\b.*\b(?:sectors|industries)\b",
             r"\b(?:sectors|industries)\b.*\b(?:available|stored|database)\b",
+            r"^(?:sector|sectors|industry|industries)(?:\s+list)?$",
+            r"^(?:list\s+of\s+)?(?:sectors|industries)$",
         ],
         IntentType.GET_STOCKS_BY_SECTOR: [
             r"\b(?:show|get|list)\b(?:\s+me)?\s+(?P<sector>[a-z&\-\s]+?)\s+(?:stocks|companies|tickers)\b",
@@ -108,6 +116,7 @@ class IntentClassifier:
         IntentType.GET_STOCKS_BY_UNIVERSE: [
             r"\b(?:what(?:'s| is)?|show|get|list)\b.*\b(?:in|from)\s+(?P<universe>u\d{1,2})\b",
             r"\b(?P<universe>u\d{1,2})\b\s+(?:universe|portfolio|constituents|members)\b",
+            r"\b(?:stocks|tickers|companies)\b.*\b(?:in|from|of)\s+(?P<universe>u\d{1,2})\b",
         ],
         IntentType.UNIVERSE_OVERVIEW: [
             r"\b(?:summary|overview|composition|summarize)\b.*\b(?:of|for)\s+(?P<universe>u\d{1,2})\b",
@@ -167,6 +176,7 @@ class IntentClassifier:
     def _compile_patterns(self) -> dict[IntentType, list[re.Pattern]]:
         compiled_patterns: dict[IntentType, list[re.Pattern]] = {}
         for intent_dict in (
+            {IntentType.GREETING: self.GREETING_PATTERNS},
             self.DATA_LOOKUP_PATTERNS,
             self.GOVERNANCE_PATTERNS,
             self.BACKTEST_PATTERNS,
@@ -285,6 +295,7 @@ class IntentClassifier:
 
     def _classify_risk(self, intent: IntentType) -> RiskTier:
         if intent in {
+            IntentType.GREETING,
             IntentType.LIST_SECTORS,
             IntentType.GET_STOCKS_BY_SECTOR,
             IntentType.GET_STOCKS_BY_UNIVERSE,
@@ -310,6 +321,10 @@ class IntentClassifier:
 
     def _semantic_fallback(self, query: str) -> IntentMatch:
         domain_terms = [
+            "analyze",
+            "analyse",
+            "evaluate",
+            "assess",
             "portfolio",
             "universe",
             "ticker",
@@ -323,11 +338,11 @@ class IntentClassifier:
         ]
         if any(term in query for term in domain_terms):
             return IntentMatch(
-                intent=IntentType.DOCUMENTATION_REQUEST,
+                intent=IntentType.MALFORMED,
                 confidence=0.45,
-                risk_tier=RiskTier.LOW,
+                risk_tier=RiskTier.MEDIUM,
                 parameters={},
-                explanation="Low-confidence in-domain query; routed to documentation/help response.",
+                explanation="In-domain query missing parameters. Routing to LLM.",
                 requires_hitl=False,
             )
 

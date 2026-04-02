@@ -27,12 +27,34 @@ class IntentClassifierTests(unittest.TestCase):
         self.assertEqual(result.risk_tier, RiskTier.LOW)
         self.assertGreaterEqual(result.confidence, 0.9)
 
+    def test_classifies_bare_sector_queries(self):
+        result = self.classifier.classify("sectors")
+        self.assertEqual(result.intent, IntentType.LIST_SECTORS)
+
+        result = self.classifier.classify("sectors list")
+        self.assertEqual(result.intent, IntentType.LIST_SECTORS)
+
+    def test_classifies_greeting(self):
+        result = self.classifier.classify("hi")
+        self.assertEqual(result.intent, IntentType.GREETING)
+        self.assertEqual(result.risk_tier, RiskTier.LOW)
+
+    def test_classifies_simple_universe_lookup(self):
+        result = self.classifier.classify("stocks in U1")
+        self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_UNIVERSE)
+        self.assertEqual(result.parameters["universe"], "U1")
+
     def test_classifies_governance_request(self):
         result = self.classifier.classify("Analyze AAPL, MSFT, NVDA for 2008-10-15")
         self.assertEqual(result.intent, IntentType.ANALYZE_PORTFOLIO)
         self.assertEqual(result.parameters["tickers"], ["AAPL", "MSFT", "NVDA"])
         self.assertEqual(result.parameters["target_date"], "2008-10-15")
         self.assertEqual(result.risk_tier, RiskTier.HIGH)
+
+    def test_incomplete_in_domain_query_becomes_malformed(self):
+        result = self.classifier.classify("analyse")
+        self.assertEqual(result.intent, IntentType.MALFORMED)
+        self.assertEqual(result.explanation, "In-domain query missing parameters. Routing to LLM.")
 
     def test_blocks_trade_execution(self):
         result = self.classifier.classify("Buy AAPL immediately")
@@ -67,11 +89,35 @@ class IntentRouterTests(unittest.TestCase):
         self.assertFalse(result["requires_hitl"])
         self.assertEqual(result["result"]["payload"]["sector"], "tech")
 
+    def test_routes_bare_sector_list_without_hitl(self):
+        result = self.router.handle("sectors")
+        self.assertEqual(result["intent"], IntentType.LIST_SECTORS.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["tool"], "list_available_sectors")
+
+    def test_routes_greeting_to_help(self):
+        result = self.router.handle("hi")
+        self.assertEqual(result["intent"], IntentType.GREETING.value)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("stocks in U1", result["result"])
+
     def test_routes_universe_lookup_without_hitl(self):
         result = self.router.handle("What's in U1?")
         self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_UNIVERSE.value)
         self.assertEqual(result["status"], "success")
-        self.assertEqual(result["result"]["payload"]["universe_id"], "U1")
+        self.assertEqual(result["result"]["payload"]["universe"], "U1")
+
+    def test_routes_simple_universe_lookup_without_hitl(self):
+        result = self.router.handle("stocks in U1")
+        self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_UNIVERSE.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["universe"], "U1")
+
+    def test_routes_universe_overview_with_correct_payload_key(self):
+        result = self.router.handle("summary of U1")
+        self.assertEqual(result["intent"], IntentType.UNIVERSE_OVERVIEW.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["universe"], "U1")
 
     def test_gates_governance_analysis_before_execution(self):
         result = self.router.handle("Analyze AAPL, MSFT, NVDA for 2008-10-15")
@@ -79,6 +125,11 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["status"], "pending_governance_review")
         self.assertTrue(result["requires_hitl"])
         self.assertEqual(result["parameters"]["tickers"], ["AAPL", "MSFT", "NVDA"])
+
+    def test_routes_incomplete_in_domain_query_to_conversational_fallback(self):
+        result = self.router.handle("analyse")
+        self.assertEqual(result["intent"], IntentType.MALFORMED.value)
+        self.assertEqual(result["status"], "conversational_fallback")
 
     def test_gates_backtest_requests_as_critical(self):
         result = self.router.handle("Run full governance pipeline across all 11 universes")
