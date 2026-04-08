@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 from typing import Annotated, Any, Optional, Tuple, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -31,9 +32,73 @@ from src.agents.live_data_tools import (
 from src.intent.intent_classifier import IntentClassifier
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.rag.rag_tools import retrieve_graph_rag_context, search_methodology_knowledge_base
 
 
 logger = logging.getLogger(__name__)
+CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "qwen2.5:3b").strip()
+CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "qwen2.5:1.5b").strip()
+
+
+def _list_installed_ollama_models() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["ollama", "list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        logger.warning("Unable to inspect installed Ollama models: %s", exc)
+        return []
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        if stderr:
+            logger.warning("`ollama list` failed while resolving models: %s", stderr)
+        return []
+
+    models = []
+    for line in result.stdout.splitlines()[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        name = stripped.split()[0].strip()
+        if name and name not in models:
+            models.append(name)
+    return models
+
+
+def _resolve_ollama_model(preferred_models: list[str], installed_models: list[str]) -> str:
+    for model_name in preferred_models:
+        candidate = (model_name or "").strip()
+        if candidate and candidate in installed_models:
+            return candidate
+
+    return (preferred_models[0] if preferred_models else "").strip()
+
+
+INSTALLED_OLLAMA_MODELS = _list_installed_ollama_models()
+PRIMARY_OLLAMA_MODEL = _resolve_ollama_model(
+    [
+        CONFIGURED_PRIMARY_OLLAMA_MODEL,
+        "mistral:latest",
+        "qwen2.5:7b",
+        "qwen2.5:latest",
+    ],
+    INSTALLED_OLLAMA_MODELS,
+)
+FALLBACK_OLLAMA_MODEL = _resolve_ollama_model(
+    [
+        CONFIGURED_FALLBACK_OLLAMA_MODEL,
+        "mistral:latest",
+        "qwen2.5:7b",
+        "qwen2.5:latest",
+        CONFIGURED_PRIMARY_OLLAMA_MODEL,
+    ],
+    [model for model in INSTALLED_OLLAMA_MODELS if model != PRIMARY_OLLAMA_MODEL],
+)
 
 
 def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
@@ -109,9 +174,6 @@ class AgentState(TypedDict, total=False):
     route_status: str
     route_result: dict[str, Any]
 
-# 1. Initialize the LLM (Your Local Qwen 2.5)
-llm = ChatOllama(model="qwen2.5:7b", temperature=0.2)
-
 # 2. Bind the Tools to the LLM
 # Historical database lookup + advisory optimization only. No execution tools are exposed.
 tools = [
@@ -123,8 +185,121 @@ tools = [
     get_stock_database_snapshot,
     plot_historical_prices,
     governance_pipeline_with_cache,
+    search_methodology_knowledge_base,
+    retrieve_graph_rag_context,
 ]
-llm_with_tools = llm.bind_tools(tools)
+
+
+def _build_llm_with_tools(model_name: str):
+    return ChatOllama(model=model_name, temperature=0.2).bind_tools(tools)
+
+
+llm_with_tools = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL)
+fallback_llm_with_tools = (
+    _build_llm_with_tools(FALLBACK_OLLAMA_MODEL)
+    if FALLBACK_OLLAMA_MODEL and FALLBACK_OLLAMA_MODEL != PRIMARY_OLLAMA_MODEL
+    else None
+)
+
+
+def _is_ollama_memory_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return (
+        "requires more system memory" in message
+        or "more system memory than is available" in message
+        or "insufficient memory" in message
+    )
+
+
+def _is_ollama_model_not_found_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "not found" in message and "status code: 404" in message
+
+
+def _available_models_text() -> str:
+    if INSTALLED_OLLAMA_MODELS:
+        return ", ".join(INSTALLED_OLLAMA_MODELS)
+    return "No installed models were detected from `ollama list`."
+
+
+def _memory_error_message() -> AIMessage:
+    fallback_text = (
+        f" I also attempted the configured fallback model `{FALLBACK_OLLAMA_MODEL}`."
+        if fallback_llm_with_tools is not None
+        else ""
+    )
+    return AIMessage(
+        content=(
+            f"The local Ollama model `{PRIMARY_OLLAMA_MODEL}` needs more RAM than is currently available."
+            f"{fallback_text}\n\n"
+            "Try one of these:\n"
+            f"- set `PORTFOLIO_OLLAMA_MODEL` to a smaller model such as `{FALLBACK_OLLAMA_MODEL}`\n"
+            "- restart Ollama after unloading larger models\n"
+            "- use a deterministic query like `snapshot for TD` or `tell me more about TD`, which can bypass the LLM path"
+        )
+    )
+
+
+def _model_not_found_message(model_name: str) -> AIMessage:
+    return AIMessage(
+        content=(
+            f"The configured Ollama model `{model_name}` is not installed.\n\n"
+            f"Detected models: {_available_models_text()}\n\n"
+            "Either pull the requested model or set `PORTFOLIO_OLLAMA_MODEL` to one of the installed models."
+        )
+    )
+
+
+def _invoke_llm_with_fallback(messages: list[BaseMessage]) -> BaseMessage:
+    try:
+        return llm_with_tools.invoke(messages)
+    except Exception as exc:
+        if _is_ollama_model_not_found_error(exc):
+            logger.warning("Primary Ollama model %s is not installed. Error: %s", PRIMARY_OLLAMA_MODEL, exc)
+            if fallback_llm_with_tools is None:
+                return _model_not_found_message(PRIMARY_OLLAMA_MODEL)
+            try:
+                return fallback_llm_with_tools.invoke(messages)
+            except Exception as fallback_exc:
+                if _is_ollama_memory_error(fallback_exc):
+                    logger.warning(
+                        "Fallback Ollama model %s exceeded available memory after primary model lookup failed. Error: %s",
+                        FALLBACK_OLLAMA_MODEL,
+                        fallback_exc,
+                    )
+                    return _memory_error_message()
+                if _is_ollama_model_not_found_error(fallback_exc):
+                    logger.warning(
+                        "Fallback Ollama model %s is also unavailable. Error: %s",
+                        FALLBACK_OLLAMA_MODEL,
+                        fallback_exc,
+                    )
+                    return _model_not_found_message(FALLBACK_OLLAMA_MODEL)
+                raise
+
+        if not _is_ollama_memory_error(exc):
+            raise
+
+        logger.warning(
+            "Primary Ollama model %s exceeded available memory. Falling back if possible. Error: %s",
+            PRIMARY_OLLAMA_MODEL,
+            exc,
+        )
+
+        if fallback_llm_with_tools is None:
+            return _memory_error_message()
+
+        try:
+            return fallback_llm_with_tools.invoke(messages)
+        except Exception as fallback_exc:
+            if _is_ollama_memory_error(fallback_exc):
+                logger.warning(
+                    "Fallback Ollama model %s also exceeded available memory. Error: %s",
+                    FALLBACK_OLLAMA_MODEL,
+                    fallback_exc,
+                )
+                return _memory_error_message()
+            raise
 
 # 3. Define the System Prompt
 SYSTEM_PROMPT = """You are an elite Quantitative Portfolio Governance Agent.
@@ -136,6 +311,8 @@ REQUEST TYPES:
 1. Discovery requests: sectors, universes, universe membership, or stored ticker information.
 2. Historical chart requests: price plots or visual comparisons over a date range.
 3. Governance requests: structural risk analysis, optimization, or allocation recommendations.
+4. Methodology requests: how the system works, paper-style framing, HITL, RAG, or statistical interpretation.
+5. Graph-context requests: shared institutions, ownership overlap, contagion structure, and most central stocks.
 
 DISCOVERY RULES:
 - If the user asks "universes", "available universes", or similar, use list_available_universes.
@@ -160,6 +337,16 @@ GOVERNANCE RULES:
 - The tool already performs the historical price lookup, institutional network analysis, historical G-CVaR optimization, and inline plot generation back-to-back using local MongoDB data only.
 - The tool returns lightweight structured JSON with valid tickers, final weights, structural risk scores, and markdown plot links.
 - Read the tool output carefully instead of inventing any values.
+
+METHODOLOGY RAG RULES:
+- If the user asks how the framework works, how I_t is computed, how HITL works, why a result is statistically insignificant, or asks for methodology/documentation details, use search_methodology_knowledge_base.
+- This tool returns grounded PDF chunks from the local methodology knowledge base. Quote or summarize those chunks instead of inventing explanations.
+
+GRAPH RAG RULES:
+- If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.
+- If the user asks who invested in a ticker, which institutions are common across a set of stocks, how much institutions hold, or who invested the most, use retrieve_graph_rag_context.
+- Use explicit tickers when the user provides them.
+- If the user asks for graph context for a universe and no tickers are given, pass the universe identifier such as U1.
 
 FOLLOW-UP RULES:
 - If the user says "yes", continue only the immediately preceding proposal. Do not switch to a different portfolio, date, or task.
@@ -204,7 +391,7 @@ def chatbot_node(state: AgentState):
             message for message in working_messages if not isinstance(message, SystemMessage)
         ]
 
-    response = llm_with_tools.invoke(working_messages)
+    response = _invoke_llm_with_fallback(working_messages)
     return {"messages": [response], "user_portfolio": remembered_portfolio}
 
 
@@ -293,15 +480,25 @@ def _extract_tickers_from_text(text: str) -> list[str]:
         if ticker not in tickers:
             tickers.append(ticker)
 
+    for match in re.finditer(r"(?m)^([A-Z]{1,5}):\s+", text):
+        ticker = match.group(1).upper()
+        if ticker not in tickers:
+            tickers.append(ticker)
+
+    for match in re.finditer(r"(?m)^Tickers:\s*([A-Z,\s]+)$", text):
+        for token in re.split(r"[,\s]+", match.group(1).upper()):
+            if token and re.fullmatch(r"[A-Z]{1,5}", token) and token not in tickers:
+                tickers.append(token)
+
     return tickers
 
 
 def _extract_portfolio_from_messages(messages: list[BaseMessage]) -> list[str]:
     for message in reversed(messages):
+        raw_text = _message_content_to_text(message)
+
         if isinstance(message, ToolMessage):
             name = getattr(message, "name", "")
-            raw_text = _message_content_to_text(message)
-
             if name == "run_full_governance_pipeline":
                 try:
                     payload = json.loads(raw_text)
@@ -312,10 +509,21 @@ def _extract_portfolio_from_messages(messages: list[BaseMessage]) -> list[str]:
                     if isinstance(valid_tickers, list) and valid_tickers:
                         return [str(ticker).upper() for ticker in valid_tickers if str(ticker).strip()]
 
-            if name in {"get_stocks_by_universe", "get_universe_overview", "plot_historical_prices"}:
+            if name in {
+                "get_stocks_by_sector",
+                "get_stocks_by_universe",
+                "get_universe_overview",
+                "plot_historical_prices",
+                "retrieve_graph_rag_context",
+            }:
                 extracted = _extract_tickers_from_text(raw_text)
                 if extracted:
                     return extracted
+
+        if isinstance(message, AIMessage):
+            extracted = _extract_tickers_from_text(raw_text)
+            if extracted:
+                return extracted
     return []
 
 

@@ -135,6 +135,10 @@ class IntentClassifier:
             r"\b(?:show|get|list)\b.*\b(?:all stored|database)\b.*\b(?:tickers|stocks|data)\b",
             r"\b(?:brief|tell me)\b.*\b(?:company|stock|firm)\b.*\b(?:about|for|on)\s+(?P<tickers>[a-z,\s]+)\b",
             r"\b(?:what do we know about|summarize)\b\s+(?P<tickers>[a-z,\s]+)\b",
+            r"\b(?:tell me more about|tell me about|more about)\b\s+(?P<tickers>[a-z,\s]+)\b",
+            r"\b(?:explain|describe)\b\s+(?:ticker|stock|company|firm)\s+(?P<tickers>[a-z,\s]+)\b",
+            r"\b(?:explain|describe)\b(?:\s+the)?\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b$",
+            r"^(?P<tickers>[a-z]{1,5})\s*:\s*.*\b(?:explain|describe|summarize|tell me more|more about)\b.*$",
         ],
     }
 
@@ -147,6 +151,9 @@ class IntentClassifier:
         IntentType.INSTITUTIONAL_NETWORK: [
             r"\b(?:institutional|holder|ownership|overlap|network|contagion|interconnectedness)\b.*\b(?:analysis|graph|visualization|risk)\b(?:\s+for\s+(?P<subject>.+))?",
             r"\b(?:show|get|analyze|map)\b.*\b(?:institutions|holders|systemic risk)\b.*\b(?:for|in|on)\s+(?P<subject>.+)$",
+            r"\b(?:shared institutions?|ownership overlap|institutional overlap|contagion structure|graph context)\b.*\b(?:for|between|in|on)\s+(?P<subject>.+)$",
+            r"\b(?:which institutions?)\b.*\b(?:connect|link|hold)\b.*\b(?:for|between|in|on)\s+(?P<subject>.+)$",
+            r"\b(?:which institutions?)\b.*\b(?:connect|link|hold)\b\s+(?P<subject>.+)$",
         ],
         IntentType.HISTORICAL_CVAR: [
             r"\b(?:run|optimize|calculate|stress test)\b.*\b(?:cvar|historical cvar|tail risk|worst case)\b.*\b(?:for|on|with)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
@@ -235,12 +242,29 @@ class IntentClassifier:
                 requires_hitl=False
             )
 
-        # 3. REGEX PATTERN MATCHING (The existing logic)
+        # 3. FAST CATCH: Leading ticker labels such as "ASX: ... explain this"
+        labeled_ticker_match = re.match(r"^(?P<ticker>[A-Z]{1,5})\s*:\s*.+$", query)
+        if labeled_ticker_match:
+            return IntentMatch(
+                intent=IntentType.STOCK_SNAPSHOT,
+                confidence=0.97,
+                risk_tier=RiskTier.LOW,
+                parameters={"tickers": [labeled_ticker_match.group("ticker").upper()]},
+                explanation="Fast-catch: Leading ticker label detected.",
+                requires_hitl=False,
+            )
+
+        # 4. FAST CATCH: Known sector aliases and sector explanation phrasing
+        sector_match = self._match_known_sector_query(normalized_query)
+        if sector_match is not None:
+            return sector_match
+
+        # 5. REGEX PATTERN MATCHING (The existing logic)
         match = self._pattern_match(query)
         if match is not None:
             return match
 
-        # 4. FLEXIBLE SEMANTIC FALLBACK
+        # 6. FLEXIBLE SEMANTIC FALLBACK
         # If any domain terms are present, let it pass to the LLM instead of blocking
         return self._semantic_fallback(normalized_query)
 
@@ -345,6 +369,8 @@ class IntentClassifier:
             subject_text = (groups.get("subject") or query).strip()
             params["tickers"] = self._parse_tickers(subject_text)
             params["universes"] = self._parse_universes(subject_text)
+            if params["universes"]:
+                params["universe"] = params["universes"][0]
 
         elif intent in {IntentType.FULL_PIPELINE_RUN, IntentType.ROLLING_WINDOW_TEST}:
             params["scope"] = "batch"
@@ -377,6 +403,7 @@ class IntentClassifier:
             IntentType.GET_STOCKS_BY_UNIVERSE,
             IntentType.UNIVERSE_OVERVIEW,
             IntentType.STOCK_SNAPSHOT,
+            IntentType.INSTITUTIONAL_NETWORK,
             IntentType.EXPLAIN_PARAMETERS,
             IntentType.METHODOLOGY_QUESTION,
             IntentType.DOCUMENTATION_REQUEST,
@@ -385,7 +412,6 @@ class IntentClassifier:
 
         if intent in {
             IntentType.ANALYZE_PORTFOLIO,
-            IntentType.INSTITUTIONAL_NETWORK,
             IntentType.HISTORICAL_CVAR,
         }:
             return RiskTier.HIGH
@@ -414,11 +440,11 @@ class IntentClassifier:
             )
 
         return IntentMatch(
-            intent=IntentType.OUT_OF_SCOPE,
-            confidence=0.25,
+            intent=IntentType.MALFORMED,
+            confidence=0.2,
             risk_tier=RiskTier.MEDIUM,
             parameters={},
-            explanation="Query did not match supported governance intents.",
+            explanation="No deterministic intent matched. Routing to chatbot for best-effort retrieval.",
             requires_hitl=False,
         )
 
