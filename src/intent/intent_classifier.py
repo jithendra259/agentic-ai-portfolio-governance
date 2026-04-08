@@ -206,25 +206,42 @@ class IntentClassifier:
         if not normalized_query:
             return self._no_match("Empty query.", IntentType.MALFORMED)
 
+        # SECURITY GATES (STRICT)
         if self._contains_any(normalized_query, self.ADVERSARIAL_PATTERNS):
             return self._no_match("Security gate: adversarial prompt detected.", IntentType.ADVERSARIAL)
-
         if self._contains_any(normalized_query, self.INVALID_EXECUTION_PATTERNS):
             return self._no_match("Security gate: trade execution request detected.", IntentType.INVALID_EXECUTION)
 
-        if self._contains_any(normalized_query, self.OUT_OF_SCOPE_PATTERNS):
-            return self._no_match("Query is outside the portfolio governance domain.", IntentType.OUT_OF_SCOPE)
+        # 1. FAST CATCH: Standalone Tickers (e.g., "NVDA")
+        if re.match(r"^[A-Z]{1,5}$", query):
+            return IntentMatch(
+                intent=IntentType.STOCK_SNAPSHOT,
+                confidence=1.0,
+                risk_tier=RiskTier.LOW,
+                parameters={"tickers": [query]},
+                explanation="Fast-catch: Standalone ticker detected.",
+                requires_hitl=False
+            )
 
-        sector_match = self._match_known_sector_query(normalized_query)
-        if sector_match is not None:
-            self._log(f"Known sector shortcut: {sector_match.intent.value}")
-            return sector_match
+        # 2. FAST CATCH: Standalone Universes (e.g., "u1")
+        univ_match = re.match(r"^(?P<univ>u\d{1,2})$", normalized_query)
+        if univ_match:
+            return IntentMatch(
+                intent=IntentType.UNIVERSE_OVERVIEW,
+                confidence=1.0,
+                risk_tier=RiskTier.LOW,
+                parameters={"universe": univ_match.group("univ").upper()},
+                explanation="Fast-catch: Standalone universe detected.",
+                requires_hitl=False
+            )
 
+        # 3. REGEX PATTERN MATCHING (The existing logic)
         match = self._pattern_match(query)
         if match is not None:
-            self._log(f"Intent matched deterministically: {match.intent.value}")
             return match
 
+        # 4. FLEXIBLE SEMANTIC FALLBACK
+        # If any domain terms are present, let it pass to the LLM instead of blocking
         return self._semantic_fallback(normalized_query)
 
     def _contains_any(self, query: str, patterns: list[str]) -> bool:
