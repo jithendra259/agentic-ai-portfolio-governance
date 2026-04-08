@@ -19,6 +19,7 @@ gradio>=6.0.0
 
 # Data Sources and Storage
 pymongo==4.6.0
+pypdf>=5.0.0
 
 # Configuration
 python-dotenv==1.0.0
@@ -34,3 +35,4 @@ langchain-core>=0.1.0
 matplotlib>=3.5.0
 seaborn>=0.12.0
 yfinance==0.2.32
+sentence-transformers>=3.0.0

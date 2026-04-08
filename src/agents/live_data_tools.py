@@ -14,6 +14,7 @@ import pandas as pd
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from pymongo import MongoClient
+from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
 from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 
@@ -39,9 +40,9 @@ def _get_client():
         MONGO_URI,
         tls=True,
         tlsAllowInvalidCertificates=True,
-        serverSelectionTimeoutMS=10000,
-        connectTimeoutMS=10000,
-        socketTimeoutMS=15000,
+        serverSelectionTimeoutMS=15000,
+        connectTimeoutMS=20000,
+        socketTimeoutMS=60000,
         maxPoolSize=20,
         appname="agentic-ai-portfolio-governance-tools",
     )
@@ -60,6 +61,47 @@ def _ensure_indexes():
 def _get_collection():
     _ensure_indexes()
     return _get_client()[DB_NAME][COLLECTION_NAME]
+
+
+def _refresh_collection():
+    _ensure_indexes.cache_clear()
+    _get_client.cache_clear()
+    return _get_collection()
+
+
+def _find_documents_with_retry(
+    query: dict,
+    projection: Optional[dict] = None,
+    sort: Optional[tuple[str, int]] = None,
+    attempts: int = 2,
+    retry_delay_seconds: float = 1.5,
+):
+    last_error = None
+    collection = _get_collection()
+
+    for attempt in range(1, attempts + 1):
+        try:
+            cursor = collection.find(query, projection or {})
+            if sort is not None:
+                cursor = cursor.sort(sort[0], sort[1])
+            return list(cursor)
+        except (NetworkTimeout, AutoReconnect, PyMongoError) as exc:
+            last_error = exc
+            logger.warning(
+                "Mongo query attempt %s/%s failed with %s: %s",
+                attempt,
+                attempts,
+                type(exc).__name__,
+                exc,
+            )
+            if attempt >= attempts:
+                break
+            time.sleep(retry_delay_seconds)
+            collection = _refresh_collection()
+
+    if last_error is not None:
+        raise last_error
+    return []
 
 
 def _lookup_cache_key(name: str, *parts: str) -> tuple:
@@ -1412,9 +1454,10 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
             return "Unable to fetch historical prices: no valid tickers were provided."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        collection = _get_collection()
-
-        docs = list(collection.find({"ticker": {"$in": cleaned_tickers}}, {"ticker": 1, "historical_prices": 1}))
+        docs = _find_documents_with_retry(
+            {"ticker": {"$in": cleaned_tickers}},
+            {"ticker": 1, "historical_prices": 1},
+        )
         if not docs:
             return f"Unable to fetch historical prices: none of the requested tickers were found in MongoDB for {target_date}."
 
@@ -1479,9 +1522,10 @@ def run_historical_cvar_optimization(
             return "Unable to run historical CVaR optimization: please provide at least two valid tickers."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        collection = _get_collection()
-
-        docs = list(collection.find({"ticker": {"$in": cleaned_tickers}}, {"ticker": 1, "historical_prices": 1}))
+        docs = _find_documents_with_retry(
+            {"ticker": {"$in": cleaned_tickers}},
+            {"ticker": 1, "historical_prices": 1},
+        )
         if not docs:
             return f"Unable to run historical CVaR optimization: none of the requested tickers were found in MongoDB for {target_date}."
 
@@ -1673,16 +1717,13 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
                 )
             )
 
-        collection = _get_collection()
-        docs = list(
-            collection.find(
-                {"ticker": {"$in": cleaned_tickers}},
-                {
-                    "ticker": 1,
-                    "historical_prices": 1,
-                    "graph_relationships.institutional_holders": 1,
-                },
-            )
+        docs = _find_documents_with_retry(
+            {"ticker": {"$in": cleaned_tickers}},
+            {
+                "ticker": 1,
+                "historical_prices": 1,
+                "graph_relationships.institutional_holders": 1,
+            },
         )
         if not docs:
             return json.dumps(
