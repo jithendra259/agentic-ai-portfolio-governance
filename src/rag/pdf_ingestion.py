@@ -308,7 +308,6 @@ class PDFKnowledgeIngestor:
                 )
             )
 
-        collection.delete_many({"source_type": "pdf", "source_path": relative_source})
         collection.bulk_write(operations, ordered=False)
 
         return len(chunk_records), len(embeddings)

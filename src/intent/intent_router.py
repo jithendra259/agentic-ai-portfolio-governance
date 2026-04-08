@@ -6,7 +6,11 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from src.intent.intent_classifier import IntentClassifier, IntentType
-from src.rag.rag_tools import retrieve_graph_rag_context, search_methodology_knowledge_base
+from src.rag.rag_tools import (
+    compare_common_institutional_holders,
+    retrieve_graph_rag_context,
+    search_methodology_knowledge_base,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -88,7 +92,7 @@ class IntentRouter:
             )
 
         if intent_match.intent == IntentType.INSTITUTIONAL_NETWORK:
-            return self._success(intent_match, self._search_graph_context(intent_match))
+            return self._success(intent_match, self._search_graph_context(user_message, intent_match))
 
         if intent_match.intent in {
             IntentType.ANALYZE_PORTFOLIO,
@@ -248,19 +252,43 @@ class IntentRouter:
             return raw_func(question=user_message)
         return search_methodology_knowledge_base.invoke({"question": user_message})
 
-    def _search_graph_context(self, intent_match) -> str:
+    def _search_graph_context(self, user_message: str, intent_match) -> str:
         parameters = intent_match.parameters
         tickers = parameters.get("tickers", [])
+        universes = parameters.get("universes", [])
         universe = parameters.get("universe", "")
-        if not universe:
-            universes = parameters.get("universes", [])
-            if universes:
-                universe = universes[0]
+        if not universe and universes:
+            universe = universes[0]
+
+        if self._wants_common_holder_comparison(user_message, parameters):
+            raw_compare_func = getattr(compare_common_institutional_holders, "func", None)
+            if callable(raw_compare_func):
+                return raw_compare_func(universes=universes)
+            return compare_common_institutional_holders.invoke({"universes": universes})
 
         raw_func = getattr(retrieve_graph_rag_context, "func", None)
         if callable(raw_func):
             return raw_func(tickers=tickers, universe=universe)
         return retrieve_graph_rag_context.invoke({"tickers": tickers, "universe": universe})
+
+    def _wants_common_holder_comparison(self, user_message: str, parameters: dict[str, Any]) -> bool:
+        normalized = str(user_message or "").lower()
+        mentions_common = any(
+            phrase in normalized
+            for phrase in (
+                "common holder",
+                "common holders",
+                "shared holder",
+                "shared holders",
+                "common institution",
+                "common institutions",
+                "common institute",
+                "shared institution",
+                "shared institutions",
+            )
+        )
+        universe_count = len(parameters.get("universes", []))
+        return mentions_common and universe_count >= 2
 
     def _greeting_help(self) -> str:
         return (
@@ -277,7 +305,7 @@ class IntentRouter:
             return raw_snapshot
         if not self._wants_stock_explanation(user_message):
             return raw_snapshot
-        if "MongoDB Stock Snapshot" not in raw_snapshot:
+        if "Ticker:" not in raw_snapshot:
             return raw_snapshot
 
         stock_sections = self._parse_stock_snapshot_sections(raw_snapshot)
@@ -304,8 +332,9 @@ class IntentRouter:
 
     def _parse_stock_snapshot_sections(self, snapshot_text: str) -> list[dict[str, Any]]:
         body = str(snapshot_text or "")
-        if body.startswith("MongoDB Stock Snapshot"):
-            body = body[len("MongoDB Stock Snapshot") :].lstrip()
+        ticker_index = body.find("Ticker:")
+        if ticker_index >= 0:
+            body = body[ticker_index:]
         body = body.split("\n\nUnavailable tickers:", 1)[0].strip()
         if not body:
             return []

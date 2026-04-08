@@ -64,6 +64,11 @@ class IntentClassifierTests(unittest.TestCase):
         self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_UNIVERSE)
         self.assertEqual(result.parameters["universe"], "U1")
 
+    def test_classifies_show_me_the_stocks_in_universe_query_as_universe_lookup(self):
+        result = self.classifier.classify("Show me the stocks in universe U3")
+        self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_UNIVERSE)
+        self.assertEqual(result.parameters["universe"], "U3")
+
     def test_classifies_bare_known_sector_as_sector_lookup(self):
         result = self.classifier.classify("Industrials")
         self.assertEqual(result.intent, IntentType.GET_STOCKS_BY_SECTOR)
@@ -89,6 +94,16 @@ class IntentClassifierTests(unittest.TestCase):
         self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
         self.assertIn("TD", result.parameters["tickers"])
 
+    def test_classifies_describe_company_request(self):
+        result = self.classifier.classify("Describe the company for BAC")
+        self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
+        self.assertIn("BAC", result.parameters["tickers"])
+
+    def test_classifies_brief_overview_request(self):
+        result = self.classifier.classify("Brief overview of AMZN")
+        self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
+        self.assertIn("AMZN", result.parameters["tickers"])
+
     def test_classifies_explain_the_ticker_request(self):
         result = self.classifier.classify("explain the MSFT")
         self.assertEqual(result.intent, IntentType.STOCK_SNAPSHOT)
@@ -112,6 +127,13 @@ class IntentClassifierTests(unittest.TestCase):
         self.assertEqual(result.parameters["universe"], "U1")
         self.assertEqual(result.risk_tier, RiskTier.LOW)
 
+    def test_classifies_common_holders_query_with_universe_range(self):
+        result = self.classifier.classify("all the u1 to u11 who are the common institute")
+        self.assertEqual(result.intent, IntentType.INSTITUTIONAL_NETWORK)
+        self.assertEqual(result.parameters["universes"][0], "U1")
+        self.assertEqual(result.parameters["universes"][-1], "U11")
+        self.assertEqual(len(result.parameters["universes"]), 11)
+
     def test_incomplete_in_domain_query_becomes_malformed(self):
         result = self.classifier.classify("analyse")
         self.assertEqual(result.intent, IntentType.MALFORMED)
@@ -126,6 +148,10 @@ class IntentClassifierTests(unittest.TestCase):
         result = self.classifier.classify("Buy AAPL immediately")
         self.assertEqual(result.intent, IntentType.INVALID_EXECUTION)
         self.assertEqual(result.confidence, 0.0)
+
+    def test_blocks_trade_execution_with_conversational_verb_form(self):
+        result = self.classifier.classify("I am thinking about buying AAPL tomorrow")
+        self.assertEqual(result.intent, IntentType.INVALID_EXECUTION)
 
     def test_classifies_methodology_question(self):
         result = self.classifier.classify("How does G-CVaR work?")
@@ -187,6 +213,12 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["result"]["payload"]["universe"], "U1")
 
+    def test_routes_show_me_the_stocks_in_universe_without_falling_into_sector_lookup(self):
+        result = self.router.handle("Show me the stocks in universe U3")
+        self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_UNIVERSE.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["universe"], "U3")
+
     def test_routes_bare_known_sector_without_hitl(self):
         result = self.router.handle("Industrials")
         self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_SECTOR.value)
@@ -204,6 +236,18 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["intent"], IntentType.STOCK_SNAPSHOT.value)
         self.assertEqual(result["status"], "success")
         self.assertEqual(result["result"]["payload"]["tickers"], ["TD"])
+
+    def test_routes_describe_company_request_without_hitl(self):
+        result = self.router.handle("Describe the company for BAC")
+        self.assertEqual(result["intent"], IntentType.STOCK_SNAPSHOT.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["tickers"], ["BAC"])
+
+    def test_routes_brief_overview_request_without_hitl(self):
+        result = self.router.handle("Brief overview of AMZN")
+        self.assertEqual(result["intent"], IntentType.STOCK_SNAPSHOT.value)
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["result"]["payload"]["tickers"], ["AMZN"])
 
     def test_routes_explain_the_ticker_without_hitl(self):
         result = self.router.handle("explain the MSFT")
@@ -260,6 +304,50 @@ class IntentRouterTests(unittest.TestCase):
         self.assertIn("Johnson & Johnson (JNJ) is", result["result"])
         self.assertNotIn("MongoDB Stock Snapshot", result["result"])
 
+    def test_explanation_query_also_parses_yfinance_fallback_snapshot(self):
+        snapshot_text = (
+            "Stock Snapshot\n\n"
+            "Source note: MongoDB primary lookup was supplemented by yfinance fallback for JNJ.\n\n"
+            "Ticker: JNJ\n"
+            "- Company: Johnson & Johnson\n"
+            "- Universes: None stored\n"
+            "- Sector: Healthcare\n"
+            "- Industry: Drug Manufacturers - General\n"
+            "- Country: United States\n"
+            "- Website: https://www.jnj.com\n"
+            "- Historical price coverage: 2005-01-03 to 2025-12-30\n"
+            "- Most recent stored close: 205.82 on 2025-12-30\n"
+            "- Historical observations stored: 5282\n"
+            "- Key stats:\n"
+            "  - market_cap: 579460202496\n"
+            "  - trailing_pe: 21.779892\n"
+            "  - forward_pe: 19.118612\n"
+            "  - profit_margin: 0.28456\n"
+            "  - return_on_equity: 0.35029998\n"
+            "  - dividend_yield: 2.16\n"
+            "  - beta: 0.326\n"
+            "- Business summary: Johnson & Johnson operates across Innovative Medicine and MedTech.\n"
+        )
+        router = IntentRouter(
+            classifier=IntentClassifier(verbose=False),
+            handlers={
+                "list_available_sectors": _stub_result("list_available_sectors"),
+                "get_stocks_by_sector": _stub_result("get_stocks_by_sector"),
+                "get_stocks_by_universe": _stub_result("get_stocks_by_universe"),
+                "get_universe_overview": _stub_result("get_universe_overview"),
+                "get_stock_database_snapshot": _snapshot_text_stub(snapshot_text),
+                "analyze_institutional_network": _stub_result("analyze_institutional_network"),
+                "run_historical_cvar_optimization": _stub_result("run_historical_cvar_optimization"),
+            },
+        )
+
+        result = router.handle("explain jnj")
+
+        self.assertEqual(result["intent"], IntentType.STOCK_SNAPSHOT.value)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Johnson & Johnson (JNJ) is", result["result"])
+        self.assertNotIn("Stock Snapshot", result["result"])
+
     def test_router_prefers_raw_func_for_fast_lookup_path(self):
         router = IntentRouter(
             classifier=IntentClassifier(verbose=False),
@@ -300,6 +388,15 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["status"], "success")
         self.assertFalse(result["requires_hitl"])
         self.assertIn("Graph RAG Context", result["result"])
+
+    def test_routes_common_holder_queries_to_comparison_tool(self):
+        with patch("src.intent.intent_router.compare_common_institutional_holders") as mock_compare_tool:
+            mock_compare_tool.func.return_value = "Common Institutional Holders Comparison\nUniverses compared:\n- U1: 20 tickers\n- U10: 19 tickers"
+            result = self.router.handle("list the common holders between U1 and U10")
+
+        self.assertEqual(result["intent"], IntentType.INSTITUTIONAL_NETWORK.value)
+        self.assertEqual(result["status"], "success")
+        self.assertIn("Common Institutional Holders Comparison", result["result"])
 
     def test_routes_incomplete_in_domain_query_to_conversational_fallback(self):
         result = self.router.handle("analyse")

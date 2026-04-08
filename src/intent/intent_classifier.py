@@ -92,11 +92,18 @@ class IntentClassifier:
 
     # EXPANDED: Security Gates to prevent trading
     INVALID_EXECUTION_PATTERNS = [
-        "execute trades", "place orders", "place order",
-        "buy ", "sell ", "liquidate", "rebalance live",
-        "send trade", "broker", "short ", "go long", 
-        "market order", "limit order", "invest in", 
-        "purchase", "dump", "all in on"
+        r"\bexecute trades?\b",
+        r"\bplace orders?\b",
+        r"\b(?:buy|buying|sell|selling|purchase|purchasing|liquidate|liquidating|dump)\b",
+        r"\brebalance live\b",
+        r"\bsend trade\b",
+        r"\bbroker\b",
+        r"\bshort(?:ing)?\b",
+        r"\bgo long\b",
+        r"\bmarket order\b",
+        r"\blimit order\b",
+        r"\binvest in\b",
+        r"\ball in on\b",
     ]
 
     ADVERSARIAL_PATTERNS = [
@@ -118,11 +125,11 @@ class IntentClassifier:
             r"^(?:list\s+of\s+)?(?:sectors|industries)$",
         ],
         IntentType.GET_STOCKS_BY_SECTOR: [
-            r"\b(?:show|get|list)\b(?:\s+me)?\s+(?P<sector>[a-z&\-\s]+?)\s+(?:stocks|companies|tickers)\b",
+            r"\b(?:show|get|list)\b(?:\s+me)?\s+(?!.*\bu\d{1,2}\b)(?P<sector>[a-z&\-\s]+?)\s+(?:stocks|companies|tickers)\b",
             r"\b(?:stocks|companies|tickers)\b\s+(?:in|from|within)\s+(?P<sector>[a-z&\-\s]+?)\s+sector\b",
         ],
         IntentType.GET_STOCKS_BY_UNIVERSE: [
-            r"\b(?:what(?:'s| is)?|show|get|list)\b.*\b(?:in|from)\s+(?P<universe>u\d{1,2})\b",
+            r"\b(?:what(?:'s| is)?|show|get|list)\b.*\b(?:in|from)(?:\s+(?:universe|portfolio))?\s+(?P<universe>u\d{1,2})\b",
             r"\b(?P<universe>u\d{1,2})\b\s+(?:universe|portfolio|constituents|members)\b",
             r"\b(?:stocks|tickers|companies)\b.*\b(?:in|from|of)\s+(?P<universe>u\d{1,2})\b",
         ],
@@ -137,6 +144,8 @@ class IntentClassifier:
             r"\b(?:what do we know about|summarize)\b\s+(?P<tickers>[a-z,\s]+)\b",
             r"\b(?:tell me more about|tell me about|more about)\b\s+(?P<tickers>[a-z,\s]+)\b",
             r"\b(?:explain|describe)\b\s+(?:ticker|stock|company|firm)\s+(?P<tickers>[a-z,\s]+)\b",
+            r"\b(?:describe|brief|overview)\b.*?\b(?:company|stock|firm)\b.*?\b(?:for|on|about)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b",
+            r"\b(?:brief|short)\b.*?\b(?:overview|summary)\b.*?\b(?:of|for|on)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b",
             r"\b(?:explain|describe)\b(?:\s+the)?\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b$",
             r"^(?P<tickers>[a-z]{1,5})\s*:\s*.*\b(?:explain|describe|summarize|tell me more|more about)\b.*$",
         ],
@@ -154,6 +163,7 @@ class IntentClassifier:
             r"\b(?:shared institutions?|ownership overlap|institutional overlap|contagion structure|graph context)\b.*\b(?:for|between|in|on)\s+(?P<subject>.+)$",
             r"\b(?:which institutions?)\b.*\b(?:connect|link|hold)\b.*\b(?:for|between|in|on)\s+(?P<subject>.+)$",
             r"\b(?:which institutions?)\b.*\b(?:connect|link|hold)\b\s+(?P<subject>.+)$",
+            r"\b(?:common|shared)\b.*\b(?:institutions?|holders?|institutes?)\b",
         ],
         IntentType.HISTORICAL_CVAR: [
             r"\b(?:run|optimize|calculate|stress test)\b.*\b(?:cvar|historical cvar|tail risk|worst case)\b.*\b(?:for|on|with)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
@@ -269,7 +279,7 @@ class IntentClassifier:
         return self._semantic_fallback(normalized_query)
 
     def _contains_any(self, query: str, patterns: list[str]) -> bool:
-        return any(pattern in query for pattern in patterns)
+        return any(re.search(pattern, query, re.IGNORECASE) for pattern in patterns)
 
     def _pattern_match(self, query: str) -> Optional[IntentMatch]:
         best_match: Optional[IntentMatch] = None
@@ -388,9 +398,26 @@ class IntentClassifier:
         return unique_tickers
 
     def _parse_universes(self, text: str) -> list[str]:
-        universes = re.findall(r"\b(U\d{1,2})\b", str(text).upper())
+        upper_text = str(text).upper()
+        explicit_universes = re.findall(r"\b(U\d{1,2})\b", upper_text)
         unique_universes = []
-        for universe in universes:
+
+        for start_raw, end_raw in re.findall(r"\bU(\d{1,2})\s*(?:TO|THROUGH|THRU|-)\s*U(\d{1,2})\b", upper_text):
+            start_num = int(start_raw)
+            end_num = int(end_raw)
+            step = 1 if end_num >= start_num else -1
+            for number in range(start_num, end_num + step, step):
+                universe = f"U{number}"
+                if universe not in unique_universes:
+                    unique_universes.append(universe)
+
+        if re.search(r"\bALL\s+(?:11|ELEVEN)\s+UNIVERSES\b", upper_text) or re.search(r"\bALL\s+UNIVERSES\b", upper_text):
+            for number in range(1, 12):
+                universe = f"U{number}"
+                if universe not in unique_universes:
+                    unique_universes.append(universe)
+
+        for universe in explicit_universes:
             if universe not in unique_universes:
                 unique_universes.append(universe)
         return unique_universes
@@ -427,7 +454,9 @@ class IntentClassifier:
             "universe", "ticker", "stock", "sector", "governance",
             "cvar", "risk", "instability", "institutional", 
             "stress test", "contagion", "governanace", "govrnance",
-            "company", "firm", "brief", "jpm", "market", "info"
+            "company", "firm", "brief", "jpm", "market", "info",
+            "institution", "institutions", "institute", "institutes",
+            "holder", "holders", "common holder", "common holders"
         ] + list(self.KNOWN_SECTOR_ALIASES.keys())
         if any(term in query for term in domain_terms):
             return IntentMatch(

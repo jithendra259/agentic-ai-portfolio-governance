@@ -809,6 +809,153 @@ def _summarize_metrics(metrics: dict, max_items: int = 8) -> list[str]:
     return lines
 
 
+def _get_yfinance_module():
+    try:
+        import yfinance as yf
+    except ImportError:
+        return None
+    return yf
+
+
+def _get_yfinance_info(ticker_obj) -> dict:
+    try:
+        if hasattr(ticker_obj, "get_info"):
+            info = ticker_obj.get_info()
+        else:
+            info = getattr(ticker_obj, "info", {})
+    except Exception:
+        info = {}
+    return info if isinstance(info, dict) else {}
+
+
+def _normalize_percent_like_value(value):
+    try:
+        if value in (None, "", "N/A"):
+            return None
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if 0.0 <= numeric <= 1.0:
+        return round(numeric * 100.0, 6)
+    return round(numeric, 6)
+
+
+def _history_frame_to_records(history: pd.DataFrame) -> list[dict]:
+    if history is None or history.empty or "Close" not in history.columns:
+        return []
+
+    frame = history.reset_index().copy()
+    if "Date" not in frame.columns:
+        index_name = history.index.name or "Date"
+        if index_name in frame.columns:
+            frame = frame.rename(columns={index_name: "Date"})
+
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
+    frame = frame.dropna(subset=["Date", "Close"]).sort_values("Date")
+    return [
+        {"Date": row["Date"].strftime("%Y-%m-%d"), "Close": round(float(row["Close"]), 6)}
+        for _, row in frame.iterrows()
+    ]
+
+
+def _fetch_yfinance_snapshot_doc(ticker: str) -> Optional[dict]:
+    yf = _get_yfinance_module()
+    if yf is None:
+        return None
+
+    normalized_ticker = str(ticker or "").strip().upper()
+    if not normalized_ticker:
+        return None
+
+    try:
+        ticker_obj = yf.Ticker(normalized_ticker)
+        info = _get_yfinance_info(ticker_obj)
+        history = ticker_obj.history(period="max", auto_adjust=False)
+    except Exception as exc:
+        logger.warning("yfinance snapshot fallback failed for %s: %s", normalized_ticker, exc)
+        return None
+
+    if history is None or history.empty:
+        return None
+
+    key_stats = {
+        "market_cap": info.get("marketCap"),
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe": info.get("forwardPE"),
+        "profit_margin": info.get("profitMargins"),
+        "return_on_equity": info.get("returnOnEquity"),
+        "dividend_yield": _normalize_percent_like_value(info.get("dividendYield")),
+        "beta": info.get("beta"),
+    }
+    key_stats = {key: value for key, value in key_stats.items() if value not in (None, "", "N/A")}
+
+    info_payload = {
+        "company_name": info.get("longName") or info.get("shortName") or normalized_ticker,
+        "shortName": info.get("shortName") or info.get("longName") or normalized_ticker,
+        "longName": info.get("longName") or info.get("shortName") or normalized_ticker,
+        "sector": info.get("sector", "Unknown"),
+        "industry": info.get("industry", "Unknown"),
+        "country": info.get("country", "Unknown"),
+        "website": info.get("website", "N/A"),
+        "summary": info.get("longBusinessSummary") or info.get("longSummary") or "",
+    }
+
+    return {
+        "ticker": normalized_ticker,
+        "shortName": info.get("shortName") or normalized_ticker,
+        "longName": info.get("longName") or normalized_ticker,
+        "universes": [],
+        "historical_prices": _history_frame_to_records(history),
+        "info": info_payload,
+        "key_stats": key_stats,
+        "financials": {},
+        "graph_relationships": {},
+        "analysis_and_estimates": {},
+        "_source": "yfinance_fallback",
+    }
+
+
+def _fetch_yfinance_price_on_or_before(ticker: str, target_dt: pd.Timestamp) -> Optional[dict]:
+    yf = _get_yfinance_module()
+    if yf is None:
+        return None
+
+    normalized_ticker = str(ticker or "").strip().upper()
+    if not normalized_ticker:
+        return None
+
+    try:
+        history = yf.Ticker(normalized_ticker).history(
+            start="1900-01-01",
+            end=(target_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            auto_adjust=False,
+        )
+    except Exception as exc:
+        logger.warning("yfinance price fallback failed for %s: %s", normalized_ticker, exc)
+        return None
+
+    records = _history_frame_to_records(history)
+    if not records:
+        return None
+
+    frame = pd.DataFrame(records)
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
+    frame = frame.dropna(subset=["Date", "Close"]).sort_values("Date")
+    row = _get_effective_price_on_or_before(frame, target_dt)
+    if row is None:
+        return None
+
+    return {
+        "ticker": normalized_ticker,
+        "close": round(float(row["Close"]), 6),
+        "date": row["Date"].strftime("%Y-%m-%d"),
+        "source": "yfinance fallback",
+    }
+
+
 def _format_stock_record(doc: dict) -> str:
     ticker = str(doc.get("ticker") or doc.get("symbol") or "UNKNOWN").upper()
     info = doc.get("info", {}) if isinstance(doc.get("info"), dict) else {}
@@ -892,6 +1039,10 @@ def _format_stock_record(doc: dict) -> str:
     summary = info.get("summary")
     if summary:
         lines.append(f"- Business summary: {summary[:500]}{'...' if len(summary) > 500 else ''}")
+
+    source_label = doc.get("_source")
+    if source_label == "yfinance_fallback":
+        lines.append("- Data source: yfinance fallback")
 
     return "\n".join(lines)
 
@@ -1226,7 +1377,7 @@ def get_universe_overview(universe: str) -> str:
 
 @tool
 def get_stock_database_snapshot(tickers: list[str]) -> str:
-    """Fetch a broad MongoDB-backed snapshot for one or more tickers, covering stored metadata and historical coverage."""
+    """Fetch a broad stock snapshot, using MongoDB first and yfinance as a labeled fallback when needed."""
     try:
         if not tickers:
             return "Unable to fetch stock database snapshot: no tickers were provided."
@@ -1235,9 +1386,9 @@ def get_stock_database_snapshot(tickers: list[str]) -> str:
         if not cleaned_tickers:
             return "Unable to fetch stock database snapshot: no valid tickers were provided."
 
-        collection = _get_collection()
-        docs = list(
-            collection.find(
+        mongo_error = None
+        try:
+            docs = _find_documents_with_retry(
                 {"ticker": {"$in": cleaned_tickers}},
                 {
                     "ticker": 1,
@@ -1253,23 +1404,51 @@ def get_stock_database_snapshot(tickers: list[str]) -> str:
                     "analysis_and_estimates": 1,
                 },
             )
-        )
-
-        if not docs:
-            return "Unable to fetch stock database snapshot: none of the requested tickers were found in MongoDB."
+        except Exception as exc:
+            docs = []
+            mongo_error = exc
+            logger.warning("MongoDB stock snapshot lookup failed; attempting yfinance fallback. Error: %s", exc)
 
         found = {str(doc.get('ticker', '')).upper(): doc for doc in docs}
         sections = []
         missing = []
+        fallback_tickers = []
 
         for ticker in cleaned_tickers:
             doc = found.get(ticker)
             if not doc:
-                missing.append(f"- {ticker}: ticker not found")
-                continue
+                fallback_doc = _fetch_yfinance_snapshot_doc(ticker)
+                if fallback_doc is not None:
+                    doc = fallback_doc
+                    fallback_tickers.append(ticker)
+                else:
+                    if mongo_error is not None:
+                        missing.append(
+                            f"- {ticker}: MongoDB unavailable and yfinance fallback failed ({type(mongo_error).__name__})"
+                        )
+                    else:
+                        missing.append(f"- {ticker}: ticker not found")
+                    continue
             sections.append(_format_stock_record(doc))
 
+        if not sections:
+            if mongo_error is not None:
+                return (
+                    "Unable to fetch stock database snapshot due to a database or fallback error: "
+                    f"{type(mongo_error).__name__}: {str(mongo_error)}"
+                )
+            return "Unable to fetch stock database snapshot: none of the requested tickers were found in MongoDB or via yfinance fallback."
+
         response = ["MongoDB Stock Snapshot", ""]
+        if fallback_tickers:
+            response = [
+                "Stock Snapshot",
+                "",
+                "Source note: MongoDB primary lookup was supplemented by yfinance fallback for "
+                + ", ".join(fallback_tickers)
+                + ".",
+                "",
+            ]
         response.append("\n\n".join(sections))
 
         if missing:
@@ -1444,7 +1623,7 @@ def analyze_institutional_network(tickers: list[str]) -> str:
 
 @tool
 def get_historical_prices(tickers: list[str], target_date: str) -> str:
-    """Fetch historical closing prices from MongoDB on or immediately prior to a target date."""
+    """Fetch historical closing prices on or immediately prior to a target date, with yfinance fallback when MongoDB is unavailable."""
     try:
         if not tickers:
             return "Unable to fetch historical prices: no tickers were provided."
@@ -1454,36 +1633,72 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
             return "Unable to fetch historical prices: no valid tickers were provided."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned_tickers}},
-            {"ticker": 1, "historical_prices": 1},
-        )
-        if not docs:
-            return f"Unable to fetch historical prices: none of the requested tickers were found in MongoDB for {target_date}."
+        mongo_error = None
+        try:
+            docs = _find_documents_with_retry(
+                {"ticker": {"$in": cleaned_tickers}},
+                {"ticker": 1, "historical_prices": 1},
+            )
+        except Exception as exc:
+            docs = []
+            mongo_error = exc
+            logger.warning("MongoDB historical price lookup failed; attempting yfinance fallback. Error: %s", exc)
 
         found = {doc.get("ticker", "").upper(): doc for doc in docs}
         lines = []
         missing = []
+        fallback_used = []
 
         for ticker in cleaned_tickers:
             doc = found.get(ticker)
             if not doc:
-                missing.append(f"{ticker} (ticker not found)")
+                fallback_row = _fetch_yfinance_price_on_or_before(ticker, target_dt)
+                if fallback_row is not None:
+                    fallback_used.append(ticker)
+                    lines.append(
+                        f"- {ticker}: close={fallback_row['close']:.2f} on {fallback_row['date']} "
+                        f"(source: {fallback_row['source']})"
+                    )
+                elif mongo_error is not None:
+                    missing.append(f"{ticker} (MongoDB unavailable and yfinance fallback failed)")
+                else:
+                    missing.append(f"{ticker} (ticker not found)")
                 continue
 
             df = _extract_price_frame(doc)
             if df.empty:
-                missing.append(f"{ticker} (no historical price series)")
+                fallback_row = _fetch_yfinance_price_on_or_before(ticker, target_dt)
+                if fallback_row is not None:
+                    fallback_used.append(ticker)
+                    lines.append(
+                        f"- {ticker}: close={fallback_row['close']:.2f} on {fallback_row['date']} "
+                        f"(source: {fallback_row['source']})"
+                    )
+                else:
+                    missing.append(f"{ticker} (no historical price series)")
                 continue
 
             row = _get_effective_price_on_or_before(df, target_dt)
             if row is None:
-                missing.append(f"{ticker} (no price on or before {target_date})")
+                fallback_row = _fetch_yfinance_price_on_or_before(ticker, target_dt)
+                if fallback_row is not None:
+                    fallback_used.append(ticker)
+                    lines.append(
+                        f"- {ticker}: close={fallback_row['close']:.2f} on {fallback_row['date']} "
+                        f"(source: {fallback_row['source']})"
+                    )
+                else:
+                    missing.append(f"{ticker} (no price on or before {target_date})")
                 continue
 
-            lines.append(f"- {ticker}: close={row['Close']:.2f} on {row['Date'].strftime('%Y-%m-%d')}")
+            lines.append(f"- {ticker}: close={row['Close']:.2f} on {row['Date'].strftime('%Y-%m-%d')} (source: MongoDB)")
 
         if not lines:
+            if mongo_error is not None:
+                return (
+                    f"Unable to fetch historical prices for {target_date}. MongoDB lookup failed with "
+                    f"{type(mongo_error).__name__}: {str(mongo_error)} and yfinance fallback did not recover the requested tickers."
+                )
             return (
                 f"Unable to fetch historical prices for {target_date}. "
                 f"No requested tickers had usable data on or before that date. "
@@ -1494,6 +1709,15 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
             f"Historical closing prices on or immediately before {target_date}:",
             *lines,
         ]
+
+        if fallback_used:
+            response.extend(
+                [
+                    "",
+                    "Source note:",
+                    f"- yfinance fallback used for: {', '.join(fallback_used)}",
+                ]
+            )
 
         if missing:
             response.append("")
@@ -1673,7 +1897,11 @@ def run_historical_cvar_optimization(
 
 
 @tool
-def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
+def run_full_governance_pipeline(
+    tickers: list[str],
+    target_date: str,
+    risk_tolerance: str = "moderate",
+) -> str:
     """
     Run the full deterministic governance pipeline against local MongoDB only:
     historical prices, institutional network analysis, and historical CVaR optimization.
@@ -1786,6 +2014,7 @@ def run_full_governance_pipeline(tickers: list[str], target_date: str) -> str:
             overlapping_prices=prepared["overlapping_prices"],
             effective_dates=prepared["effective_dates"],
             target_date=target_date,
+            risk_tolerance=risk_tolerance,
             network_scores=network_payload.get("scores", {}),
         )
 

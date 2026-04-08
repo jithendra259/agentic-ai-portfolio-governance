@@ -10,10 +10,10 @@ from typing import NotRequired, TypedDict
 import pandas as pd
 from langgraph.graph import END, StateGraph
 
-from agents.explainer_a4 import GenerativeExplainerAgent
-from agents.graph_rag_a2 import GraphRAGAgent
-from agents.optimizer_a3 import GCVaROptimizerAgent
-from agents.time_series_a1 import TimeSeriesAgent
+from src.agents.explainer_a4 import GenerativeExplainerAgent
+from src.agents.graph_rag_a2 import GraphRAGAgent
+from src.agents.optimizer_a3 import GCVaROptimizerAgent
+from src.agents.time_series_a1 import TimeSeriesAgent
 
 
 class PortfolioState(TypedDict):

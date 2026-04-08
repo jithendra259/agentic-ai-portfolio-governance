@@ -40,8 +40,17 @@ def _rewrite_plot_markdown(content: str) -> str:
         path = match.group(1)
         return f"]({base_url}{path})"
 
+    def replace_absolute_outputs(match: re.Match) -> str:
+        filename = match.group(1)
+        return f"]({base_url}/outputs/{filename})"
+
     content = re.sub(r"\]\((outputs/[^)]+)\)", replace_relative, content)
     content = re.sub(r"\]\((/outputs/[^)]+)\)", replace_rooted, content)
+    content = re.sub(
+        r"\]\((?:[A-Za-z]:)?[^)]*[\\/]+outputs[\\/]+([^\\/)\s]+)\)",
+        replace_absolute_outputs,
+        content,
+    )
     return content
 
 

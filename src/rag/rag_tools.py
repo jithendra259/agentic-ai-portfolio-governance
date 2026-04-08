@@ -45,6 +45,7 @@ def retrieve_graph_rag_context(
     Retrieve graph-aware context from institutional ownership data.
     Use this for questions about shared institutions, overlap, contagion structure, and which stocks are most central.
     """
+    universe = universe or ""
     normalized_tickers: list[str]
     if isinstance(tickers, str):
         normalized_tickers = [token.strip().upper() for token in re.split(r"[,\s]+", tickers) if token.strip()]
@@ -56,3 +57,20 @@ def retrieve_graph_rag_context(
         universe=universe,
         top_k_pairs=top_k_pairs,
     )
+
+
+@tool
+def compare_common_institutional_holders(
+    universes: list[str] | str | None = None,
+) -> str:
+    """
+    Compare institutional holders that are common across multiple universes.
+    Use this for questions like common holders between U1 and U10, or across U1 to U11.
+    """
+    normalized_universes: list[str]
+    if isinstance(universes, str):
+        normalized_universes = [token.strip().upper() for token in re.split(r"[,\s]+", universes) if token.strip()]
+    else:
+        normalized_universes = universes or []
+
+    return _get_graph_rag().render_common_holders_markdown(universes=normalized_universes)
