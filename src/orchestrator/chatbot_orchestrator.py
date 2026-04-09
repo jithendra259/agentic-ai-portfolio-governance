@@ -29,10 +29,16 @@ from src.agents.live_data_tools import (
     plot_historical_prices,
     run_full_governance_pipeline,
 )
+from src.agents.price_series_tool import get_price_series_for_analysis
 from src.intent.intent_classifier import IntentClassifier
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
-from src.rag.rag_tools import retrieve_graph_rag_context, search_methodology_knowledge_base
+from src.rag.rag_tools import (
+    compare_common_institutional_holders,
+    retrieve_graph_rag_context,
+    search_methodology_knowledge_base,
+)
+from src.agents.custom_plot_tool import generate_custom_plot
 
 
 logger = logging.getLogger(__name__)
@@ -145,18 +151,33 @@ intent_router = IntentRouter(classifier=intent_classifier)
 
 
 @tool("run_full_governance_pipeline")
-def governance_pipeline_with_cache(tickers: list[str], target_date: str) -> str:
+def governance_pipeline_with_cache(
+    tickers: list[str],
+    target_date: str,
+    risk_tolerance: str = "moderate",
+) -> str:
     """
     Governance wrapper with L2 semantic cache.
     Reuses plans for seven days via MongoDB TTL index.
     """
-    query_hash = memory_manager.compute_query_hash(tickers=tickers, target_date=target_date)
+    normalized_risk_tolerance = (risk_tolerance or "moderate").strip().lower()
+    query_hash = memory_manager.compute_query_hash(
+        tickers=tickers,
+        target_date=target_date,
+        risk_tolerance=normalized_risk_tolerance,
+    )
     cached = memory_manager.retrieve_cached_plan(query_hash)
     if cached:
         logger.info("Cache Hit (-46%% cost) | query_hash=%s", query_hash)
         return cached
 
-    result = run_full_governance_pipeline.invoke({"tickers": tickers, "target_date": target_date})
+    result = run_full_governance_pipeline.invoke(
+        {
+            "tickers": tickers,
+            "target_date": target_date,
+            "risk_tolerance": normalized_risk_tolerance,
+        }
+    )
     if isinstance(result, str):
         memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
         return result
@@ -184,9 +205,12 @@ tools = [
     get_universe_overview,
     get_stock_database_snapshot,
     plot_historical_prices,
+    get_price_series_for_analysis,
+    generate_custom_plot,
     governance_pipeline_with_cache,
     search_methodology_knowledge_base,
     retrieve_graph_rag_context,
+    compare_common_institutional_holders,
 ]
 
 
@@ -327,8 +351,28 @@ HISTORICAL CHART RULES:
 - Do NOT use run_full_governance_pipeline for a pure historical chart request.
 - If the user already selected a universe or explicitly listed tickers earlier in the conversation, reuse that same ticker set for follow-up requests such as "plot all the tickers".
 - If the user provides a custom list of stock tickers such as AAPL, MSFT, and NVDA, use that exact custom list.
+- If the user asks to compare or plot all stocks in a universe, first call get_stocks_by_universe to resolve the tickers, then call plot_historical_prices with that ticker list. Do NOT stop after the universe lookup.
 - If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
 - If the request already contains enough information, act immediately instead of asking for confirmation.
+
+CUSTOM PLOT RULES:
+- Use generate_custom_plot whenever the user requests a chart type not covered by 
+  plot_historical_prices (which only draws historical price line charts).
+- Examples that require generate_custom_plot:
+    "scatter plot of risk vs return for U1 stocks"
+    "histogram of daily returns for AAPL"
+    "box plot comparing volatility across universes"
+    "drawdown chart for MSFT from 2008 to 2010"
+    "bar chart of the governance weights from the last run"
+    "rolling 30-day volatility for NVDA"
+    "correlation heatmap for U2 stocks"
+- Always fetch the data first using the appropriate tool, then pass the relevant 
+  subset to generate_custom_plot along with a precise description of what to plot 
+  (axes, grouping, time range, chart type).
+- The description parameter should be specific: "scatter plot with return on x-axis 
+  and CVaR on y-axis, each point labelled with the ticker" is better than "scatter plot".
+- Do NOT use generate_custom_plot for simple historical price line charts — 
+  use plot_historical_prices for those.
 
 GOVERNANCE RULES:
 - Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
@@ -345,6 +389,7 @@ METHODOLOGY RAG RULES:
 GRAPH RAG RULES:
 - If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.
 - If the user asks who invested in a ticker, which institutions are common across a set of stocks, how much institutions hold, or who invested the most, use retrieve_graph_rag_context.
+- If the user asks for common holders across universes such as U1 and U10, or across U1 to U11, use compare_common_institutional_holders.
 - Use explicit tickers when the user provides them.
 - If the user asks for graph context for a universe and no tickers are given, pass the universe identifier such as U1.
 
@@ -353,7 +398,95 @@ FOLLOW-UP RULES:
 - Never substitute an unrelated example date or example ticker list.
 
 GENERAL RULES:
-1. Use only MongoDB-backed historical tools. No live internet data and no yfinance.
+1. Prefer MongoDB-backed historical tools. For simple stock snapshots and historical price lookups, a labeled yfinance fallback may be used when MongoDB is unavailable.
+2. Never execute trades. This system is read-only and advisory only.
+3. If a tool fails, say so clearly and do not invent missing values.
+4. Always explain the allocation recommendation mathematically and transparently.
+5. Never call get_stocks_by_sector with an empty sector. Use list_available_sectors for sector discovery.
+6. If the user asks for comprehensive stored ticker information, prefer get_stock_database_snapshot before summarizing.
+7. If the user asks about universe membership or requests a universe roster, use get_stocks_by_universe or get_stock_database_snapshot as appropriate.
+8. If the user asks about a universe's sector identity or composition, use get_universe_overview.
+9. Prefer returning the direct tool result over paraphrasing when the tool already answers the request cleanly.
+"""
+
+# Override the legacy prompt block above with a cleaner, tool-complete version.
+SYSTEM_PROMPT = """You are an elite Quantitative Portfolio Governance Agent.
+You strictly use historical data (2005-2025) from your local MongoDB.
+ABSOLUTE RULE: You are an advisory system. ZERO execution, buying, or selling.
+ABSOLUTE RULE: NEVER hallucinate or invent data. If a tool fails, tell the user the tool failed.
+
+REQUEST TYPES:
+1. Discovery requests: sectors, universes, universe membership, or stored ticker information.
+2. Historical chart requests: price plots or visual comparisons over a date range.
+3. Governance requests: structural risk analysis, optimization, or allocation recommendations.
+4. Methodology requests: how the system works, paper-style framing, HITL, RAG, or statistical interpretation.
+5. Graph-context requests: shared institutions, ownership overlap, contagion structure, and most central stocks.
+
+DISCOVERY RULES:
+- If the user asks "universes", "available universes", or similar, use list_available_universes.
+- If the user asks for available sectors, use list_available_sectors.
+- If the user asks for stocks by sector, use get_stocks_by_sector.
+- If the user asks for stocks in a universe such as U1 through U11, use get_stocks_by_universe.
+- If the user asks what sector a universe belongs to or asks for a universe summary, use get_universe_overview.
+- If the user asks for all stored MongoDB data or a full ticker snapshot, use get_stock_database_snapshot.
+
+HISTORICAL CHART RULES:
+- Use plot_historical_prices ONLY for simple line charts showing raw closing prices over time.
+- It fetches and renders in one step, so use it when the user only wants to see price history.
+- Do NOT use plot_historical_prices when the user wants computed statistics such as correlations, returns, volatility, distributions, or drawdowns.
+- Do NOT use run_full_governance_pipeline for a pure historical chart request.
+- If the user already selected a universe or explicitly listed tickers earlier in the conversation, reuse that same ticker set for follow-up requests such as "plot all the tickers".
+- If the user provides a custom list of stock tickers such as AAPL, MSFT, and NVDA, use that exact custom list.
+- If the user asks to compare or plot all stocks in a universe, first call get_stocks_by_universe to resolve the tickers, then call plot_historical_prices with that ticker list. Do NOT stop after the universe lookup.
+- If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
+- If the request already contains enough information, act immediately instead of asking for confirmation.
+
+STATISTICAL ANALYSIS AND CUSTOM PLOT RULES:
+- Whenever the user asks for computed statistics or a non-line chart, use a two-step approach:
+  1. call get_price_series_for_analysis to fetch raw prices, returns, and summary stats
+  2. call generate_custom_plot with the full result from step 1 plus a precise chart description
+- Use this two-step path for requests such as:
+  - correlation heatmap
+  - returns distribution or histogram of returns
+  - volatility comparison
+  - drawdown chart
+  - rolling volatility
+  - scatter plot of risk vs return
+  - Sharpe ratio comparison
+  - box plot or violin plot of daily returns
+  - sector-weight bar chart from governance output
+- If the user asks for a universe-level statistical plot, first resolve the universe members, then call get_price_series_for_analysis, then call generate_custom_plot.
+- The description passed to generate_custom_plot must be specific and mention:
+  - the exact chart type
+  - which fields from the tool payload to use, for example data['returns'] or data['stats']
+  - axis labels and grouping
+- Never tell the user you cannot do this analysis when it is based on historical price series. Use get_price_series_for_analysis for that purpose.
+
+GOVERNANCE RULES:
+- Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
+- For governance, ensure you have tickers and one historical target date such as 2008-09-15.
+- If either the tickers or the target date is missing for a governance request, politely ask for the missing information.
+- The tool already performs the historical price lookup, institutional network analysis, historical G-CVaR optimization, and inline plot generation back-to-back using local MongoDB data only.
+- The tool returns lightweight structured JSON with valid tickers, final weights, structural risk scores, and markdown plot links.
+- Read the tool output carefully instead of inventing any values.
+
+METHODOLOGY RAG RULES:
+- If the user asks how the framework works, how I_t is computed, how HITL works, why a result is statistically insignificant, or asks for methodology/documentation details, use search_methodology_knowledge_base.
+- This tool returns grounded PDF chunks from the local methodology knowledge base. Quote or summarize those chunks instead of inventing explanations.
+
+GRAPH RAG RULES:
+- If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.
+- If the user asks who invested in a ticker, which institutions are common across a set of stocks, how much institutions hold, or who invested the most, use retrieve_graph_rag_context.
+- If the user asks for common holders across universes such as U1 and U10, or across U1 to U11, use compare_common_institutional_holders.
+- Use explicit tickers when the user provides them.
+- If the user asks for graph context for a universe and no tickers are given, pass the universe identifier such as U1.
+
+FOLLOW-UP RULES:
+- If the user says "yes", continue only the immediately preceding proposal. Do not switch to a different portfolio, date, or task.
+- Never substitute an unrelated example date or example ticker list.
+
+GENERAL RULES:
+1. Prefer MongoDB-backed historical tools. For simple stock snapshots and historical price lookups, a labeled yfinance fallback may be used when MongoDB is unavailable.
 2. Never execute trades. This system is read-only and advisory only.
 3. If a tool fails, say so clearly and do not invent missing values.
 4. Always explain the allocation recommendation mathematically and transparently.
@@ -515,7 +648,17 @@ def _extract_portfolio_from_messages(messages: list[BaseMessage]) -> list[str]:
                 "get_universe_overview",
                 "plot_historical_prices",
                 "retrieve_graph_rag_context",
+                "get_price_series_for_analysis",
             }:
+                if name == "get_price_series_for_analysis":
+                    try:
+                        payload = json.loads(raw_text)
+                    except Exception:
+                        payload = None
+                    if isinstance(payload, dict):
+                        tickers_included = payload.get("tickers_included", [])
+                        if isinstance(tickers_included, list) and tickers_included:
+                            return [str(ticker).upper() for ticker in tickers_included if str(ticker).strip()]
                 extracted = _extract_tickers_from_text(raw_text)
                 if extracted:
                     return extracted
@@ -640,8 +783,26 @@ def finalize_governance_node(state: AgentState):
         return {"messages": [AIMessage(content="Unable to generate a response for this request.")]}
 
     latest_tool_name, latest_tool_output = _extract_latest_tool_output(messages)
+    if latest_tool_name == "get_stock_database_snapshot" and latest_tool_output:
+        last_human = next((message for message in reversed(messages) if isinstance(message, HumanMessage)), None)
+        user_text = _message_content_to_text(last_human) if last_human is not None else ""
+        if intent_router._wants_stock_explanation(user_text):
+            stock_sections = intent_router._parse_stock_snapshot_sections(latest_tool_output)
+            if stock_sections:
+                formatted = "\n\n".join(
+                    intent_router._build_stock_explanation(section)
+                    for section in stock_sections
+                )
+                return {"messages": [AIMessage(content=formatted)]}
+
     if latest_tool_name != "run_full_governance_pipeline":
         content = latest_tool_output or "Unable to generate a response for this request."
+
+        # NEW: if the tool returned a markdown image, pass it through untouched
+        # so the UI renders the image rather than showing raw text
+        if "![" in content and "](" in content:
+            return {"messages": [AIMessage(content=content)]}
+
         return {"messages": [AIMessage(content=content)]}
 
     governance_payload, raw_text = _extract_latest_governance_payload(messages)
@@ -653,6 +814,13 @@ def finalize_governance_node(state: AgentState):
         content_parts.extend(plot_outputs)
 
     return {"messages": [AIMessage(content="\n\n".join(part for part in content_parts if part))]}
+
+
+def _route_after_tool(state: AgentState) -> str:
+    latest_tool_name, _ = _extract_latest_tool_output(state.get("messages", []))
+    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "generate_custom_plot"}:
+        return "finalize_governance"
+    return "chatbot"
 
 # 5. Build the LangGraph State Machine
 builder = StateGraph(AgentState)
@@ -681,7 +849,14 @@ builder.add_conditional_edges(
     tools_condition,
 )
 
-builder.add_edge("tools", "finalize_governance")
+builder.add_conditional_edges(
+    "tools",
+    _route_after_tool,
+    {
+        "finalize_governance": "finalize_governance",
+        "chatbot": "chatbot",
+    },
+)
 builder.add_edge("finalize_governance", END)
 
 # 6. Add Conversational Memory (L1 with MongoDBSaver, fallback to MemorySaver)

@@ -1,3 +1,4 @@
+import os
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
 
@@ -10,7 +11,8 @@ class GenerativeExplainerAgent:
     """
 
     def __init__(self):
-        self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "mistral:latest").strip()
+        self.llm = ChatOllama(model=model_name, temperature=0.5)
         self.prompt = PromptTemplate(
             input_variables=[
                 "date",

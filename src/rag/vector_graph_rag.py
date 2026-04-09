@@ -413,6 +413,121 @@ class GraphContextRAG:
             "single_ticker_holders": single_ticker_holders[:15],
         }
 
+    def compare_common_holders(
+        self,
+        universes: Optional[list[str] | str] = None,
+    ) -> dict[str, Any]:
+        collection = self._get_collection()
+        if collection is None:
+            return {"status": "error", "message": "MongoDB is not configured for graph retrieval."}
+
+        normalized_universes = self._normalize_universes(universes)
+        if len(normalized_universes) < 2:
+            return {"status": "error", "message": "Provide at least two universes for common-holder comparison."}
+
+        docs = list(
+            collection.find(
+                {"universes": {"$in": normalized_universes}},
+                {
+                    "_id": 0,
+                    "ticker": 1,
+                    "universes": 1,
+                    "graph_relationships.institutional_holders": 1,
+                },
+            )
+        )
+        if not docs:
+            return {"status": "error", "message": "No graph documents matched the requested universes."}
+
+        graph_agent = GraphRAGAgent(collection)
+        universe_tickers: dict[str, set[str]] = {universe: set() for universe in normalized_universes}
+        universe_institutions: dict[str, dict[str, dict[str, Any]]] = {
+            universe: {} for universe in normalized_universes
+        }
+
+        for doc in docs:
+            ticker = str(doc.get("ticker", "")).upper()
+            if not ticker:
+                continue
+
+            doc_universes = {
+                str(item).strip().upper()
+                for item in doc.get("universes", [])
+                if str(item).strip().upper() in universe_tickers
+            }
+            if not doc_universes:
+                continue
+
+            parsed_holders = graph_agent._parse_institutional_holders(
+                doc.get("graph_relationships", {}).get("institutional_holders", [])
+            )
+
+            for universe in doc_universes:
+                universe_tickers[universe].add(ticker)
+                for institution_name, weight in parsed_holders.items():
+                    institution_entry = universe_institutions[universe].setdefault(
+                        institution_name,
+                        {"tickers": set(), "total_weight": 0.0},
+                    )
+                    institution_entry["tickers"].add(ticker)
+                    institution_entry["total_weight"] += float(weight)
+
+        available_universes = [universe for universe in normalized_universes if universe_tickers[universe]]
+        if len(available_universes) < 2:
+            return {"status": "error", "message": "Fewer than two universes had ticker data for common-holder comparison."}
+
+        common_institutions = None
+        for universe in available_universes:
+            names = set(universe_institutions[universe].keys())
+            common_institutions = names if common_institutions is None else common_institutions.intersection(names)
+
+        common_institutions = sorted(common_institutions or [])
+        rows = []
+        for institution_name in common_institutions:
+            per_universe = []
+            combined_total_pct_held = 0.0
+            combined_coverage = 0
+
+            for universe in available_universes:
+                entry = universe_institutions[universe][institution_name]
+                ticker_count = len(entry["tickers"])
+                universe_size = len(universe_tickers[universe])
+                aggregate_pct_held = float(entry["total_weight"]) * 100.0
+                average_pct_held = aggregate_pct_held / max(1, ticker_count)
+                combined_total_pct_held += aggregate_pct_held
+                combined_coverage += ticker_count
+                per_universe.append(
+                    {
+                        "universe": universe,
+                        "ticker_count": ticker_count,
+                        "universe_size": universe_size,
+                        "aggregate_pct_held": round(aggregate_pct_held, 4),
+                        "average_pct_held": round(average_pct_held, 4),
+                    }
+                )
+
+            rows.append(
+                {
+                    "institution": institution_name,
+                    "combined_total_pct_held": round(combined_total_pct_held, 4),
+                    "combined_coverage": combined_coverage,
+                    "per_universe": per_universe,
+                }
+            )
+
+        rows.sort(
+            key=lambda item: (item["combined_total_pct_held"], item["combined_coverage"], item["institution"]),
+            reverse=True,
+        )
+
+        return {
+            "status": "success",
+            "universes": available_universes,
+            "universe_sizes": {universe: len(universe_tickers[universe]) for universe in available_universes},
+            "common_institution_count": len(rows),
+            "common_institutions": rows,
+        }
+
     def render_markdown(
         self,
         tickers: Optional[list[str] | str] = None,
@@ -468,6 +583,71 @@ class GraphContextRAG:
                 )
 
         return "\n".join(lines)
+
+    def render_common_holders_markdown(
+        self,
+        universes: Optional[list[str] | str] = None,
+    ) -> str:
+        result = self.compare_common_holders(universes=universes)
+        if result.get("status") != "success":
+            return f"Common Institutional Holders Comparison\n{result.get('message', 'Unable to compare common holders.')}"
+
+        lines = ["Common Institutional Holders Comparison", "Universes compared:"]
+        for universe in result.get("universes", []):
+            size = result.get("universe_sizes", {}).get(universe, 0)
+            lines.append(f"- {universe}: {size} tickers")
+
+        lines.append(
+            f"Institutions present in every selected universe: {result.get('common_institution_count', 0)}"
+        )
+
+        if not result.get("common_institutions"):
+            lines.extend(["", "No institution was found across every selected universe."])
+            return "\n".join(lines)
+
+        lines.extend(["", "Common holders:"])
+        for item in result.get("common_institutions", [])[:15]:
+            universe_parts = []
+            for per_universe in item.get("per_universe", []):
+                universe_parts.append(
+                    f"{per_universe['universe']} {per_universe['ticker_count']}/{per_universe['universe_size']} tickers"
+                    f", {per_universe['aggregate_pct_held']:.2f}% aggregate held"
+                )
+            lines.append(
+                f"- {item['institution']}: combined held={item['combined_total_pct_held']:.2f}%"
+                f" | {'; '.join(universe_parts)}"
+            )
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _normalize_universes(universes: Optional[list[str] | str]) -> list[str]:
+        if isinstance(universes, str):
+            raw_text = universes.upper()
+        else:
+            raw_text = " ".join(str(token).upper() for token in (universes or []) if str(token).strip())
+
+        normalized = []
+        for start_raw, end_raw in re.findall(r"\bU(\d{1,2})\s*(?:TO|THROUGH|THRU|-)\s*U(\d{1,2})\b", raw_text):
+            start_num = int(start_raw)
+            end_num = int(end_raw)
+            step = 1 if end_num >= start_num else -1
+            for number in range(start_num, end_num + step, step):
+                universe = f"U{number}"
+                if universe not in normalized:
+                    normalized.append(universe)
+
+        if re.search(r"\bALL\s+(?:11|ELEVEN)\s+UNIVERSES\b", raw_text) or re.search(r"\bALL\s+UNIVERSES\b", raw_text):
+            for number in range(1, 12):
+                universe = f"U{number}"
+                if universe not in normalized:
+                    normalized.append(universe)
+
+        for token in re.findall(r"\bU\d{1,2}\b", raw_text):
+            if token not in normalized:
+                normalized.append(token)
+
+        return normalized
 
     def _get_collection(self):
         if self._collection is not None:

@@ -76,11 +76,20 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to setup memory indexes: %s", exc)
 
-    def compute_query_hash(self, tickers: list[str], target_date: str) -> str:
+    def compute_query_hash(
+        self,
+        tickers: list[str],
+        target_date: str,
+        risk_tolerance: str | None = None,
+    ) -> str:
         normalized_tickers = sorted(
             {str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()}
         )
-        payload = {"tickers": normalized_tickers, "target_date": str(target_date).strip()}
+        payload = {
+            "tickers": normalized_tickers,
+            "target_date": str(target_date).strip(),
+            "risk_tolerance": str(risk_tolerance or "moderate").strip().lower(),
+        }
         payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
 

@@ -1,49 +1,71 @@
-import logging
 import json
+import logging
+import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
-from fastapi.staticfiles import StaticFiles
 
-from src.orchestrator.llm_router import portfolio_assistant
-# NEW: Import your MongoDB Memory Manager
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.orchestrator.llm_router import portfolio_assistant
+
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "outputs"
+LEGACY_OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "src" / "outputs"
+
+
+def _sync_legacy_outputs() -> None:
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    if not LEGACY_OUTPUTS_DIR.exists():
+        return
+
+    for legacy_file in LEGACY_OUTPUTS_DIR.glob("*.png"):
+        target = OUTPUTS_DIR / legacy_file.name
+        if not target.exists():
+            shutil.copy2(legacy_file, target)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Initializing MongoDB indexes to fix search latency...")
+    _sync_legacy_outputs()
+    try:
+        memory = MongoMemoryManager()
+        memory.setup_indexes()
+        logger.info("MongoDB indexes are active.")
+    except Exception as exc:
+        logger.error("Failed to build MongoDB indexes: %s", exc)
+    yield
+
 
 app = FastAPI(
     title="Agentic Portfolio Governance API",
     description="Advisory-only backend for historical portfolio governance using local MongoDB data.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# NEW: Build database indexes the moment the server starts
-@app.on_event("startup")
-def startup_db_indexes():
-    logger.info("Initializing MongoDB indexes to fix search latency...")
-    try:
-        memory = MongoMemoryManager()
-        memory.setup_indexes()
-        logger.info("✅ MongoDB indexes are active! Search will now be instant.")
-    except Exception as e:
-        logger.error(f"❌ Failed to build MongoDB indexes: {e}")
-
-OUTPUTS_DIR = Path("outputs")
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
+
 
 class ChatRequest(BaseModel):
     session_id: str
     user_message: str
 
+
 class ChatResponse(BaseModel):
     session_id: str
     response: str
+
 
 def _message_to_text(message: Any) -> str:
     if message is None:
@@ -64,6 +86,7 @@ def _message_to_text(message: Any) -> str:
 
     return str(content) if content else ""
 
+
 def _chunk_to_text(chunk: Any) -> str:
     if chunk is None:
         return ""
@@ -83,8 +106,10 @@ def _chunk_to_text(chunk: Any) -> str:
 
     return str(content) if content else ""
 
+
 def _stream_event(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
+
 
 @app.get("/health")
 def health_check() -> dict:
@@ -93,6 +118,7 @@ def health_check() -> dict:
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
     }
+
 
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
@@ -127,6 +153,7 @@ def chat(request: ChatRequest) -> ChatResponse:
             status_code=500,
             detail=f"Backend error while processing advisory request: {exc}",
         ) from exc
+
 
 @app.post("/chat/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
@@ -189,6 +216,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             )
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
 
 if __name__ == "__main__":
     import uvicorn

@@ -12,7 +12,7 @@ import seaborn as sns
 from langchain_core.tools import tool
 
 
-OUTPUT_DIR = Path("outputs")
+OUTPUT_DIR = Path(__file__).resolve().parents[2] / "outputs"
 SUPPORTED_PLOTS = {"heatmap", "pie", "line", "bar", "network"}
 
 
@@ -56,7 +56,7 @@ def _save_current_plot(title: str, plot_type: str) -> str:
     plt.tight_layout()
     plt.savefig(path, dpi=180, bbox_inches="tight", facecolor=plt.gcf().get_facecolor())
     plt.close()
-    return path.as_posix()
+    return f"/outputs/{filename}"
 
 
 def _extract_matrix(data: dict) -> pd.DataFrame:
