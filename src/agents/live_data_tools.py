@@ -1633,16 +1633,12 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
             return "Unable to fetch historical prices: no valid tickers were provided."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        mongo_error = None
-        try:
-            docs = _find_documents_with_retry(
-                {"ticker": {"$in": cleaned_tickers}},
-                {"ticker": 1, "historical_prices": 1},
-            )
-        except Exception as exc:
-            docs = []
-            mongo_error = exc
-            logger.warning("MongoDB historical price lookup failed; attempting yfinance fallback. Error: %s", exc)
+        docs = _find_documents_with_retry(
+            {"ticker": {"$in": cleaned_tickers}},
+            {"ticker": 1, "historical_prices": 1},
+        )
+        if not docs:
+            return f"Unable to fetch historical prices: none of the requested tickers were found in MongoDB for {target_date}."
 
         found = {doc.get("ticker", "").upper(): doc for doc in docs}
         lines = []
