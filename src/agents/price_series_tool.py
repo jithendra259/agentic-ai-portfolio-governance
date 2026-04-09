@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import time
+import uuid
 
 import numpy as np
 import pandas as pd
@@ -17,6 +19,43 @@ logger = logging.getLogger(__name__)
 
 _MAX_TICKERS = 30
 _MAX_OBSERVATIONS = 1500
+_ANALYSIS_CACHE_TTL_SECONDS = 900
+_ANALYSIS_CACHE_MAX_ENTRIES = 32
+_ANALYSIS_CACHE: dict[str, tuple[float, dict]] = {}
+
+
+def _prune_analysis_cache() -> None:
+    now = time.monotonic()
+    expired = [key for key, (expires_at, _) in _ANALYSIS_CACHE.items() if expires_at <= now]
+    for key in expired:
+        _ANALYSIS_CACHE.pop(key, None)
+
+    if len(_ANALYSIS_CACHE) <= _ANALYSIS_CACHE_MAX_ENTRIES:
+        return
+
+    for key, _ in sorted(_ANALYSIS_CACHE.items(), key=lambda item: item[1][0]):
+        _ANALYSIS_CACHE.pop(key, None)
+        if len(_ANALYSIS_CACHE) <= _ANALYSIS_CACHE_MAX_ENTRIES:
+            break
+
+
+def _store_analysis_dataset(dataset: dict) -> str:
+    _prune_analysis_cache()
+    cache_key = f"analysis_{uuid.uuid4().hex}"
+    _ANALYSIS_CACHE[cache_key] = (time.monotonic() + _ANALYSIS_CACHE_TTL_SECONDS, dataset)
+    return cache_key
+
+
+def load_cached_analysis_dataset(cache_key: str) -> dict | None:
+    _prune_analysis_cache()
+    cached = _ANALYSIS_CACHE.get(str(cache_key).strip())
+    if not cached:
+        return None
+    expires_at, dataset = cached
+    if expires_at <= time.monotonic():
+        _ANALYSIS_CACHE.pop(str(cache_key).strip(), None)
+        return None
+    return dataset
 
 
 @tool
@@ -29,11 +68,12 @@ def get_price_series_for_analysis(
     Fetch daily closing prices from MongoDB and return a structured payload for
     downstream statistical analysis or custom plotting.
 
-    The returned dictionary contains:
-    - prices: ticker -> [{date, close}, ...]
-    - returns: ticker -> [daily log returns]
+    The returned dictionary is intentionally compact for chat-model efficiency and contains:
+    - analysis_cache_key: reference to the cached full dataset
+    - available_fields: fields available in the cached dataset
     - stats: ticker -> summary stats
     - tickers_included / tickers_missing
+    - observations_by_ticker
     - start_date / end_date
 
     Use this tool whenever the user asks for correlations, return
@@ -41,6 +81,8 @@ def get_price_series_for_analysis(
     Sharpe-style comparisons, box plots, violin plots, or other analyses that
     need the underlying time series rather than a pre-rendered line chart.
     """
+
+    start_time = time.perf_counter()
 
     if not tickers:
         return {"error": "No tickers provided."}
@@ -121,12 +163,39 @@ def get_price_series_for_analysis(
             "tickers_missing": missing,
         }
 
-    return {
+    full_dataset = {
         "prices": prices_out,
         "returns": returns_out,
         "stats": stats_out,
         "tickers_included": sorted(prices_out.keys()),
         "tickers_missing": missing,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    cache_key = _store_analysis_dataset(full_dataset)
+    elapsed_seconds = time.perf_counter() - start_time
+    logger.info(
+        "Prepared cached price-series analysis for %s tickers over %s to %s in %.2fs",
+        len(full_dataset["tickers_included"]),
+        start_date,
+        end_date,
+        elapsed_seconds,
+    )
+
+    return {
+        "analysis_cache_key": cache_key,
+        "available_fields": {
+            "prices": "ticker -> [{date, close}, ...]",
+            "returns": "ticker -> [daily log returns]",
+            "stats": "ticker -> {mean_return, std_return, annualised_vol, total_return_pct, observations}",
+        },
+        "stats": stats_out,
+        "tickers_included": full_dataset["tickers_included"],
+        "tickers_missing": missing,
+        "observations_by_ticker": {
+            ticker: details.get("observations", 0)
+            for ticker, details in stats_out.items()
+        },
         "start_date": start_date,
         "end_date": end_date,
     }

@@ -6,11 +6,14 @@ from unittest.mock import patch
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agents.price_series_tool import get_price_series_for_analysis
+from src.agents.price_series_tool import (
+    get_price_series_for_analysis,
+    load_cached_analysis_dataset,
+)
 
 
 class PriceSeriesToolTests(unittest.TestCase):
-    def test_returns_structured_prices_returns_and_stats(self):
+    def test_returns_compact_summary_and_caches_full_dataset(self):
         docs = [
             {
                 "ticker": "AAPL",
@@ -45,10 +48,14 @@ class PriceSeriesToolTests(unittest.TestCase):
 
         self.assertEqual(result["tickers_included"], ["AAPL", "MSFT"])
         self.assertEqual(result["tickers_missing"], [])
-        self.assertEqual(len(result["prices"]["AAPL"]), 6)
-        self.assertEqual(len(result["returns"]["AAPL"]), 5)
+        self.assertIn("analysis_cache_key", result)
+        self.assertIn("available_fields", result)
         self.assertIn("annualised_vol", result["stats"]["AAPL"])
         self.assertEqual(result["stats"]["AAPL"]["observations"], 6)
+        cached = load_cached_analysis_dataset(result["analysis_cache_key"])
+        self.assertIsNotNone(cached)
+        self.assertEqual(len(cached["prices"]["AAPL"]), 6)
+        self.assertEqual(len(cached["returns"]["AAPL"]), 5)
 
     def test_returns_error_when_no_series_found(self):
         with patch("src.agents.price_series_tool._find_documents_with_retry", return_value=[]):

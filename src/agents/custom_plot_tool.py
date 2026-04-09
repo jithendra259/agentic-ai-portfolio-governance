@@ -12,6 +12,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
+from src.agents.price_series_tool import load_cached_analysis_dataset
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "outputs"
 logger = logging.getLogger(__name__)
@@ -123,6 +124,22 @@ def _summarise_data(data: dict) -> str:
     return "\n".join(lines) or "  (empty dict)"
 
 
+def _resolve_plot_data(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return data
+
+    cache_key = data.get("analysis_cache_key")
+    if not cache_key:
+        return data
+
+    cached_dataset = load_cached_analysis_dataset(str(cache_key))
+    if cached_dataset is None:
+        raise ValueError(
+            "The cached analysis dataset is no longer available. Please fetch the price series again."
+        )
+    return cached_dataset
+
+
 @tool
 def generate_custom_plot(data: dict, description: str) -> str:
     """
@@ -142,19 +159,20 @@ def generate_custom_plot(data: dict, description: str) -> str:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
         output_path = str(OUTPUT_DIR / f"custom_{timestamp}.png")
+        resolved_data = _resolve_plot_data(data)
 
-        data_summary = _summarise_data(data)
+        data_summary = _summarise_data(resolved_data)
         logger.info("Generating custom plot: %s", description[:80])
 
         # First attempt
         code = _ask_llm_for_code(description, data_summary)
-        error = _execute_plot_code(code, data, output_path)
+        error = _execute_plot_code(code, resolved_data, output_path)
 
         # One automatic retry with the error fed back
         if error:
             logger.warning("Custom plot first attempt failed — retrying. Error: %s", error[:200])
             code = _ask_llm_for_code(description, data_summary, error_context=error)
-            error = _execute_plot_code(code, data, output_path)
+            error = _execute_plot_code(code, resolved_data, output_path)
 
         if error:
             return (
