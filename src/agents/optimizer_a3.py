@@ -1,8 +1,15 @@
+import sys
+from pathlib import Path
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+
 import time
 
 import cvxpy as cp
 import numpy as np
 import pandas as pd
+from config import CONFIG
 
 
 class GCVaROptimizerAgent:
@@ -13,21 +20,22 @@ class GCVaROptimizerAgent:
 
     def __init__(
         self,
-        alpha=0.95,
-        lambda_max=1.0,
-        k=10,
-        I_thresh=0.85,
-        tau_crisis=0.85,
-        tau_turnover=0.40,
-        max_weight=0.15,
+        alpha=None,
+        lambda_max=None,
+        k=None,
+        I_thresh=None,
+        tau_crisis=None,
+        tau_turnover=None,
+        max_weight=None,
     ):
-        self.alpha = alpha
-        self.lambda_max = lambda_max
-        self.k = k
-        self.I_thresh = I_thresh
-        self.tau_crisis = tau_crisis
-        self.tau_turnover = tau_turnover
-        self.max_weight = max_weight
+        # Default to global CONFIG values so a single config.py controls everything
+        self.alpha = float(alpha if alpha is not None else CONFIG.CVAR_ALPHA)
+        self.lambda_max = float(lambda_max if lambda_max is not None else CONFIG.LAMBDA_MAX)
+        self.k = int(k if k is not None else CONFIG.K_STEEPNESS)
+        self.I_thresh = float(I_thresh if I_thresh is not None else CONFIG.I_THRESH)
+        self.tau_crisis = float(tau_crisis if tau_crisis is not None else CONFIG.TAU_CRISIS)
+        self.tau_turnover = float(tau_turnover if tau_turnover is not None else CONFIG.TAU_TURNOVER)
+        self.max_weight = float(max_weight if max_weight is not None else CONFIG.MAX_WEIGHT)
 
     def execute(self, returns_df, c_vector, I_t, previous_weights=None):
         print("[Agent 3] Running notebook-aligned G-CVaR optimization...")

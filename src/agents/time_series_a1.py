@@ -1,6 +1,12 @@
 import logging
 from datetime import timedelta
 
+import sys
+from pathlib import Path
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+from config import CONFIG
 import numpy as np
 import pandas as pd
 
@@ -45,21 +51,17 @@ class TimeSeriesAgent:
 
         covariance_matrix = returns_df.cov()
         correlation_matrix = returns_df.corr()
-        eigenvalues, _ = np.linalg.eigh(correlation_matrix)
-
-        max_eigenvalue = float(np.max(eigenvalues))
         num_assets = len(returns_df.columns)
-        raw_instability_index = max_eigenvalue / num_assets
-
-        if num_assets > 1:
-            lower_bound = 1.0 / num_assets
-            instability_index = (raw_instability_index - lower_bound) / (1.0 - lower_bound)
-        else:
-            instability_index = 0.0
-        instability_index = float(np.clip(instability_index, 0.0, 1.0))
         mean_volatility = float(returns_df.std().mean() * np.sqrt(252.0))
         mean_correlation = self._mean_pairwise_correlation(correlation_matrix)
         mean_drawdown = self._mean_drawdown(returns_df)
+
+        vol_norm = float(np.clip((mean_volatility - 0.10) / (0.60 - 0.10), 0.0, 1.0))
+        corr_norm = float(np.clip((mean_correlation - 0.10) / (0.80 - 0.10), 0.0, 1.0))
+        dd_norm = float(np.clip((mean_drawdown - 0.05) / (0.40 - 0.05), 0.0, 1.0))
+
+        raw_instability_index = 0.4 * vol_norm + 0.3 * corr_norm + 0.3 * dd_norm
+        instability_index = float(np.clip(raw_instability_index, 0.0, 1.0))
         retained_assets = returns_df.columns.tolist()
 
         print(f"   -> Extracted {num_assets} valid assets.")

@@ -103,7 +103,13 @@ def get_price_series_for_analysis(
     try:
         docs = _find_documents_with_retry(
             {"ticker": {"$in": cleaned}},
-            {"ticker": 1, "historical_prices": 1},
+            {
+                "ticker": 1, 
+                "historical_prices.Date": 1, 
+                "historical_prices.date": 1, 
+                "historical_prices.Close": 1, 
+                "historical_prices.close": 1
+            },
         )
     except Exception as exc:
         logger.warning("Price series analysis lookup failed: %s", exc)

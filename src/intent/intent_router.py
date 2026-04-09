@@ -215,14 +215,20 @@ class IntentRouter:
     def _explain_parameters(self) -> str:
         return (
             "Composite Instability Index (I_t)\n"
-            "Measures systemic market instability using the leading eigenvalue of the correlation matrix.\n"
-            "Typical reading:\n"
-            "- I_t < 0.30: calm regime\n"
-            "- 0.30 to 0.50: normal regime\n"
-            "- 0.50 to 0.75: elevated instability\n"
-            "- I_t >= 0.75: crisis regime\n\n"
+            "Measures systemic market instability using a weighted composite of three signals:\n"
+            "  1. Volatility spike (40% weight) -- annualised mean asset vol, normalised [0,1]\n"
+            "  2. Correlation spike (30% weight) -- mean pairwise correlation, normalised [0,1]\n"
+            "  3. Max drawdown (30% weight) -- mean asset drawdown, normalised [0,1]\n"
+            "Formula: I_t = 0.4 * vol_norm + 0.3 * corr_norm + 0.3 * drawdown_norm\n\n"
+            "Regime thresholds (TAU):\n"
+            "- I_t < 0.50: Calm regime (no HITL intervention)\n"
+            "- 0.50 <= I_t < 0.85: Elevated instability (advisory monitoring)\n"
+            "- I_t >= 0.85: Crisis regime (Human-in-the-Loop mandatory review)\n\n"
             "Graph Penalty (lambda_t)\n"
-            "Adaptive penalty that increases exposure control on structurally risky assets as instability rises."
+            "Adaptive sigmoid penalty on structurally risky assets:\n"
+            "  lambda_t = 1.0 / (1 + exp(-10 * (I_t - 0.85)))\n\n"
+            "Weight constraint: max 15% per asset (MAX_WEIGHT=0.15).\n"
+            "Turnover HITL trigger: > 40% turnover (TAU_TURNOVER=0.40)."
         )
 
     def _explain_methodology(self) -> str:

@@ -96,7 +96,7 @@ class MethodologyVectorRAG:
 
         return list(
             collection.find(
-                {"source_type": "pdf"},
+                {"$or": [{"source_type": "pdf"}, {"source_paper": "methodology"}]},
                 {
                     "_id": 0,
                     "chunk_id": 1,
@@ -146,7 +146,7 @@ class MethodologyVectorRAG:
         try:
             results = list(
                 collection.find(
-                    {"source_type": "pdf", "$text": {"$search": query}},
+                    {"$or": [{"source_type": "pdf"}, {"source_paper": "methodology"}], "$text": {"$search": query}},
                     {
                         "_id": 0,
                         "chunk_id": 1,
