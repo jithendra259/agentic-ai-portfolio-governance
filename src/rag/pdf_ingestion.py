@@ -156,7 +156,9 @@ class PDFKnowledgeIngestor:
 
     def clear_pdf_chunks(self) -> int:
         collection = self._require_collection()
-        result = collection.delete_many({"source_type": "pdf"})
+        result = collection.delete_many(
+            {"$or": [{"source_type": "pdf"}, {"source_paper": "methodology"}]}
+        )
         return int(result.deleted_count)
 
     def ingest_directory(self, pdf_root: str | Path, clear_existing: bool = False) -> PDFIngestionReport:
@@ -201,7 +203,7 @@ class PDFKnowledgeIngestor:
         docs = list(
             collection.find(
                 {
-                    "source_type": source_type,
+                    "$or": [{"source_type": source_type}, {"source_paper": "methodology"}],
                     "$or": [{"embedding": {"$exists": False}}, {"embedding": []}],
                 },
                 {"_id": 0, "chunk_id": 1, "raw_text": 1},

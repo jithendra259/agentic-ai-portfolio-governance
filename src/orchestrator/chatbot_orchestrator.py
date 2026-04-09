@@ -42,8 +42,8 @@ from src.agents.custom_plot_tool import generate_custom_plot
 
 
 logger = logging.getLogger(__name__)
-CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "qwen2.5:3b").strip()
-CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "qwen2.5:1.5b").strip()
+CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "mistral:latest").strip()
+CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "mistral:latest").strip()
 
 
 def _list_installed_ollama_models() -> list[str]:
@@ -795,13 +795,33 @@ def finalize_governance_node(state: AgentState):
                 )
                 return {"messages": [AIMessage(content=formatted)]}
 
-    if latest_tool_name != "run_full_governance_pipeline":
+    if latest_tool_name not in {"run_full_governance_pipeline"}:
         content = latest_tool_output or "Unable to generate a response for this request."
 
-        # NEW: if the tool returned a markdown image, pass it through untouched
-        # so the UI renders the image rather than showing raw text
+        # Pass markdown images through untouched so the UI renders them
         if "![" in content and "](" in content:
             return {"messages": [AIMessage(content=content)]}
+
+        # For methodology/graph RAG tools, synthesise the raw chunk output through the LLM
+        rag_tools = {"search_methodology_knowledge_base", "retrieve_graph_rag_context", "compare_common_institutional_holders"}
+        if latest_tool_name in rag_tools:
+            last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+            user_text = _message_content_to_text(last_human) if last_human else ""
+            try:
+                synthesis_prompt = (
+                    f"You are an expert portfolio governance advisor.\n"
+                    f"The user asked: {user_text}\n\n"
+                    f"The knowledge base returned the following grounded context:\n{content}\n\n"
+                    f"Please synthesise this into a clear, concise answer for the user."
+                )
+                from langchain_ollama import ChatOllama
+                synth_llm = ChatOllama(model=PRIMARY_OLLAMA_MODEL, temperature=0.2)
+                synth_response = synth_llm.invoke(synthesis_prompt)
+                synthesised = (synth_response.content if hasattr(synth_response, "content") else str(synth_response)).strip()
+                if synthesised:
+                    return {"messages": [AIMessage(content=synthesised)]}
+            except Exception as exc:
+                logger.warning("RAG synthesis LLM call failed, returning raw output: %s", exc)
 
         return {"messages": [AIMessage(content=content)]}
 

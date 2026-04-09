@@ -14,10 +14,17 @@ from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
 from src.agents.price_series_tool import load_cached_analysis_dataset
 
+import sys
+from pathlib import Path as _Path
+_root = _Path(__file__).resolve().parent.parent.parent
+if str(_root) not in sys.path:
+    sys.path.insert(0, str(_root))
+from config import CONFIG
+
 OUTPUT_DIR = Path(__file__).resolve().parent.parent.parent / "outputs"
 logger = logging.getLogger(__name__)
 
-_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "qwen2.5:3b").strip()
+_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or CONFIG.LLM_MODEL).strip()
 
 _CODE_GEN_SYSTEM = """\
 You are a Python data visualisation expert. Write complete, runnable matplotlib code.

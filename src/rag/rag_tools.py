@@ -31,7 +31,6 @@ def search_methodology_knowledge_base(question: str, top_k: int = 3) -> str:
     Search the PDF methodology knowledge base and return the most relevant grounded chunks.
     Use this for architecture, methodology, HITL, statistical framing, and paper-style explanation questions.
     """
-
     return _get_methodology_rag().render_markdown(query=question, top_k=top_k)
 
 

@@ -12,6 +12,13 @@ import networkx as nx
 import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
+
+import sys
+from pathlib import Path
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.insert(0, str(root_dir))
+from config import CONFIG
 from langchain_core.tools import tool
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
@@ -323,9 +330,9 @@ def _build_optimization_payload(
     target_date: str,
     risk_tolerance: str = "moderate",
     network_scores: Optional[dict[str, float]] = None,
-    lambda_max: float = 0.5,
+    lambda_max: float = 1.0,
     k: float = 10.0,
-    i_thresh: float = 0.5,
+    i_thresh: float = 0.85,
 ) -> dict:
     if overlapping_prices.empty or overlapping_prices.shape[1] < 2:
         return {
@@ -365,11 +372,22 @@ def _build_optimization_payload(
     covariance_matrix = log_returns.cov().round(6)
     correlation_matrix = log_returns.corr().round(6)
 
-    try:
-        eigenvalues = np.linalg.eigvalsh(correlation_matrix.to_numpy())
-        instability_index = float(np.max(eigenvalues) / max(1, num_assets))
-    except Exception:
-        instability_index = 0.0
+    mean_volatility = float(log_returns.std().mean() * np.sqrt(252.0))
+    # Approximation of correlation
+    upper_tri = correlation_matrix.to_numpy()[np.triu_indices(correlation_matrix.shape[0], k=1)]
+    mean_correlation = float(np.mean(upper_tri)) if len(upper_tri) > 0 else 0.0
+    # Approximation of drawdown
+    cum_returns = np.exp(log_returns.cumsum())
+    max_cum_returns = cum_returns.cummax()
+    drawdowns = (cum_returns - max_cum_returns) / max_cum_returns.replace(0.0, np.nan)
+    mean_drawdown = float(np.abs(drawdowns.min()).mean())
+    
+    vol_norm = float(np.clip((mean_volatility - 0.10) / (0.60 - 0.10), 0.0, 1.0))
+    corr_norm = float(np.clip((mean_correlation - 0.10) / (0.80 - 0.10), 0.0, 1.0))
+    dd_norm = float(np.clip((mean_drawdown - 0.05) / (0.40 - 0.05), 0.0, 1.0))
+
+    raw_instability_index = 0.4 * vol_norm + 0.3 * corr_norm + 0.3 * dd_norm
+    instability_index = float(np.clip(raw_instability_index, 0.0, 1.0))
 
     profile = (risk_tolerance or "moderate").strip().lower()
     if profile not in {"conservative", "moderate", "aggressive"}:
@@ -396,16 +414,20 @@ def _build_optimization_payload(
     constraints = [
         cp.sum(weights) == 1,
         weights >= 0,
+        weights <= 0.15,
         tail_excess >= losses - alpha,
         mean_daily_returns @ weights >= target_daily_return,
     ]
 
     problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
 
-    try:
-        problem.solve(solver=cp.ECOS, verbose=False)
-    except Exception:
-        problem.solve(solver=cp.SCS, verbose=False)
+    for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
+        try:
+            problem.solve(solver=solver, verbose=False)
+            if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+                break
+        except Exception:
+            continue
 
     if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or weights.value is None:
         return {
@@ -737,16 +759,20 @@ def _run_historical_cvar_from_frames(
     constraints = [
         cp.sum(weights) == 1,
         weights >= 0,
+        weights <= 0.15,
         tail_excess >= losses - alpha,
         mean_daily_returns @ weights >= target_daily_return,
     ]
 
     problem = cp.Problem(cp.Minimize(cvar_95), constraints)
 
-    try:
-        problem.solve(solver=cp.ECOS, verbose=False)
-    except Exception:
-        problem.solve(solver=cp.SCS, verbose=False)
+    for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
+        try:
+            problem.solve(solver=solver, verbose=False)
+            if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+                break
+        except Exception:
+            continue
 
     if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or weights.value is None:
         return (
@@ -1396,7 +1422,8 @@ def get_stock_database_snapshot(tickers: list[str]) -> str:
                     "shortName": 1,
                     "longName": 1,
                     "universes": 1,
-                    "historical_prices": 1,
+                    "historical_prices.Date": 1,
+                    "historical_prices.date": 1,
                     "info": 1,
                     "key_stats": 1,
                     "financials": 1,
@@ -1635,7 +1662,13 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
         docs = _find_documents_with_retry(
             {"ticker": {"$in": cleaned_tickers}},
-            {"ticker": 1, "historical_prices": 1},
+            {
+                "ticker": 1, 
+                "historical_prices.Date": 1, 
+                "historical_prices.date": 1, 
+                "historical_prices.Close": 1, 
+                "historical_prices.close": 1
+            },
         )
         if not docs:
             return f"Unable to fetch historical prices: none of the requested tickers were found in MongoDB for {target_date}."
@@ -1744,7 +1777,13 @@ def run_historical_cvar_optimization(
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
         docs = _find_documents_with_retry(
             {"ticker": {"$in": cleaned_tickers}},
-            {"ticker": 1, "historical_prices": 1},
+            {
+                "ticker": 1, 
+                "historical_prices.Date": 1, 
+                "historical_prices.date": 1, 
+                "historical_prices.Close": 1, 
+                "historical_prices.close": 1
+            },
         )
         if not docs:
             return f"Unable to run historical CVaR optimization: none of the requested tickers were found in MongoDB for {target_date}."
@@ -1945,7 +1984,10 @@ def run_full_governance_pipeline(
             {"ticker": {"$in": cleaned_tickers}},
             {
                 "ticker": 1,
-                "historical_prices": 1,
+                "historical_prices.Date": 1,
+                "historical_prices.date": 1,
+                "historical_prices.Close": 1,
+                "historical_prices.close": 1,
                 "graph_relationships.institutional_holders": 1,
             },
         )

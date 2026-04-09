@@ -1,6 +1,12 @@
 import os
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
+import sys
+from pathlib import Path
+root_dir = Path(__file__).resolve().parent.parent.parent
+if str(root_dir) not in sys.path:
+    sys.path.append(str(root_dir))
+from config import CONFIG
 
 
 class GenerativeExplainerAgent:
@@ -11,8 +17,8 @@ class GenerativeExplainerAgent:
     """
 
     def __init__(self):
-        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "mistral:latest").strip()
-        self.llm = ChatOllama(model=model_name, temperature=0.5)
+        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or CONFIG.LLM_MODEL).strip()
+        self.llm = ChatOllama(model=model_name, temperature=CONFIG.LLM_TEMPERATURE)
         self.prompt = PromptTemplate(
             input_variables=[
                 "date",
