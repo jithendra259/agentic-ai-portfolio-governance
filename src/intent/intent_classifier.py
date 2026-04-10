@@ -25,6 +25,7 @@ class IntentType(str, Enum):
     INVALID_EXECUTION = "invalid_execution"
     OUT_OF_SCOPE = "out_of_scope"
     ADVERSARIAL = "adversarial"
+    HISTORICAL_CHART = "historical_chart"
     MALFORMED = "malformed"
 
 class RiskTier(str, Enum):
@@ -197,6 +198,15 @@ class IntentClassifier:
             r"\b(?:where|how)\b.*\b(?:documentation|instructions|architecture)\b",
         ],
     }
+ 
+    CHART_PATTERNS = {
+        IntentType.HISTORICAL_CHART: [
+            r"\b(?:plot|chart|graph|heatmap|visualize|draw|show)\b.*\b(?:correlation|volatility|returns|price|drawdown|distribution|rolling)\b",
+            r"\b(?:show|get|visualize)\b.*\b(?:heatmap|box plot|violin plot|histogram|scatter)\b",
+            r"\b(?:rolling)\b.*\b(?:volatility|correlation|mean|std)\b",
+            r"\b(?:distribution)\b.*\b(?:of returns|of volatility)\b",
+        ],
+    }
 
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
@@ -210,6 +220,7 @@ class IntentClassifier:
             self.GOVERNANCE_PATTERNS,
             self.BACKTEST_PATTERNS,
             self.CONFIG_PATTERNS,
+            self.CHART_PATTERNS,
         ):
             for intent, patterns in intent_dict.items():
                 compiled_patterns[intent] = [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
@@ -230,6 +241,11 @@ class IntentClassifier:
             return self._no_match("Security gate: trade execution request detected.", IntentType.INVALID_EXECUTION)
 
         # 1. FAST CATCH: Standalone Tickers (e.g., "NVDA")
+        # EXCEPTION: Protect known methodology terms from being treated as tickers
+        METHODOLOGY_TERMS = {"HITL", "CVAR", "GCVAR", "RAG", "NLP", "LLM", "G-CVAR", "INDEX", "TAU"}
+        if query in METHODOLOGY_TERMS:
+            return self._semantic_fallback(normalized_query)
+
         if re.match(r"^[A-Z]{1,5}$", query):
             return IntentMatch(
                 intent=IntentType.STOCK_SNAPSHOT,

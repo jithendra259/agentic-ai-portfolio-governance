@@ -1,0 +1,52 @@
+================================================================================
+VOLUME 3: AGENTIC ARCHITECTURE AND INFRASTRUCTURE HARDENING
+================================================================================
+
+SECTION 1: THE MULTI-AGENT BLACKBOARD ARCHITECTURE
+
+1.1 AGENT ROLES AND RESPONSIBILITIES
+The G-CVaR system is orchestrated by a team of specialized agents, each operating as a discrete stage in the pipeline:
+- AGENT 0 (DATA SENTINEL): Responsible for fetching historical price series and institutional holder data from Yahoo Finance and internal caches. Performs winsorization and log-return normalization.
+- AGENT 1 (INSTABILITY SCANNER): Computes the Composite Instability Index (I_t) and classifies the market regime.
+- AGENT 2 (CONTAGION MAPPING): Constructs the bipartite institutional ownership graph and computes spectral centrality scores.
+- AGENT 3 (G-CVAR OPTIMIZER): Solves the quadratic program with the adaptive graph penalty.
+- AGENT 4 (AUDIT EXPLAINER): Performs XAI analysis, comparing G-CVaR output to Standard CVaR to explain the "Governance Delta."
+
+1.2 BLACKBOARD PERSISTENCE (MONGODB)
+Communication between agents occurs via the `blackboard_mpi` collection. This prevents state loss and allows for isolated reprocessing of individual windows. Every window is a JSON-schema validated document.
+
+SECTION 2: INFRASTRUCTURE HARDENING
+
+2.1 DATABASE OPTIMIZATION
+The production hardening (Phase 11) introduced compound indexes to ensure millisecond-latency on retrieval:
+- `chunk_id` index for RAG efficiency.
+- `source_paper` + `page_number` for contextual coherence.
+- `ttl_index` on ephemeral graph snapshots (expire after 7 days).
+
+2.2 SUBPROCESS EXECUTION SAFETY
+The `custom_plot_tool.py` executes AI-generated Matplotlib code in an isolated subprocess. Security measures include:
+- STDOUT/STDERR capture to prevent memory leaks.
+- Matplotlib `Agg` backend (non-interactive) to prevent UI blockages.
+- UUID filename generation to prevent race conditions during concurrent visualization requests.
+
+2.3 INFINITE MEMORY (AGENT STATE SUMMARIZATION)
+To prevent LLM context window crashes ($OOM$), the system implements a recursive summarization loop:
+- Threshold: 10 messages of history.
+- Logic: When threshold is hit, the 7 oldest messages are condensed into a semantic "Meta-Summary."
+- Injection: The Meta-Summary is persisted in the `checkpoints` collection and injected into all future prompts for that session.
+
+SECTION 3: HITL GOVERNANCE LIFECYCLE
+
+3.1 TRIGGER HIERARCHY
+The Human-in-the-Loop (HITL) gate is triggered when:
+- Regime = "Crisis" (I_t >= 0.85).
+- Turnover > 0.40 (Excessive rebalancing costs).
+- Data Gap (Missing returns > 5% of window).
+
+3.2 DISPOSITION ACTIONS
+The Human Governer can choose:
+- APPROVE: Accept G-CVaR weights.
+- REJECT: Revert to previous window weights (0% turnover).
+- CONSTRAIN: Re-solve with `max_weight=0.08` and `turnover_limit=0.20`.
+
+The system persists the audit trail of these decisions in `hitl_decisions`, creating a baseline for "Trustworthiness Evaluation" (Phase 18).

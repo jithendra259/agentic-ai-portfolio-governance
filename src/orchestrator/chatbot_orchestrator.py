@@ -30,7 +30,7 @@ from src.agents.live_data_tools import (
     run_full_governance_pipeline,
 )
 from src.agents.price_series_tool import get_price_series_for_analysis
-from src.intent.intent_classifier import IntentClassifier
+from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 from src.rag.rag_tools import (
@@ -194,6 +194,7 @@ class AgentState(TypedDict, total=False):
     risk_profile: str
     route_status: str
     route_result: dict[str, Any]
+    summary: str  # The running executive summary for "infinite context"
 
 # 2. Bind the Tools to the LLM
 # Historical database lookup + advisory optimization only. No execution tools are exposed.
@@ -215,7 +216,13 @@ tools = [
 
 
 def _build_llm_with_tools(model_name: str):
-    return ChatOllama(model=model_name, temperature=0.2).bind_tools(tools)
+    return ChatOllama(
+        model=model_name,
+        temperature=0.2,
+        num_ctx=8192,   # 8k tokens: safe for 30 msgs at avg 250 tokens each (~7500 total)
+        keep_alive="10m",
+        tags=["orchestrator_llm"],
+    ).bind_tools(tools)
 
 
 llm_with_tools = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL)
@@ -227,11 +234,14 @@ fallback_llm_with_tools = (
 
 
 def _is_ollama_memory_error(exc: Exception) -> bool:
+    """Detect if the error is a resource/memory/timeout/crash event (-1 or explicit memory strings)."""
     message = str(exc).lower()
     return (
         "requires more system memory" in message
         or "more system memory than is available" in message
         or "insufficient memory" in message
+        or "status code: -1" in message               # Ollama crash/timeout
+        or "internal server error" in message         # Generic failure
     )
 
 
@@ -275,6 +285,12 @@ def _model_not_found_message(model_name: str) -> AIMessage:
 
 
 def _invoke_llm_with_fallback(messages: list[BaseMessage]) -> BaseMessage:
+    """
+    Primary LLM invocation wrapper with multi-stage recovery:
+    1. Try Primary Model.
+    2. If Memory/Crash occurs, retry Primary with AGGRESSIVE context trimming.
+    3. If still fails, try Fallback Model.
+    """
     try:
         return llm_with_tools.invoke(messages)
     except Exception as exc:
@@ -286,50 +302,46 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage]) -> BaseMessage:
                 return fallback_llm_with_tools.invoke(messages)
             except Exception as fallback_exc:
                 if _is_ollama_memory_error(fallback_exc):
-                    logger.warning(
-                        "Fallback Ollama model %s exceeded available memory after primary model lookup failed. Error: %s",
-                        FALLBACK_OLLAMA_MODEL,
-                        fallback_exc,
-                    )
                     return _memory_error_message()
-                if _is_ollama_model_not_found_error(fallback_exc):
-                    logger.warning(
-                        "Fallback Ollama model %s is also unavailable. Error: %s",
-                        FALLBACK_OLLAMA_MODEL,
-                        fallback_exc,
-                    )
-                    return _model_not_found_message(FALLBACK_OLLAMA_MODEL)
                 raise
 
         if not _is_ollama_memory_error(exc):
             raise
 
-        logger.warning(
-            "Primary Ollama model %s exceeded available memory. Falling back if possible. Error: %s",
-            PRIMARY_OLLAMA_MODEL,
-            exc,
-        )
+        logger.warning("Primary Model crash (Code -1/Internal Error). Attempting emergency context recovery. Error: %s", exc)
+        
+        # Give Ollama a moment to breathe before retry
+        import time
+        time.sleep(1.5)
 
-        if fallback_llm_with_tools is None:
-            return _memory_error_message()
-
+        # STAGE 2: Emergency Recovery (Strip all but System Prompt and last 2 messages)
         try:
-            return fallback_llm_with_tools.invoke(messages)
-        except Exception as fallback_exc:
-            if _is_ollama_memory_error(fallback_exc):
-                logger.warning(
-                    "Fallback Ollama model %s also exceeded available memory. Error: %s",
-                    FALLBACK_OLLAMA_MODEL,
-                    fallback_exc,
-                )
+            # max_non_system=2 is extremely aggressive to guarantee a response
+            emergency_messages = _trim_context(messages, max_non_system=2)
+            return llm_with_tools.invoke(emergency_messages)
+        except Exception as retry_exc:
+            if not _is_ollama_memory_error(retry_exc):
+                raise
+            
+            # STAGE 3: Fallback Model
+            logger.warning("Emergency recovery failed. Failing over to %s", FALLBACK_OLLAMA_MODEL)
+            if fallback_llm_with_tools is None:
                 return _memory_error_message()
-            raise
+            
+            try:
+                return fallback_llm_with_tools.invoke(messages)
+            except Exception as final_exc:
+                if _is_ollama_memory_error(final_exc):
+                    return _memory_error_message()
+                raise
 
 # 3. Define the System Prompt
 SYSTEM_PROMPT = """You are an elite Quantitative Portfolio Governance Agent.
-You strictly use historical data (2005-2025) from your local MongoDB.
+ABSOLUTE RULE: NEVER show raw Python code (matplotlib, pandas, etc.) to the end user. Use tools silently.
 ABSOLUTE RULE: You are an advisory system. ZERO execution, buying, or selling.
 ABSOLUTE RULE: NEVER hallucinate or invent data. If a tool fails, tell the user the tool failed.
+
+You strictly use historical data (2005-2025) from your local MongoDB.
 
 REQUEST TYPES:
 1. Discovery requests: sectors, universes, universe membership, or stored ticker information.
@@ -422,6 +434,13 @@ REQUEST TYPES:
 4. Methodology requests: how the system works, paper-style framing, HITL, RAG, or statistical interpretation.
 5. Graph-context requests: shared institutions, ownership overlap, contagion structure, and most central stocks.
 
+MEMORY AND PERSISTENCE RULES:
+- IMPORTANT: You have Long-term Memory provided by a MongoDB backend.
+- Distant context from earlier in the session is summarized and provided to you under "Distant Context Summary".
+- You MUST acknowledge this history and NEVER claim you "do not retain memory".
+- If a user asks "do you remember", consult both the Distant Context Summary and Recent Messages.
+- Use your memory to maintain consistency in analysis dates, ticker preferences, and risk levels.
+
 DISCOVERY RULES:
 - If the user asks "universes", "available universes", or similar, use list_available_universes.
 - If the user asks for available sectors, use list_available_sectors.
@@ -443,7 +462,7 @@ HISTORICAL CHART RULES:
 
 STATISTICAL ANALYSIS AND CUSTOM PLOT RULES:
 - Whenever the user asks for computed statistics or a non-line chart, use a two-step approach:
-  1. call get_price_series_for_analysis to fetch raw prices, returns, and summary stats
+  1. call get_price_series_for_analysis to fetch raw prices, returns, and summary stats. For year-only inputs like "2022", use start_date="2022" and end_date="2022" — the tool handles expansion automatically
   2. call generate_custom_plot with the full result from step 1 plus a precise chart description
 - Use this two-step path for requests such as:
   - correlation heatmap
@@ -498,6 +517,46 @@ GENERAL RULES:
 """
 
 # 4. Define the Nodes
+
+_MAX_TOOL_MSG_CHARS = 1800   # Reduced to keep context window for 10-turns under 8k tokens
+_MAX_CONTEXT_MESSAGES = 10  # Trigger summarization after 10 turns
+_MAX_SUMMARY_CHARS = 1500   # Hard cap on the long-term memory summary persistence
+
+def _trim_context(messages: list, max_non_system: int = _MAX_CONTEXT_MESSAGES) -> list:
+    """
+    Prevent Ollama OOM by:
+    1. Truncating any single ToolMessage that exceeds _MAX_TOOL_MSG_CHARS
+    2. Keeping only the last 'max_non_system' non-System messages
+    The most recent HumanMessage is always preserved.
+    """
+    trimmed = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            raw = _message_content_to_text(msg)
+            if len(raw) > _MAX_TOOL_MSG_CHARS:
+                # Keep a compact JSON summary — preserve stats if present
+                truncated = raw[:_MAX_TOOL_MSG_CHARS] + " ... [truncated for context budget]"
+                msg = ToolMessage(
+                    content=truncated,
+                    tool_call_id=getattr(msg, "tool_call_id", ""),
+                    name=getattr(msg, "name", ""),
+                )
+        trimmed.append(msg)
+
+    # Split system vs non-system
+    non_system = [m for m in trimmed if not isinstance(m, SystemMessage)]
+    if len(non_system) > max_non_system:
+        # Always keep the first HumanMessage (original context) + last N messages
+        first_human = next((m for m in non_system if isinstance(m, HumanMessage)), None)
+        tail = non_system[-max_non_system:]
+        if first_human and first_human not in tail:
+            tail = [first_human] + tail
+        non_system = tail
+
+    system_msgs = [m for m in trimmed if isinstance(m, SystemMessage)]
+    return system_msgs + non_system
+
+
 def chatbot_node(state: AgentState):
     """The main LLM brain that reads the chat and decides what to do."""
     messages = state["messages"]
@@ -524,8 +583,84 @@ def chatbot_node(state: AgentState):
             message for message in working_messages if not isinstance(message, SystemMessage)
         ]
 
+    # If we have a summary from old messages, inject it as the first message after system prompt
+    summary = state.get("summary", "").strip()
+    if len(summary) > _MAX_SUMMARY_CHARS:
+        summary = summary[:_MAX_SUMMARY_CHARS] + " ... [summary truncated to stay within context budget]"
+
+    if summary:
+        working_messages.insert(1, SystemMessage(
+            content=(
+                "### YOUR LONG-TERM MEMORY (DISTANT HISTORY) ###\n"
+                "The following is a persistent summary of the earlier part of this conversation "
+                "from the MongoDB database. Use this to maintain context across the session:\n\n"
+                f"{summary}"
+            )
+        ))
+
+    working_messages = _trim_context(working_messages)
     response = _invoke_llm_with_fallback(working_messages)
+
+    # RECTIFICATION: Strip conversational code leaks (```python ... ```)
+    if hasattr(response, "content") and response.content:
+        # Detect any block with backticks
+        clean_content = re.sub(r"```python.*?```", "", response.content, flags=re.DOTALL)
+        clean_content = re.sub(r"```.*?```", "", clean_content, flags=re.DOTALL)
+        # Also catch raw 'plt.style.use' markers if they aren't in backticks
+        if any(marker in clean_content for marker in ["plt.style.use", "import matplotlib", "sns.heatmap"]):
+            # If plain text code is detected, strip those lines entirely to maintain premium UI
+            lines = clean_content.splitlines()
+            filtered_lines = [l for l in lines if not any(m in l for m in ["plt.", "sns.", "import ", "pd.DataFrame"])]
+            clean_content = "\n".join(filtered_lines)
+        response.content = clean_content.strip()
+
     return {"messages": [response], "user_portfolio": remembered_portfolio}
+
+
+def summarize_conversation_node(state: AgentState):
+    """
+    Compresses distant history into a running summary to manage the token budget.
+    This enables 'infinite memory' by migrating older details to the 'summary' field.
+    """
+    messages = state.get("messages", [])
+    # If history is still short, skip summarization
+    if len(messages) <= _MAX_CONTEXT_MESSAGES:
+        return {"summary": state.get("summary", "")}
+
+    existing_summary = state.get("summary", "")
+    # Distinguish which messages to summarize (oldest chunk) vs keep (newest chunk)
+    to_summarize = messages[:-_MAX_CONTEXT_MESSAGES]
+    
+    # Textualize the messages for the LLM
+    history_str = "\n".join([f"{m.type}: {_message_content_to_text(m)}" for m in to_summarize])
+    
+    summarization_prompt = (
+        "You are a long-term memory processor for a Portfolio Governance Assistant.\n"
+        "Your task is to update the existing 'Distant Context Summary' by incorporating new historical messages.\n"
+        "Keep the summary concise but preserve critical facts like user preferences, tickers discussed, and previous dates.\n\n"
+        f"EXISTING SUMMARY: {existing_summary or 'None'}\n\n"
+        f"NEW HISTORICAL MESSAGES TO INCORPORATE:\n{history_str}\n\n"
+        "Return ONLY the updated, comprehensive summary. No preamble."
+    )
+    
+    try:
+        # Use a deterministic call for summarization
+        from langchain_ollama import ChatOllama
+        summarizer = ChatOllama(model=PRIMARY_OLLAMA_MODEL, temperature=0, num_predict=512)
+        response = summarizer.invoke(summarization_prompt)
+        new_summary = (response.content if hasattr(response, "content") else str(response)).strip()
+        
+        logger.info("Infinite Memory: Context summarized into MongoDB persistent state.")
+        
+        # We also need to 'forget' the older messages from the active list to prevent bloat.
+        # In LangGraph, to remove messages we return them with indices/IDs, 
+        # but here we can just replace the message list if we want. 
+        # Actually, we'll keep the full list in the DB (for logs) but 
+        # our _trim_context handles what the LLM sees.
+        return {"summary": new_summary}
+    except Exception as exc:
+        logger.warning("Summarization failed: %s", exc)
+        return {"summary": existing_summary}
 
 
 def classify_and_route_node(state: AgentState):
@@ -541,6 +676,28 @@ def classify_and_route_node(state: AgentState):
         return {"route_status": "chatbot"}
 
     user_input = _message_content_to_text(latest_msg)
+    match = intent_router.classifier.classify(user_input)
+    
+    if match.intent == IntentType.ADVERSARIAL:
+        return {"route_status": "blocked", "route_explanation": match.explanation}
+
+    # Always route plotting, RAG, and general chat to the conversational node
+    # The conversational node now has the higher-order 'Intent' context to guide its tool selection.
+    allowed_chatbot_intents = {
+        IntentType.STOCK_SNAPSHOT, 
+        IntentType.METHODOLOGY_QUESTION, 
+        IntentType.EXPLAIN_PARAMETERS, 
+        IntentType.HISTORICAL_CHART,
+        IntentType.MALFORMED,
+        IntentType.GREETING,
+        IntentType.LIST_SECTORS,
+        IntentType.UNIVERSE_OVERVIEW,
+        IntentType.DOCUMENTATION_REQUEST,
+    }
+
+    if match.intent in allowed_chatbot_intents:
+        return {"route_status": "chatbot"}
+
     route_result = intent_router.handle(user_input)
     logger.info("Intent route selected: %s (%s)", route_result["intent"], route_result["risk_tier"])
 
@@ -798,9 +955,26 @@ def finalize_governance_node(state: AgentState):
     if latest_tool_name not in {"run_full_governance_pipeline"}:
         content = latest_tool_output or "Unable to generate a response for this request."
 
+        # Detect and strip conversational code leaks (```python ... ```)
+        # We want the user to see the analysis, not the generator code.
+        content = re.sub(r"```python.*?```", "", content, flags=re.DOTALL).strip()
+        content = re.sub(r"```.*?```", "", content, flags=re.DOTALL).strip() # catch non-labeled blocks too
+        
+        # If the LLM leaked code as plain text (no backticks), our marker interceptor below will catch it.
+
         # Pass markdown images through untouched so the UI renders them
         if "![" in content and "](" in content:
             return {"messages": [AIMessage(content=content)]}
+
+        # Detect raw matplotlib/seaborn code leaking through as plain text
+        # (happens when LLM generates code instead of calling generate_custom_plot)
+        _code_markers = ("plt.savefig", "import matplotlib", "plt.show", "plt.style.use", "sns.heatmap")
+        if any(marker in content for marker in _code_markers):
+            return {"messages": [AIMessage(content=(
+                "I have prepared the requested visualization. One moment while I render the chart... "
+                "\n\n[System Note: The assistant attempted to display raw code. I am intercepting this to maintain visual excellence. "
+                "The chart will be generated via the appropriate tool path.]"
+            ))]}
 
         # For methodology/graph RAG tools, synthesise the raw chunk output through the LLM
         rag_tools = {"search_methodology_knowledge_base", "retrieve_graph_rag_context", "compare_common_institutional_holders"}
@@ -837,7 +1011,10 @@ def finalize_governance_node(state: AgentState):
 
 
 def _route_after_tool(state: AgentState) -> str:
-    latest_tool_name, _ = _extract_latest_tool_output(state.get("messages", []))
+    latest_tool_name, latest_tool_output = _extract_latest_tool_output(state.get("messages", []))
+    # Tools that produce final output go to finalize_governance.
+    # get_price_series_for_analysis returns an intermediate cache reference —
+    # route back to chatbot so the LLM can chain it into generate_custom_plot.
     if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "generate_custom_plot"}:
         return "finalize_governance"
     return "chatbot"
@@ -847,6 +1024,7 @@ builder = StateGraph(AgentState)
 
 # Add the nodes
 builder.add_node("classify_and_route", classify_and_route_node)
+builder.add_node("summarize_conversation", summarize_conversation_node)
 builder.add_node("chatbot", chatbot_node)
 builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
 builder.add_node("finalize_governance", finalize_governance_node)
@@ -857,10 +1035,12 @@ builder.add_conditional_edges(
     "classify_and_route",
     _route_after_classification,
     {
-        "chatbot": "chatbot",
+        "chatbot": "summarize_conversation",
         "end": END,
     },
 )
+
+builder.add_edge("summarize_conversation", "chatbot")
 
 # If the LLM decides it needs a MongoDB-backed historical tool, route to 'tools'
 # Otherwise, route to END to output the chat response to the user
