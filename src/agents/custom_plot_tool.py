@@ -9,6 +9,7 @@ import tempfile
 import textwrap
 from datetime import datetime
 from pathlib import Path
+import uuid
 
 from langchain_core.tools import tool
 from langchain_ollama import ChatOllama
@@ -40,12 +41,27 @@ STRICT RULES:
                         "axes.labelcolor": "#e5e7eb", "xtick.color": "#d1d5db",
                         "ytick.color": "#d1d5db", "text.color": "#f3f4f6"})
 6. Call plt.close() as the very last line.
-7. Output ONLY raw Python code. No markdown fences. No explanation. No comments.
+7. `data['prices']` is dict[ticker, list[dict]]: {"AAPL": [{"date": "...", "close": 150}, ...]}.
+   `data['returns']` is dict[ticker, list[float]].
+   When creating DataFrames, extract the numerical values correctly:
+   df = pd.DataFrame({tkr: [obs['close'] for obs in series] for tkr, series in data['prices'].items()}, index=pd.to_datetime(data['price_dates']))
+8. If the x-axis is a time-series, format it to show monthly or quarterly ticks (e.g., 'Jan 2022') to avoid overlapping labels.
+9. Output ONLY raw Python code. No markdown fences. No explanation. No comments.
 """
 
 
+import hashlib
+
+_CODE_CACHE = {}
+
 def _ask_llm_for_code(description: str, data_summary: str, error_context: str = "") -> str:
-    llm = ChatOllama(model=_OLLAMA_MODEL, temperature=0.1)
+    # Check cache first for successful prompt patterns
+    cache_key = hashlib.md5(f"{description}|{data_summary}".encode()).hexdigest()
+    if not error_context and cache_key in _CODE_CACHE:
+        logger.info("Custom Plot Tool: Found cached Python generation for this description.")
+        return _CODE_CACHE[cache_key]
+
+    llm = ChatOllama(model=_OLLAMA_MODEL, temperature=0.1, num_ctx=2048)
     user_content = f"Plot request: {description}\n\nData structure:\n{data_summary}"
     if error_context:
         user_content += f"\n\nYour previous attempt failed with this error — fix it:\n{error_context}"
@@ -58,12 +74,18 @@ def _ask_llm_for_code(description: str, data_summary: str, error_context: str = 
     )
     code = response.content.strip()
 
-    # Strip markdown fences if the model added them despite instructions
     if code.startswith("```"):
         lines = code.splitlines()
         code = "\n".join(line for line in lines if not line.startswith("```"))
 
-    return code.strip()
+    clean_code = code.strip()
+    
+    # Store successful generation pattern if there was no error
+    if not error_context:
+        # We only cache it provisionally here — we could invalidate it if it fails in execution
+        _CODE_CACHE[cache_key] = clean_code
+
+    return clean_code
 
 
 def _execute_plot_code(code: str, data: dict, output_path: str) -> str | None:
@@ -101,7 +123,6 @@ def _execute_plot_code(code: str, data: dict, output_path: str) -> str | None:
             timeout=30,
         )
         if result.returncode != 0:
-            # Return only the last 800 chars — enough context, not too much noise
             return (result.stderr or result.stdout or "Unknown error")[-800:]
         return None
     except subprocess.TimeoutExpired:
@@ -151,23 +172,27 @@ def _resolve_plot_data(data: dict) -> dict:
 def generate_custom_plot(data: dict, description: str) -> str:
     """
     Generate any matplotlib/seaborn plot the user requests using AI-generated code.
-
-    Use this tool for visualizations not covered by the standard plot types:
-    scatter plots, histograms, box plots, violin plots, candlestick-style charts,
-    dual-axis charts, multi-panel layouts, rolling-window overlays, distribution
-    comparisons, waterfall charts, drawdown charts, sector-weight treemaps, or
-    any other custom chart the user asks for.
-
-    Always fetch the underlying data first using the appropriate data tool, then
-    pass the relevant subset to this tool along with a clear description of what
-    the user wants to see (axes, grouping, colours, chart type).
     """
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
-        output_path = str(OUTPUT_DIR / f"custom_{timestamp}.png")
         resolved_data = _resolve_plot_data(data)
+        
+        safe_description = description.replace("\n", " ").replace("\r", "")
+        short_title = safe_description[:80].strip().rstrip(".")
 
+        # Fast path: Full image cache
+        data_cache_key = data.get("analysis_cache_key")
+        if data_cache_key:
+            plot_sig = hashlib.md5(f"{data_cache_key}|{short_title}".encode()).hexdigest()
+            fast_path_filename = f"custom_cached_{plot_sig}.png"
+            if (OUTPUT_DIR / fast_path_filename).exists():
+                logger.info("Custom plot image cache HIT — bypassing LLM and execution entirely.")
+                return f"Plot generated successfully: ![{short_title}](/outputs/{fast_path_filename})"
+        else:
+            unique_id = str(uuid.uuid4())[:8]
+            fast_path_filename = f"custom_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{unique_id}.png"
+
+        output_path = str(OUTPUT_DIR / fast_path_filename)
         data_summary = _summarise_data(resolved_data)
         logger.info("Generating custom plot: %s", description[:80])
 
@@ -175,8 +200,10 @@ def generate_custom_plot(data: dict, description: str) -> str:
         code = _ask_llm_for_code(description, data_summary)
         error = _execute_plot_code(code, resolved_data, output_path)
 
-        # One automatic retry with the error fed back
+        # Invalidate code cache if the first generation resulted in an error
         if error:
+            cache_key = hashlib.md5(f"{description}|{data_summary}".encode()).hexdigest()
+            _CODE_CACHE.pop(cache_key, None)
             logger.warning("Custom plot first attempt failed — retrying. Error: %s", error[:200])
             code = _ask_llm_for_code(description, data_summary, error_context=error)
             error = _execute_plot_code(code, resolved_data, output_path)
@@ -194,7 +221,6 @@ def generate_custom_plot(data: dict, description: str) -> str:
                 "The generated code may have missed the plt.savefig(output_path) call."
             )
 
-        short_title = description[:80].strip().rstrip(".")
         return f"Plot generated successfully: ![{short_title}](/outputs/{Path(output_path).name})"
 
     except Exception as exc:

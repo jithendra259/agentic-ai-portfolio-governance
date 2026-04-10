@@ -180,11 +180,26 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 event_name = event.get("name", "")
 
                 if event_type == "on_chat_model_stream":
+                    tags = event.get("tags", [])
+                    if "orchestrator_llm" not in tags:
+                        continue
+
                     text = _chunk_to_text(event.get("data", {}).get("chunk"))
                     if text:
                         saw_tokens = True
                         accumulated_response += text
-                        yield _stream_event({"type": "token", "content": text})
+                        
+                        # STREAMING GUARD: If the AI is leaking code, stop sending tokens to the UI.
+                        # We wait for the final sanitized response instead.
+                        _leak_markers = ("```python", "import matplotlib", "plt.style.use", "pd.DataFrame")
+                        is_leaking = any(m in accumulated_response for m in _leak_markers)
+                        
+                        if not is_leaking:
+                            yield _stream_event({"type": "token", "content": text})
+                        else:
+                            # Log the leak internally but don't show the user
+                            if len(accumulated_response) % 50 == 0:
+                                logger.warning("Streaming Guard: Suppressing code leak in session %s", request.session_id)
 
                 elif event_type == "on_tool_start":
                     yield _stream_event({"type": "status", "content": f"Running tool: {event_name}..."})

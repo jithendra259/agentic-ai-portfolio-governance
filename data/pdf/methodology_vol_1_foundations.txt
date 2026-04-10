@@ -1,0 +1,542 @@
+cat << 'PYEOF' > /home/claude/build_kb.py
+# Build the knowledge base text file
+# Target: ~50,000 words covering all aspects of stock portfolio management
+# relevant to the G-CVaR agentic governance framework
+
+sections = []
+
+# ─────────────────────────────────────────────────────────────
+# SECTION 1: PORTFOLIO THEORY FOUNDATIONS
+# ─────────────────────────────────────────────────────────────
+s1 = """
+================================================================================
+SECTION 1: PORTFOLIO THEORY FOUNDATIONS
+================================================================================
+
+1.1 MODERN PORTFOLIO THEORY (MPT)
+
+Modern Portfolio Theory, introduced by Harry Markowitz in 1952, is the mathematical framework that defines how rational investors construct portfolios to maximize expected return for a given level of risk. The central insight is that combining assets with less than perfect correlation reduces overall portfolio variance without proportionally reducing expected return. This principle, known as diversification, forms the bedrock of all portfolio optimization.
+
+The expected return of a portfolio is the weighted average of individual asset expected returns:
+
+    E(Rp) = sum over i of [ w_i * E(R_i) ]
+
+where w_i is the portfolio weight assigned to asset i and E(R_i) is the expected return of asset i. The weights must satisfy the budget constraint: sum of all w_i equals one.
+
+Portfolio variance depends on both individual asset variances and the covariance structure between assets:
+
+    sigma_p^2 = sum_i sum_j [ w_i * w_j * Cov(R_i, R_j) ]
+
+This can be written in matrix form as w^T * Sigma * w, where Sigma is the covariance matrix of asset returns and w is the weight vector.
+
+The covariance between two assets i and j is related to the correlation coefficient rho_ij by:
+
+    Cov(R_i, R_j) = sigma_i * sigma_j * rho_ij
+
+When rho_ij equals one, the assets move in perfect lockstep and no diversification benefit exists. When rho_ij is negative, combining the two assets reduces variance below the weighted average of individual variances. In practice, most equity assets have positive correlations, but the correlations are below one, yielding partial diversification benefits.
+
+The set of all feasible portfolios forms the opportunity set in mean-variance space. The efficient frontier is the upper boundary of this set, representing portfolios that offer the highest expected return for each level of risk. Rational investors should hold only portfolios on the efficient frontier. Below the minimum variance portfolio, the frontier bends backwards, meaning lower return at lower variance, which is inefficient.
+
+1.2 THE CAPITAL ASSET PRICING MODEL (CAPM)
+
+The Capital Asset Pricing Model, developed by Sharpe (1964), Lintner (1965), and Mossin (1966), extends MPT by introducing a risk-free asset and equilibrium pricing conditions. CAPM states that the expected excess return of any asset equals the product of its beta and the market risk premium:
+
+    E(R_i) - R_f = beta_i * [E(R_m) - R_f]
+
+where R_f is the risk-free rate, E(R_m) is the expected market return, and beta_i measures the asset's sensitivity to market movements:
+
+    beta_i = Cov(R_i, R_m) / Var(R_m)
+
+Beta greater than one indicates the asset amplifies market movements. Beta less than one indicates it dampens them. Beta equal to zero implies the asset is uncorrelated with the market.
+
+CAPM decomposes total risk into systematic risk (captured by beta, which cannot be diversified away) and idiosyncratic risk (which can be eliminated by holding a well-diversified portfolio). Only systematic risk is rewarded in equilibrium because rational investors will diversify away idiosyncratic risk at zero cost.
+
+The Security Market Line (SML) plots expected return against beta. Assets above the SML are underpriced (positive alpha), assets below are overpriced (negative alpha).
+
+1.3 FACTOR MODELS
+
+Factor models extend CAPM by identifying multiple sources of systematic risk. The Fama-French Three-Factor Model adds size (SMB, small minus big market capitalization) and value (HML, high minus low book-to-market ratio) to the market factor. The Five-Factor Model further adds profitability (RMW) and investment (CMA) factors.
+
+Carhart's Four-Factor Model adds momentum (WML, winners minus losers) to the Three-Factor Model, capturing the tendency of recent winners to continue outperforming.
+
+These models express each asset's return as a linear function of factor exposures:
+
+    R_i = alpha_i + beta_1 * F_1 + beta_2 * F_2 + ... + beta_k * F_k + epsilon_i
+
+where F_j are the factor returns, beta_j are the factor loadings (sensitivities), alpha_i is the abnormal return, and epsilon_i is the idiosyncratic component.
+
+Factor models are used in portfolio construction, risk decomposition, and performance attribution. They allow portfolio managers to take deliberate exposures to compensated risk premia while controlling total factor risk.
+
+1.4 PORTFOLIO OPTIMIZATION FORMULATIONS
+
+The standard mean-variance optimization problem is:
+
+    minimize    w^T * Sigma * w
+    subject to  E(Rp) >= mu_target
+                sum(w) = 1
+                w >= 0  (long-only constraint)
+
+Alternatively, in the risk-return tradeoff formulation with risk aversion parameter lambda:
+
+    maximize    E(Rp) - lambda * w^T * Sigma * w
+
+The choice of lambda reflects investor preferences. Higher lambda means greater aversion to variance.
+
+Practical constraints include position limits (w_i <= w_max), sector constraints, turnover limits (sum of |w_t - w_{t-1}| / 2 <= tau), and transaction costs. Including these constraints makes the optimization problem more realistic but also more computationally demanding.
+
+The G-CVaR framework used in this system augments the standard CVaR minimization with a graph-based contagion penalty term. The optimization problem is:
+
+    minimize    CVaR_alpha(w) + lambda_t * c_t^T * w
+    subject to  sum(w) = 1
+                w >= 0
+                w_i <= 0.15  (maximum position constraint)
+
+where CVaR_alpha is the Conditional Value at Risk at confidence level alpha, c_t is the eigenvector centrality vector from the institutional holdings graph, and lambda_t is the adaptive trust coefficient that scales the graph penalty based on the current market instability regime.
+
+1.5 RISK MEASURES IN PORTFOLIO MANAGEMENT
+
+Value at Risk (VaR) at confidence level alpha is the loss threshold that is not exceeded with probability alpha over a given horizon. Formally, VaR_alpha is the negative of the alpha-quantile of the return distribution:
+
+    VaR_alpha = -inf{r : P(R <= r) > 1 - alpha}
+
+For alpha = 0.95, VaR_0.95 is the loss that is exceeded only 5% of the time.
+
+Conditional Value at Risk (CVaR), also called Expected Shortfall (ES) or Tail Value at Risk (TVaR), is the expected loss given that the loss exceeds VaR:
+
+    CVaR_alpha = E[-R | R <= -VaR_alpha]
+
+CVaR is a coherent risk measure (satisfying monotonicity, sub-additivity, homogeneity, and translation invariance) whereas VaR is not sub-additive and can therefore penalize diversification. CVaR is the preferred risk measure for portfolio optimization because it can be linearized in the portfolio weights.
+
+The linearized CVaR formulation for portfolio optimization, due to Rockafellar and Uryasev (2000), introduces auxiliary variables:
+
+    CVaR_alpha(w) = min over zeta of { zeta + (1/(T*(1-alpha))) * sum_t max(-r_t^T * w - zeta, 0) }
+
+This can be reformulated as a linear program by introducing slack variables z_t >= 0 for each scenario t:
+
+    minimize    zeta + (1/(T*(1-alpha))) * sum_t z_t
+    subject to  z_t >= -R_t^T * w - zeta    for all t
+                z_t >= 0                     for all t
+                sum(w) = 1
+                w >= 0
+                w_i <= w_max
+
+where R_t is the vector of asset returns in scenario t, T is the number of scenarios, alpha is the confidence level, and zeta is the auxiliary variable approximating VaR.
+
+Maximum Drawdown (MDD) measures the largest peak-to-trough decline in portfolio value:
+
+    MDD = max over s <= t of { (V_s - V_t) / V_s }
+
+where V_t is portfolio value at time t. MDD captures the worst loss an investor would have experienced if they bought at the peak and sold at the trough. It is a key risk measure for investors with loss aversion or capital preservation requirements.
+
+The Calmar Ratio is the annualized return divided by the maximum drawdown, measuring risk-adjusted performance in drawdown terms.
+
+The Sortino Ratio is similar to the Sharpe Ratio but uses only downside deviation (the standard deviation of negative returns) in the denominator, penalizing only harmful volatility:
+
+    Sortino = (E[Rp] - R_f) / sigma_downside
+
+================================================================================
+SECTION 2: ROLLING WINDOW METHODOLOGY
+================================================================================
+
+2.1 ROLLING WINDOW ANALYSIS IN PORTFOLIO MANAGEMENT
+
+Rolling window analysis is the standard technique for capturing time-varying statistical properties of financial returns. Instead of using the full sample to estimate covariances and expected returns, a rolling window uses only the most recent T observations (the window size) and slides forward by a fixed step size.
+
+For a window of size W=252 trading days (one year) and step size S=100 days, the first window covers observations 1 to 252, the second window covers observations 101 to 352, and so on. This produces overlapping windows that capture gradual regime changes while maintaining sufficient estimation sample size.
+
+The choice of window size involves a bias-variance tradeoff. Short windows (60-90 days) are responsive to recent changes but produce noisy estimates. Long windows (252-504 days) produce stable estimates but are slow to adapt to structural breaks.
+
+In the G-CVaR framework, 51 rolling windows of 252 trading days with step size 100 days cover the period 2005 to 2025. Each window produces an independent optimization problem with its own estimated covariance structure, centrality vector, and instability index.
+
+2.2 REGIME DETECTION IN ROLLING WINDOWS
+
+Financial time series exhibit regime changes — periods of low volatility and high returns (bull markets) and periods of high volatility and large drawdowns (bear markets and crises). Detecting these regimes is crucial for adaptive portfolio management.
+
+Hidden Markov Models (HMMs) are a common approach to regime detection, modeling the market as switching between a small number of latent states with different return and volatility characteristics. The Kalman Filter detects structural changes in linear state-space models.
+
+The Composite Instability Index I_t used in the G-CVaR framework is a simpler but effective approach based on three observable indicators:
+
+Component 1 — Rolling Volatility Spike: The annualized standard deviation of returns within the window, normalized by the long-run standard deviation. A spike above one indicates unusually elevated volatility.
+
+Component 2 — Correlation Spike: The mean pairwise correlation between assets within the window, normalized. Asset correlations tend to rise toward one during market stress as all stocks fall together, reducing diversification.
+
+Component 3 — Maximum Drawdown: The maximum peak-to-trough decline within the window, normalized. This captures the severity of the worst episode within the window.
+
+Each component is normalized to [0,1] and the three are combined with equal weights:
+
+    I_t = (1/3) * (normalized_vol + normalized_corr + normalized_mdd)
+
+The final I_t is normalized to [0,1] across all windows. Crisis is defined as I_t >= 0.85, Elevated as 0.50 <= I_t < 0.85, and Calm as I_t < 0.50.
+
+2.3 WINDOW CALENDAR CONSTRUCTION
+
+With 5,282 trading days from January 2005 to December 2025 and a window size of 252 days with step size 100 days, the number of windows is approximately:
+
+    N_windows = floor((T - W) / S) + 1 = floor((5282 - 252) / 100) + 1 = 51
+
+Not all universes produce exactly 51 windows. Universes whose earliest ticker data starts later (e.g., January 2005 vs October 2005) have fewer observations and therefore fewer windows. The minimum valid window count is 49.
+
+Known crisis periods are flagged by checking window date overlap with the 2008 Global Financial Crisis (September to December 2008), the 2020 COVID-19 crash (February to April 2020), and the 2022 Rate Hike drawdown (February to May 2022). Windows overlapping any of these periods are tagged as crisis windows.
+
+================================================================================
+SECTION 3: CONTAGION AND SYSTEMIC RISK
+================================================================================
+
+3.1 FINANCIAL CONTAGION
+
+Financial contagion refers to the transmission of financial distress from one entity or market to others through direct or indirect channels. Contagion distinguishes itself from simple co-movement (correlation) by the sudden, sharp increase in linkages during stress periods.
+
+Direct contagion channels include bilateral exposures through loans, derivatives, and payment obligations in the interbank market. Indirect contagion channels include fire sale externalities (distressed selling by one institution forces others to mark down similar assets), common exposures to volatile asset classes, and information contagion (the failure of one institution signals information about the health of similar institutions).
+
+The global financial crisis of 2008 illustrated both channels. The collapse of Lehman Brothers triggered direct contagion through its counterparty exposures and indirect contagion through the fire sale of mortgage-backed securities and the run on money market funds.
+
+3.2 INSTITUTIONAL OWNERSHIP AS A CONTAGION CHANNEL
+
+Institutional investors — mutual funds, pension funds, insurance companies, and sovereign wealth funds — hold large, diversified portfolios across many stocks. When a large institution faces redemption pressure or margin calls, it sells positions across its entire portfolio, creating a price pressure channel that connects stocks that would otherwise have no fundamental linkage.
+
+This channel has been extensively documented. Greenwood and Thesmar (2011) show that the fragility of a stock increases with the fraction held by investors who may face correlated redemption pressures. Coval and Stafford (2007) document that fire sales by distressed mutual funds create temporary price pressure in the stocks they sell.
+
+The mechanism in the G-CVaR framework: stocks held by the same institutions share this fire sale channel. If Institution X holds 8% of Stock A and 6% of Stock B, a redemption shock to Institution X will force selling of both A and B simultaneously, creating co-movement that is not explained by fundamental correlations.
+
+3.3 BIPARTITE GRAPH REPRESENTATION OF INSTITUTIONAL HOLDINGS
+
+The institutional holdings network is naturally represented as a bipartite graph B = (S, I, E) where S is the set of stock nodes, I is the set of institutional investor nodes, and E is the set of edges connecting each stock to each institution holding it.
+
+Edge weights in the bipartite graph are proportional to the fraction of the stock's outstanding shares held by the institution (pctHeld). Only edges with pctHeld > 0 are included.
+
+The bipartite graph is projected onto the stock space to create a unipartite stock-stock network G = (S, E') where two stocks are connected if they share at least one common institutional holder. The edge weight between stocks i and j in the projection is the sum of pctHeld products across all shared institutions:
+
+    w_ij = sum over k in (shared institutions of i and j) of [ pctHeld(i,k) * pctHeld(j,k) ]
+
+This projection captures the indirect contagion potential between pairs of stocks through their shared institutional ownership.
+
+3.4 EIGENVECTOR CENTRALITY
+
+Eigenvector centrality is a measure of node importance in a network that accounts for the centrality of a node's neighbors, not just the number of connections. A node connected to many high-centrality nodes receives high centrality, whereas a node connected to many low-centrality nodes receives lower centrality.
+
+Formally, the eigenvector centrality vector c is the eigenvector corresponding to the largest eigenvalue of the adjacency matrix A:
+
+    A * c = lambda_max * c
+
+The power iteration algorithm computes eigenvector centrality by repeatedly multiplying a random initial vector by A and normalizing until convergence. The result is a vector of centrality scores, one per node, normalized so that the sum of squares equals one.
+
+In the context of the institutional holdings projection graph, the eigenvector centrality of stock i measures its systemic importance — how deeply embedded it is in the shared ownership network. Stocks with high centrality are held by many influential institutions (themselves holding many stocks), making them the most likely to be affected by and to transmit institutional fire sale contagion.
+
+3.5 THE G-CVaR PENALTY MECHANISM
+
+The contagion penalty in G-CVaR is:
+
+    penalty = lambda_t * c_t^T * w
+
+where c_t is the normalized eigenvector centrality vector at time t and w is the portfolio weight vector. This linear term penalizes allocations to high-centrality stocks proportionally to their centrality score and to the current regime severity lambda_t.
+
+The economic interpretation: in crisis regimes where lambda_t is large, the optimizer actively reduces exposure to stocks that are deeply embedded in the institutional contagion network. In calm regimes where lambda_t is near zero, the optimizer behaves like standard CVaR and does not penalize high-centrality stocks.
+
+This design is intentional. Penalizing high-centrality stocks in calm markets would unnecessarily reduce allocation to stocks like AAPL (high centrality due to widespread institutional holding) even when no fire sale risk exists. The adaptive sigmoid ensures the penalty activates only when systemic risk is elevated.
+
+3.6 GRAPHRAG: GRAPH-AUGMENTED RETRIEVAL
+
+GraphRAG is the technique used by the chatbot's Path 3 retrieval to answer contagion-related questions. Unlike flat document retrieval (which searches text chunks), GraphRAG traverses the actual institutional holdings network stored in MongoDB to answer structural questions that only the graph can resolve.
+
+For example, the question "Which institutions connect AAPL and MSFT?" cannot be answered by any text retrieval because the answer is a function of the graph structure. GraphRAG loads the NetworkX bipartite graph for the specified window and computes the intersection of AAPL's institutional neighbors and MSFT's institutional neighbors.
+
+For centrality questions like "Which stocks have the highest contagion risk in 2020?", GraphRAG loads the graph for the COVID crisis window, computes eigenvector centrality on the stock projection, and returns the top-5 stocks by centrality with their institutional connections listed.
+
+================================================================================
+SECTION 4: THE G-CVaR OPTIMIZATION FRAMEWORK
+================================================================================
+
+4.1 PROBLEM FORMULATION
+
+The G-CVaR optimization solves:
+
+    minimize    CVaR_alpha(w) + lambda_t * c_t^T * w
+    subject to  sum(w) = 1                  (budget constraint)
+                w_i >= 0                    (long-only, no short selling)
+                w_i <= w_max = 0.15         (maximum position constraint)
+
+This is a convex quadratic program (in the CVaR term) plus a linear term in the graph penalty. The CVXPY convex optimization library handles this via solvers CLARABEL (primary), OSQP (secondary), and SCS (tertiary).
+
+The CVaR term is implemented using the Rockafellar-Uryasev (2000) linearization with auxiliary variable zeta (approximating VaR) and scenario slack variables z_t:
+
+    minimize    zeta + (1/(T*(1-alpha))) * sum_{t=1}^{T} z_t + lambda_t * c_t^T * w
+    subject to  z_t >= -R_t^T * w - zeta    for t = 1,...,T
+                z_t >= 0                     for t = 1,...,T
+                sum(w) = 1
+                w_i >= 0
+                w_i <= 0.15
+
+Here R_t is the vector of returns across all assets at time t, T is the number of trading days in the window (252), alpha is the confidence level (0.95), and the fraction 1/(T*(1-alpha)) = 1/(252*0.05) ≈ 0.0794.
+
+4.2 THE ADAPTIVE TRUST COEFFICIENT LAMBDA_T
+
+The sigmoid function maps the instability index I_t to a lambda value in [0, lambda_max]:
+
+    lambda_t = lambda_max / (1 + exp(-k * (I_t - I_thresh)))
+
+With default parameters lambda_max=1.0, k=10, I_thresh=0.85:
+- When I_t = 0.00 (deep calm): lambda_t = 1/(1 + exp(8.5)) ≈ 0.0002
+- When I_t = 0.50 (calm/elevated boundary): lambda_t = 1/(1 + exp(3.5)) ≈ 0.030
+- When I_t = 0.85 (threshold): lambda_t = 1/(1 + exp(0)) = 0.500
+- When I_t = 1.00 (maximum crisis): lambda_t = 1/(1 + exp(-1.5)) ≈ 0.818
+
+The steepness parameter k controls how sharply lambda_t rises around the threshold. Higher k creates a more abrupt transition (step function limit as k → infinity). Lower k creates a more gradual activation.
+
+The threshold I_thresh = 0.85 was selected by grid search over {0.75, 0.80, 0.85, 0.90} to maximize in-sample Sharpe during the walk-forward calibration phase. The walk-forward results show that OOS Sharpe exceeds IS Sharpe by approximately 37-41%, suggesting robust parameter generalization.
+
+4.3 REGIME SPARSITY AND THE DORMANCY PROPERTY
+
+A critical property of the G-CVaR framework is that the graph penalty is dormant in calm regimes. With I_thresh=0.85 and k=10, lambda_t is effectively zero (< 0.005) for the 38/51 windows (74.5%) classified as Calm. Only in the 2/51 Crisis windows does lambda_t exceed 0.80.
+
+This dormancy property is architecturally intentional: penalizing high-centrality stocks in calm markets would systematically underweight heavily-held institutional favorites like AAPL, MSFT, and NVDA without any contagion risk justification, dragging returns unnecessarily.
+
+The consequence for statistical significance testing is important: with only 2/51 windows per universe showing meaningful G-CVaR differentiation, the average daily return difference between G-CVaR and Standard CVaR is tiny (approximately 0.019% annualized per universe). This makes universe-level mean return tests have very low power.
+
+The correct evaluation is not mean return comparison (G-CVaR vs Std CVaR) but tail risk comparison (G-CVaR vs Equal Weight). The Equal Weight portfolio has no mechanism to reduce exposure to high-centrality stocks in any regime, producing consistently higher CVaR@95% (3.132% vs 2.321%) and MDD (81.5% vs 65.7%) across 11 universes.
+
+4.4 CONVEXITY AND OPTIMALITY
+
+The G-CVaR objective function is convex because:
+1. CVaR_alpha(w) is a convex function of w (as shown by Rockafellar and Uryasev 2000, using the linearized reformulation as a sum of max(0, ...) functions which are convex).
+2. The linear term lambda_t * c_t^T * w is convex (linear functions are both convex and concave).
+3. The sum of convex functions is convex.
+
+The constraint set is a polytope (intersection of linear constraints), which is convex.
+
+Therefore the G-CVaR optimization problem is a convex program, meaning any local optimum is a global optimum. CVXPY can solve it to global optimality using interior-point methods (CLARABEL) or first-order methods (OSQP, SCS).
+
+4.5 BASELINE STRATEGIES
+
+Three baseline strategies are compared against G-CVaR:
+
+Standard CVaR: Identical formulation with lambda_t = 0 always. This isolates the contribution of the graph penalty. Any performance difference between G-CVaR and Standard CVaR is attributable solely to the contagion penalty.
+
+Mean-Variance (Markowitz): Minimizes portfolio variance subject to the same constraints. Uses the sample covariance matrix regularized with a 1e-6 diagonal to ensure positive definiteness. Does not use CVaR or the graph penalty.
+
+Equal Weight: Assigns equal allocation to all retained tickers (w_i = 1/N). No optimization. Serves as the primary comparison baseline because it represents the naive diversification benchmark that any sophisticated approach should beat.
+
+================================================================================
+SECTION 5: THE MULTI-AGENT BLACKBOARD ARCHITECTURE
+================================================================================
+
+5.1 MULTI-AGENT SYSTEMS IN FINANCE
+
+Multi-agent systems (MAS) are architectures where multiple autonomous computational agents cooperate to solve problems too complex for any single agent. In financial applications, MAS enables modular decomposition of complex pipelines, independent validation of each computational step, fault isolation, and auditability.
+
+The blackboard architecture is a coordination pattern where agents communicate exclusively through a shared data store (the blackboard) rather than through direct message passing. Each agent reads its inputs from the blackboard, performs its computation, and writes its outputs back. No agent knows about the existence or implementation of other agents.
+
+This pattern offers several advantages:
+- Decoupling: Agents can be modified, replaced, or added without affecting others
+- Persistence: All intermediate results are durably stored (in MongoDB)
+- Auditability: Every computation step is traceable
+- Fault recovery: Failed windows can be reprocessed without rerunning the entire pipeline
+- Transparency: The blackboard provides a complete audit trail
+
+5.2 THE FIVE AGENTS
+
+Agent 0 — Data Sentinel: Owns all data acquisition and preprocessing. Fetches price data from Yahoo Finance, computes log returns, downloads institutional holdings, generates rolling windows, and writes complete JSON documents to the MongoDB blackboard. No other agent touches raw data.
+
+Agent 1 — Time-Series Sentinel: Reads returns data from the blackboard. Computes the Composite Instability Index I_t for each window using the three-component formula. Classifies each window into Calm, Elevated, or Crisis regime. Writes I_t and regime back to the blackboard.
+
+Agent 2 — Contagion Analysis Graph: Reads institutional holdings from the blackboard. Builds the bipartite stock-institution graph using NetworkX. Projects onto the stock space. Computes eigenvector centrality. Writes the centrality vector to the blackboard and saves graph snapshots to the graph_snapshots collection.
+
+Agent 3 — G-CVaR Optimizer: Reads returns matrices, centrality vectors, and I_t from the blackboard. Computes lambda_t via the sigmoid function. Solves the G-CVaR optimization using CVXPY. Also solves three baselines. Computes turnover and sets HITL flags. Writes weights and metadata to backtest_results.
+
+Agent 4 — XAI Explainer: Reads G-CVaR and Standard CVaR weights from backtest_results, centrality vectors from the blackboard. Computes mathematical attribution (delta_w = w_gcvar - w_stdcvar) and Pearson correlation between centrality and attribution. Generates audit narratives (via Mistral LLM or rule-based fallback). Scores faithfulness, completeness, and consistency. Writes audit documents to xai_audits. Updates blackboard status to READY_FOR_HITL or COMPLETE.
+
+5.3 THE BLACKBOARD MESSAGE PASSING INTERFACE (MPI)
+
+Each window in the blackboard_mpi collection contains a typed JSON document with the following schema:
+
+    universe_id:         string (e.g., "U1", "U10")
+    window_id:           string (e.g., "W01" through "W51")
+    window_number:       integer (1 through 51)
+    start_date:          string (ISO date)
+    end_date:            string (ISO date)
+    returns_matrix:      dict mapping ticker → list of daily returns
+    price_matrix:        dict mapping ticker → list of daily prices
+    institutional_holdings: dict mapping ticker → dict of institution → pctHeld
+    tickers_used:        list of retained ticker symbols
+    dropped_tickers:     list of tickers dropped in quality control
+    data_quality_flags:  list of quality issues
+    status:              "READY" | "READY_FOR_HITL" | "COMPLETE" | "REJECTED"
+    I_t:                 float (filled by Agent 1)
+    regime:              "Calm" | "Elevated" | "Crisis" (filled by Agent 1)
+    centrality_vector:   dict mapping ticker → centrality score (filled by Agent 2)
+    lambda_t:            float (filled by Agent 3)
+    hitl_required:       boolean (filled by Agent 3)
+    hitl_crisis:         boolean (filled by Agent 3)
+    hitl_turnover:       boolean (filled by Agent 3)
+    timestamp:           datetime
+
+5.4 MONGODB COLLECTIONS
+
+The system uses the following MongoDB collections in the Stock_data database:
+
+ticker: Master record for each stock. Contains ticker symbol, info (sector, market cap, company name), key_stats, financials, historical_prices, and universe memberships.
+
+prices: Raw price data (not used directly after Agent 0).
+
+returns: Cleaned, winsorized log return series per universe.
+
+institutional_holdings: Holdings fetched from yfinance.Ticker.institutional_holders, one document per universe containing all tickers.
+
+graph_snapshots: Per-window centrality vectors and graph statistics. TTL-indexed with 7-day expiration (research data, not long-term storage).
+
+regime_transitions: I_t values, regime classifications, and crisis flags for all windows across all universes.
+
+backtest_results: Per-window optimization results. Contains weights for all four strategies, I_t, lambda_t, turnover, HITL flags, solver status.
+
+hitl_decisions: Audit records of every HITL event. Contains trigger reason, proposed weights, action taken, constrained weights (if applicable), final action, and timestamp.
+
+fallback_logs: Records of all pipeline fallbacks (eigenvector convergence failures, solver failures, holdings fallbacks).
+
+data_quality: Dropped tickers and quality issues from Agent 0.
+
+blackboard_mpi: The shared blackboard. Primary communication channel between agents.
+
+xai_audits: Attribution tables, Pearson correlations, audit narratives, and faithfulness scores from Agent 4.
+
+pdf_chunks: Text chunks and 384-dimensional sentence embeddings from research papers. Used by chatbot Path 4.
+
+chatbot_logs: Query logs from the conversational chatbot including intent, path, response, and latency.
+
+trustworthiness_eval: Results from the systematic trustworthiness evaluation (Phase 18).
+
+mas_benchmark: Results from the MAS architecture comparison (Phase 19).
+
+================================================================================
+SECTION 6: THE HITL GOVERNANCE LAYER
+================================================================================
+
+6.1 HUMAN-IN-THE-LOOP SYSTEMS IN FINANCE
+
+Human-in-the-loop (HITL) systems combine automated computation with human oversight to balance algorithmic efficiency with judgment, regulatory compliance, and accountability. In financial portfolio management, fully automated systems face regulatory scrutiny, fiduciary responsibility concerns, and the risk of correlated algorithmic behavior across many funds.
+
+HITL governance addresses these concerns by designating specific trigger conditions that escalate decisions to human review. The human provides oversight, can override automated decisions, and creates an auditable record of the decision rationale.
+
+6.2 TRIGGER CONDITIONS
+
+The G-CVaR HITL layer triggers for two conditions:
+
+Crisis Trigger (hitl_crisis = True): I_t >= 0.85 (TAU_CRISIS). The system has detected a crisis regime, activating high lambda_t values. The graph penalty is at maximum effectiveness, and the proposed allocation may differ significantly from the prior period. Human oversight ensures that automated risk reduction does not cause inadvertent exposure to illiquid positions or create regulatory issues.
+
+Turnover Trigger (hitl_turnover = True): Portfolio turnover exceeds 0.40 (TAU_TURNOVER). Turnover is computed as sum(|w_t - w_{t-1}|) / 2. Excessive turnover implies high transaction costs and potential market impact. Human review ensures that large rebalancing events are intentional and cost-effective.
+
+hitl_required = hitl_crisis OR hitl_turnover. If either condition holds, the window's status is set to READY_FOR_HITL and the Gradio interface is triggered.
+
+6.3 THE THREE ACTIONS
+
+Approve: The human accepts the G-CVaR proposed weights unchanged. The action is logged to hitl_decisions with action="approved", and the blackboard status is set to COMPLETE. The proposed weights become the effective portfolio allocation.
+
+Reject: The human rejects the G-CVaR weights. The portfolio holds the previous window's weights unchanged. The action is logged with action="rejected", and the blackboard status is set to REJECTED. This is appropriate when the human judges the automated proposal to be incorrect, stale, or impractical.
+
+Constrain: The human triggers a re-optimization with tighter constraints. The G-CVaR optimizer is re-run with max_weight=0.08 (reduced from 0.15) and a turnover hard cap of 0.20. The constrained weights are displayed for final Approve or Reject. The action is logged with action="constrain", containing both proposed_weights (original) and constrained_weights (re-optimized). The constrained portfolio always reduces maximum position concentration from 15% to 8%.
+
+6.4 AUDIT TRAIL
+
+Every HITL event generates a complete record in hitl_decisions:
+
+    universe_id:         universe identifier
+    window_id:           window identifier
+    window_number:       integer
+    start_date:          window start
+    end_date:            window end
+    I_t:                 instability index at trigger
+    lambda_t:            adaptive trust coefficient
+    regime:              Calm | Elevated | Crisis
+    trigger_crisis:      boolean
+    trigger_turnover:    boolean
+    turnover:            portfolio turnover value
+    trigger_str:         human-readable trigger description
+    proposed_weights:    dict of G-CVaR weights
+    action:              "approved" | "rejected" | "constrain"
+    constrained_weights: dict of constrained weights (if action=constrain)
+    final_action:        ultimate disposition
+    timestamp:           UTC datetime
+
+6.5 GOVERNANCE ABLATION
+
+The HITL governance ablation (Phase 17) compares four conditions to measure the value added by human oversight:
+
+Condition 1 — Full Governed (G-CVaR + HITL Constrain): G-CVaR weights after HITL override applied where hitl_required=True. This is the complete system.
+
+Condition 2 — Auto G-CVaR (no HITL override): G-CVaR weights computed without any HITL intervention. The algorithm runs fully automatically.
+
+Condition 3 — Std CVaR (no governance): Standard CVaR weights with no graph penalty and no HITL.
+
+Condition 4 — Equal Weight (no oversight): 1/N allocation with no optimization and no governance.
+
+The key result: Full Governed Sharpe (0.483) is lower than Auto G-CVaR (0.610) across 11 universes. This reflects the intended risk-return tradeoff: HITL Constrain reduces maximum position weights from 15% to 8% and caps turnover at 20%, sacrificing some return in exchange for lower concentration risk, regulatory compliance, and documented accountability. CVaR protection is the primary benefit of governance, not return enhancement.
+
+================================================================================
+SECTION 7: EXPLAINABILITY AND AUDIT NARRATIVES
+================================================================================
+
+7.1 EXPLAINABLE AI IN PORTFOLIO MANAGEMENT
+
+Explainable AI (XAI) refers to methods and techniques that make AI system decisions interpretable, transparent, and accountable to human stakeholders. In portfolio management, explainability is essential for regulatory compliance (GDPR, MiFID II require algorithm transparency), client communication, internal governance, and debugging.
+
+Agent 4 implements a two-stage explainability approach: mathematical attribution first, LLM narrative second. The mathematical attribution is the ground truth. The LLM narrative is a human-readable translation of the mathematical result.
+
+7.2 MATHEMATICAL ATTRIBUTION
+
+The attribution for each window is computed as:
+
+    delta_w_i = w_i(G-CVaR) - w_i(Std CVaR)
+
+This measures how the graph contagion penalty changed the allocation to each asset relative to what standard CVaR would have recommended. Negative delta_w means the graph penalty caused a reduction in allocation. Positive delta_w means the graph penalty caused an increase (the optimizer was pushed away from other high-centrality stocks and toward this lower-centrality one).
+
+Assets are ranked by |delta_w_i| descending to identify the most affected stocks. The top-5 most affected assets form the ground truth for faithfulness scoring.
+
+The Pearson correlation between the eigenvector centrality vector c_t and the attribution vector delta_w is computed for each window. The expected sign is negative: stocks with high centrality (most embedded in the institutional network) should receive the largest negative attribution (largest weight reductions). A confirmed negative r supports the hypothesis that the graph penalty is functioning as intended.
+
+In practice, the mean Pearson r is approximately -0.025 across 51 windows for U1 Technology, with r significant (p < 0.05) in 1/51 windows for that universe. This low average reflects the dormancy property: in the 38/51 calm windows, lambda_t ≈ 0 and delta_w ≈ 0 for all assets (no penalty is applied), producing r = 0 or near zero by construction. Only the crisis windows show meaningful negative r values (r ≈ -0.175 for W09 GFC peak, r ≈ -0.553 for W08 pre-GFC).
+
+7.3 LLM AUDIT NARRATIVE GENERATION
+
+The audit narrative is generated by passing a structured prompt to the Mistral 7B model running locally via Ollama. The prompt contains:
+
+- Window date range and universe
+- I_t value and regime label
+- lambda_t value
+- Top 5 most affected assets with their delta_w percentages and centrality ranks
+- Explicit instruction to write in governance audit language and cite only provided numbers
+
+Critical design decision: raw weight arrays are NEVER passed to the LLM. Only the pre-computed structured facts are provided. This prevents the LLM from inventing numbers (hallucinating specific weights) because the facts constrain the possible outputs.
+
+When Ollama is unavailable, a deterministic rule-based narrative is used as fallback. This narrative template is parameterized by the computed attribution facts and produces identical output on repeated calls (consistency = 1.0).
+
+7.4 FAITHFULNESS SCORING
+
+Faithfulness measures how accurately the audit narrative reflects the mathematical attribution ground truth:
+
+    faithfulness = (number of top-5 tickers correctly mentioned in narrative) / (total tickers mentioned in narrative)
+
+A narrative that mentions all 5 top-penalized tickers and no others has faithfulness = 1.0. A narrative that mentions only 3 of the 5 top tickers has faithfulness = 3/5 = 0.60.
+
+Completeness measures whether the narrative covers all relevant governance dimensions:
+- Does it mention the regime (Calm/Elevated/Crisis)?
+- Does it mention lambda_t or adaptive trust?
+- Does it mention penalty/reduction/decrease?
+- Does it mention centrality?
+
+Consistency measures the variance of faithfulness across 5 repeated runs of the same prompt. Rule-based narratives have consistency = 1.0 (identical output). LLM narratives have lower consistency due to temperature-induced variation.
+
+Latency measures seconds from prompt submission to narrative delivery.
+
+================================================================================
+SECTION 8: WALK-FORWARD VALIDATION AND BACKTESTING
+================================================================================
+
+8.1 THE DANGERS OF BACKTEST OVERFITTING
+
+Backtesting — applying a strategy to historical data and measuring performance — is prone to overfitting. If parameters are tuned on the same data used to measure performance, the backtested results are too optimistic. This problem is pervasive in quantitative finance and has contributed to numerous strategy failures after live deployment.
+
+Common forms of backtest bias:
+- Lookahead bias: Using information not available at the decision time
+- Survivorship bias: Testing only on stocks that survived to the present (excluding delisted stocks)
+- Parameter overfitting: Selecting parameters that maximize backtested Sharpe
+- Multiple testing bias: Testing many strategies and reporting only the best
+
+

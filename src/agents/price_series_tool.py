@@ -91,11 +91,23 @@ def get_price_series_for_analysis(
     if not cleaned:
         return {"error": "No valid tickers provided."}
 
+    def _coerce_date(raw: str, end_of_period: bool = False) -> pd.Timestamp:
+        """Accept YYYY, YYYY-MM, or YYYY-MM-DD. Expand short forms gracefully."""
+        raw = str(raw).strip()
+        if len(raw) == 4:  # just a year
+            return pd.Timestamp(f"{raw}-12-31") if end_of_period else pd.Timestamp(f"{raw}-01-01")
+        if len(raw) == 7:  # YYYY-MM
+            if end_of_period:
+                month_end = pd.Timestamp(raw).to_period("M").to_timestamp("M")
+                return month_end
+            return pd.Timestamp(f"{raw}-01")
+        return pd.to_datetime(raw)  # full YYYY-MM-DD
+
     try:
-        start_dt = pd.to_datetime(start_date, format="%Y-%m-%d")
-        end_dt = pd.to_datetime(end_date, format="%Y-%m-%d")
+        start_dt = _coerce_date(start_date, end_of_period=False)
+        end_dt = _coerce_date(end_date, end_of_period=True)
     except Exception as exc:
-        return {"error": f"Invalid date format: {exc}. Use YYYY-MM-DD."}
+        return {"error": f"Invalid date: {exc}. Use YYYY, YYYY-MM, or YYYY-MM-DD."}
 
     if start_dt >= end_dt:
         return {"error": "start_date must be before end_date."}
@@ -153,6 +165,11 @@ def get_price_series_for_analysis(
         close_arr = filtered["Close"].astype(float).to_numpy()
         log_returns = np.diff(np.log(close_arr)).tolist()
         returns_out[ticker] = [round(float(value), 6) for value in log_returns]
+        
+        # Capture strictly aligned dates
+        p_dates = [ (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d") for _, row in filtered.iterrows() ]
+        # returns has N-1 points, shifted forward (start at index 1)
+        r_dates = p_dates[1:]
 
         arr = np.array(log_returns, dtype=float)
         stats_out[ticker] = {
@@ -177,6 +194,8 @@ def get_price_series_for_analysis(
         "tickers_missing": missing,
         "start_date": start_date,
         "end_date": end_date,
+        "price_dates": p_dates if 'p_dates' in locals() else [],
+        "return_dates": r_dates if 'r_dates' in locals() else [],
     }
     cache_key = _store_analysis_dataset(full_dataset)
     elapsed_seconds = time.perf_counter() - start_time
@@ -204,4 +223,6 @@ def get_price_series_for_analysis(
         },
         "start_date": start_date,
         "end_date": end_date,
+        "price_dates": full_dataset["price_dates"],
+        "return_dates": full_dataset["return_dates"],
     }

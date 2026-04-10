@@ -71,23 +71,39 @@ class PDFKnowledgeIngestor:
                 self.mongo_uri,
                 tls=True,
                 tlsAllowInvalidCertificates=True,
-                serverSelectionTimeoutMS=10000,
-                connectTimeoutMS=10000,
-                socketTimeoutMS=20000,
+                serverSelectionTimeoutMS=30000,
+                connectTimeoutMS=30000,
+                socketTimeoutMS=90000,  # Large PDFs / bulk writes need extra time
                 appname="agentic-ai-portfolio-governance-pdf-ingestion",
             )
             self._collection = self._client[self.db_name][self.collection_name]
 
     @staticmethod
     def list_pdf_files(pdf_root: str | Path) -> list[Path]:
+        """Return all .pdf and .txt files found recursively under pdf_root."""
         root = Path(pdf_root)
         if not root.exists():
             raise FileNotFoundError(f"PDF directory does not exist: {root}")
 
+        allowed_suffixes = {".pdf", ".txt"}
         return sorted(
-            (path for path in root.rglob("*") if path.is_file() and path.suffix.lower() == ".pdf"),
+            (path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in allowed_suffixes),
             key=lambda path: path.as_posix().lower(),
         )
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        """Clean and normalize text for embedding and storage."""
+        if not text:
+            return ""
+        
+        # Remove null bytes and non-printable control characters that break MongoDB
+        text = "".join(ch for ch in text if ch.isprintable() or ch in "\n\r\t")
+        
+        # Normalize whitespace
+        import re
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
 
     def chunk_text(self, text: str) -> list[str]:
         normalized = self.normalize_text(text)
@@ -242,12 +258,22 @@ class PDFKnowledgeIngestor:
     def ingest_pdf(self, pdf_path: str | Path, file_hash: str | None = None) -> tuple[int, int]:
         collection = self._require_collection()
         path = Path(pdf_path)
-        if path.suffix.lower() != ".pdf":
-            raise ValueError(f"Only .pdf files are supported, got: {path.name}")
+        suffix = path.suffix.lower()
+        if suffix not in {".pdf", ".txt"}:
+            raise ValueError(f"Only .pdf and .txt files are supported, got: {path.name}")
 
-        pages = self._extract_pdf_pages(path)
+        if suffix == ".txt":
+            pages = self._extract_txt_pages(path)
+        else:
+            pages = self._extract_pdf_pages(path)
+
+        # Fallback: If no text was extracted (e.g. scanned images), 
+        # try to at least get the PDF metadata so the system knows the document exists.
+        if not pages and suffix == ".pdf":
+            pages = self._extract_pdf_metadata_as_page(path)
+
         if not pages:
-            raise ValueError("No readable text was extracted from the PDF.")
+            raise ValueError("No readable text or metadata was extracted from the file.")
 
         file_hash = file_hash or self._hash_file(path)
         now = datetime.now(timezone.utc)
@@ -331,10 +357,56 @@ class PDFKnowledgeIngestor:
         reader = PdfReader(str(pdf_path))
         pages: list[tuple[int, str]] = []
         for page_number, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
+            try:
+                # Try aggressive extraction
+                text = page.extract_text(extraction_mode="plain") or ""
+            except Exception:
+                text = ""
+            
             normalized = self.normalize_text(text)
             if normalized:
                 pages.append((page_number, normalized))
+        return pages
+
+    def _extract_pdf_metadata_as_page(self, pdf_path: Path) -> list[tuple[int, str]]:
+        """Extract document metadata to serve as a 'contextual placeholder' for unreadable PDFs."""
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(pdf_path))
+            m = reader.metadata
+            if not m:
+                return []
+            
+            # Construct a artificial page containing all metadata
+            parts = [f"FILENAME: {pdf_path.name}"]
+            if m.title: parts.append(f"TITLE: {m.title}")
+            if m.author: parts.append(f"AUTHOR: {m.author}")
+            if m.subject: parts.append(f"SUBJECT: {m.subject}")
+            
+            text = " | ".join(parts) + " [Note: This document appears to be a scanned image or has unreadable text encoding.]"
+            return [(1, text)]
+        except Exception:
+            return []
+
+    def _extract_txt_pages(self, txt_path: Path) -> list[tuple[int, str]]:
+        """Read a plain-text file and split it into page-sized chunks for consistent processing."""
+        try:
+            raw = txt_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as exc:
+            logger.warning("Could not read text file %s: %s", txt_path, exc)
+            return []
+
+        normalized = self.normalize_text(raw)
+        if not normalized:
+            return []
+
+        # Split into ~3000-char synthetic pages so batching is consistent with PDFs
+        page_size = 3000
+        pages: list[tuple[int, str]] = []
+        for page_number, start in enumerate(range(0, len(normalized), page_size), start=1):
+            segment = normalized[start : start + page_size].strip()
+            if segment:
+                pages.append((page_number, segment))
         return pages
 
     def _get_embedding_model(self):

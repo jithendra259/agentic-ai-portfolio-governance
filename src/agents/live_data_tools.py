@@ -1239,12 +1239,15 @@ def plot_historical_prices(
         if start_dt > end_dt:
             return "Unable to generate the historical price plot: start_date must be on or before end_date."
 
-        collection = _get_collection()
-        docs = list(
-            collection.find(
-                {"ticker": {"$in": cleaned_tickers}},
-                {"ticker": 1, "historical_prices": 1},
-            )
+        docs = _find_documents_with_retry(
+            {"ticker": {"$in": cleaned_tickers}},
+            {
+                "ticker": 1,
+                "historical_prices.Date": 1,
+                "historical_prices.date": 1,
+                "historical_prices.Close": 1,
+                "historical_prices.close": 1,
+            },
         )
         if not docs:
             return (
