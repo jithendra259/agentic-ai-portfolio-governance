@@ -47,10 +47,12 @@ def _get_client():
         MONGO_URI,
         tls=True,
         tlsAllowInvalidCertificates=True,
-        serverSelectionTimeoutMS=15000,
-        connectTimeoutMS=20000,
+        serverSelectionTimeoutMS=10000,
+        connectTimeoutMS=15000,
         socketTimeoutMS=60000,
         maxPoolSize=20,
+        retryReads=True,
+        retryWrites=True,
         appname="agentic-ai-portfolio-governance-tools",
     )
 
@@ -134,7 +136,24 @@ def _set_lookup_cache(key: tuple, payload: str, ttl_seconds: int = LOOKUP_CACHE_
     return payload
 
 
-def _extract_price_frame(doc: dict) -> pd.DataFrame:
+def _downsample_df(df: pd.DataFrame, target_points: int = 500) -> pd.DataFrame:
+    """Downsample a DataFrame to approximately target_points while preserving the first and last rows."""
+    if df.empty or len(df) <= target_points:
+        return df
+
+    step = len(df) // target_points
+    if step <= 1:
+        return df
+
+    # Always include the very last row to ensure the latest price is present
+    downsampled = df.iloc[::step].copy()
+    if downsampled.index[-1] != df.index[-1]:
+        downsampled = pd.concat([downsampled, df.tail(1)]).drop_duplicates()
+        
+    return downsampled
+
+
+def _extract_price_frame(doc: dict, downsample: bool = False) -> pd.DataFrame:
     historical_prices = doc.get("historical_prices", [])
     if not historical_prices:
         return pd.DataFrame()
@@ -153,6 +172,10 @@ def _extract_price_frame(doc: dict) -> pd.DataFrame:
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
     df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
+    
+    if downsample:
+        df = _downsample_df(df)
+        
     return df
 
 
@@ -1276,6 +1299,10 @@ def plot_historical_prices(
                     f"- {ticker}: no historical prices between {start_date} and {end_date}"
                 )
                 continue
+
+            # Intelligent downsampling for large ranges to avoid latency
+            if len(filtered) > 600:
+                filtered = _downsample_df(filtered, target_points=500)
 
             included[ticker] = [
                 {

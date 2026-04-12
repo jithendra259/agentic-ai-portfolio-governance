@@ -22,6 +22,7 @@ class IntentType(str, Enum):
     EXPLAIN_PARAMETERS = "explain_parameters"
     METHODOLOGY_QUESTION = "methodology_question"
     DOCUMENTATION_REQUEST = "documentation_request"
+    HISTORY_SEARCH = "history_search"
     INVALID_EXECUTION = "invalid_execution"
     OUT_OF_SCOPE = "out_of_scope"
     ADVERSARIAL = "adversarial"
@@ -126,8 +127,8 @@ class IntentClassifier:
             r"^(?:list\s+of\s+)?(?:sectors|industries)$",
         ],
         IntentType.GET_STOCKS_BY_SECTOR: [
-            r"\b(?:show|get|list)\b(?:\s+me)?\s+(?!.*\bu\d{1,2}\b)(?P<sector>[a-z&\-\s]+?)\s+(?:stocks|companies|tickers)\b",
-            r"\b(?:stocks|companies|tickers)\b\s+(?:in|from|within)\s+(?P<sector>[a-z&\-\s]+?)\s+sector\b",
+            r"\b(?:show|get|list)\b(?:\s+me)?\s+(?!.*\bu\d{1,2}\b)(?!(?:the|my|all|your|some|these|those)\b)(?P<sector>[a-z&\-\s]{3,}?)\s+(?:stocks|companies|tickers)\b",
+            r"\b(?:stocks|companies|tickers)\b\s+(?:in|from|within)\s+(?!(?:the|my|all|your|some|these|those)\b)(?P<sector>[a-z&\-\s]{3,}?)\s+sector\b",
         ],
         IntentType.GET_STOCKS_BY_UNIVERSE: [
             r"\b(?:what(?:'s| is)?|show|get|list)\b.*\b(?:in|from)(?:\s+(?:universe|portfolio))?\s+(?P<universe>u\d{1,2})\b",
@@ -149,6 +150,12 @@ class IntentClassifier:
             r"\b(?:brief|short)\b.*?\b(?:overview|summary)\b.*?\b(?:of|for|on)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b",
             r"\b(?:explain|describe)\b(?:\s+the)?\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b$",
             r"^(?P<tickers>[a-z]{1,5})\s*:\s*.*\b(?:explain|describe|summarize|tell me more|more about)\b.*$",
+        ],
+        IntentType.HISTORY_SEARCH: [
+            r"\b(?:history|past|previous|recent)\b.*\b(?:analyses|runs|activity|queries|work)\b",
+            r"\b(?:what did i do|my history|last time)\b",
+            r"\b(?:find|look at|search)\b.*\b(?:history|past|previous)\b",
+            r"\b(?:what|which|show|get)\b.*\b(?:history|past analyses|my recent)\b",
         ],
     }
 
@@ -450,6 +457,7 @@ class IntentClassifier:
             IntentType.EXPLAIN_PARAMETERS,
             IntentType.METHODOLOGY_QUESTION,
             IntentType.DOCUMENTATION_REQUEST,
+            IntentType.HISTORY_SEARCH,
         }:
             return RiskTier.LOW
 
