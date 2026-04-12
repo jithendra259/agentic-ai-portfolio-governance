@@ -12,7 +12,12 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from src.memory.mongodb_memory_layer import MongoMemoryManager
-from src.orchestrator.llm_router import portfolio_assistant
+from src.orchestrator.chatbot_orchestrator import (
+    FALLBACK_OLLAMA_MODEL,
+    INSTALLED_OLLAMA_MODELS,
+    PRIMARY_OLLAMA_MODEL,
+    portfolio_assistant,
+)
 
 
 logging.basicConfig(level=logging.INFO)
@@ -41,8 +46,10 @@ async def lifespan(app: FastAPI):
         memory = MongoMemoryManager()
         memory.setup_indexes()
         logger.info("MongoDB indexes are active.")
+        app.state.mongo_available = True
     except Exception as exc:
         logger.error("Failed to build MongoDB indexes: %s", exc)
+        app.state.mongo_available = False
     yield
 
 
@@ -51,6 +58,17 @@ app = FastAPI(
     description="Advisory-only backend for historical portfolio governance using local MongoDB data.",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# CORS Support for robust local development
+from fastapi.middleware.cors import CORSMiddleware
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -113,10 +131,24 @@ def _stream_event(payload: dict[str, Any]) -> bytes:
 
 @app.get("/health")
 def health_check() -> dict:
+    mongo_status = getattr(app.state, "mongo_available", False)
+    
+    # Basic check for Ollama model presence
+    ollama_status = PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS
+    
     return {
-        "status": "ok",
+        "status": "ok" if mongo_status and ollama_status else "degraded",
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
+        "components": {
+            "mongodb": "connected" if mongo_status else "disconnected",
+            "ollama": "ready" if ollama_status else "model_missing",
+        },
+        "models": {
+            "primary": PRIMARY_OLLAMA_MODEL,
+            "fallback": FALLBACK_OLLAMA_MODEL,
+            "available": INSTALLED_OLLAMA_MODELS
+        }
     }
 
 
@@ -191,14 +223,17 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         
                         # STREAMING GUARD: If the AI is leaking code, stop sending tokens to the UI.
                         # We wait for the final sanitized response instead.
-                        _leak_markers = ("```python", "import matplotlib", "plt.style.use", "pd.DataFrame")
+                        _leak_markers = (
+                            "```python", "import matplotlib", "plt.style.use", 
+                            "pd.DataFrame", "plt.show(", "sns.set(", "import pandas"
+                        )
                         is_leaking = any(m in accumulated_response for m in _leak_markers)
                         
                         if not is_leaking:
                             yield _stream_event({"type": "token", "content": text})
                         else:
                             # Log the leak internally but don't show the user
-                            if len(accumulated_response) % 50 == 0:
+                            if len(accumulated_response) % 100 == 0:
                                 logger.warning("Streaming Guard: Suppressing code leak in session %s", request.session_id)
 
                 elif event_type == "on_tool_start":

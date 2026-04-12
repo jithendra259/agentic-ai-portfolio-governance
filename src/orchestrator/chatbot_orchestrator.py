@@ -19,13 +19,14 @@ except Exception:  # pragma: no cover - fallback for environments missing mongod
     MongoDBSaver = None
 
 # Import MongoDB-backed historical tools only.
+from src.agents.history_tools import get_user_analysis_history, get_detailed_past_weights
 from src.agents.live_data_tools import (
-    get_stock_database_snapshot,
+    list_available_sectors,
+    list_available_universes,
     get_stocks_by_sector,
     get_stocks_by_universe,
     get_universe_overview,
-    list_available_sectors,
-    list_available_universes,
+    get_stock_database_snapshot,
     plot_historical_prices,
     run_full_governance_pipeline,
 )
@@ -137,11 +138,12 @@ def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
         return memory_manager, MemorySaver()
 
     try:
-        checkpointer = MongoDBSaver(mongo_client)
-    except TypeError:
+        # Standardize checkpointer to use a dedicated database
+        checkpointer = MongoDBSaver(mongo_client, db_name="checkpointing_db")
+    except (TypeError, Exception):
         # Supports alternate constructor signatures across LangGraph versions.
-        checkpointer = MongoDBSaver(client=mongo_client)
-
+        checkpointer = MongoDBSaver(client=mongo_client, db_name="checkpointing_db")
+    
     return memory_manager, checkpointer
 
 
@@ -212,6 +214,8 @@ tools = [
     search_methodology_knowledge_base,
     retrieve_graph_rag_context,
     compare_common_institutional_holders,
+    get_user_analysis_history,
+    get_detailed_past_weights,
 ]
 
 
@@ -583,6 +587,20 @@ def chatbot_node(state: AgentState):
             message for message in working_messages if not isinstance(message, SystemMessage)
         ]
 
+    # STAGE 0: GLOBAL MEMORY RECOVERY (If this is a fresh conversation)
+    # Check if we have any high-level activity in the last 24 hours to prime the bot's memory
+    recent_activity = _get_global_activity_summary()
+    if recent_activity:
+        working_messages.insert(1, SystemMessage(
+            content=(
+                "### CROSS-SESSION CONTEXT RECALL ###\n"
+                "The system detected the following recent high-level activity in the database from the last 24 hours. "
+                "If the user's current request seems related to these tickers, dates, or universes, explicitly acknowledge "
+                "that you remember their previous work and offer to continue it:\n\n"
+                f"{recent_activity}"
+            )
+        ))
+
     # If we have a summary from old messages, inject it as the first message after system prompt
     summary = state.get("summary", "").strip()
     if len(summary) > _MAX_SUMMARY_CHARS:
@@ -615,6 +633,57 @@ def chatbot_node(state: AgentState):
         response.content = clean_content.strip()
 
     return {"messages": [response], "user_portfolio": remembered_portfolio}
+
+
+def _get_global_activity_summary() -> str | None:
+    """
+    Look into the regime_patterns and plan_cache collections to see what has been happening
+    globally in the last 24 hours. This allows the bot to 'remember' that the user was 
+    working on U1 even if the session ID changed.
+    """
+    try:
+        from datetime import datetime, timedelta, timezone
+        lookback = datetime.now(timezone.utc) - timedelta(hours=24)
+        
+        db = memory_manager._db
+        if db is None:
+            return None
+            
+        summary_lines = []
+        
+        # Check regime patterns (actual governance results)
+        patterns = list(db["regime_patterns"].find(
+            {"created_at": {"$gt": lookback}}
+        ).sort("created_at", -1).limit(5))
+        
+        for p in patterns:
+            weights = p.get("weights", {})
+            tickers = list(weights.keys())
+            date = p.get("target_date", "Unknown")
+            risk = p.get("risk_tolerance", "moderate")
+            summary_lines.append(
+                f"- Analysis Run: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''} "
+                f"at {date} (Risk: {risk}). Weights: {json.dumps(weights) if len(weights) < 5 else 'Truncated'}."
+            )
+
+        # Check plan cache (semantic cache hits)
+        plans = list(db["plan_cache"].find(
+            {"updated_at": {"$gt": lookback}}
+        ).sort("updated_at", -1).limit(5))
+        
+        for pl in plans:
+            # We don't easily have the tickers in the plan cache doc without parsing the query hash,
+            # but we can look at the timestamps to know 'something' happened.
+            # However, regime_patterns is much better.
+            pass
+
+        if not summary_lines:
+            return None
+            
+        return "\n".join(summary_lines)
+    except Exception as exc:
+        logger.warning("Global activity recovery failed: %s", exc)
+        return None
 
 
 def summarize_conversation_node(state: AgentState):
@@ -806,6 +875,9 @@ def _extract_portfolio_from_messages(messages: list[BaseMessage]) -> list[str]:
                 "plot_historical_prices",
                 "retrieve_graph_rag_context",
                 "get_price_series_for_analysis",
+                "get_stock_database_snapshot",
+                "get_user_analysis_history",
+                "get_detailed_past_weights",
             }:
                 if name == "get_price_series_for_analysis":
                     try:
@@ -964,6 +1036,10 @@ def finalize_governance_node(state: AgentState):
 
         # Pass markdown images through untouched so the UI renders them
         if "![" in content and "](" in content:
+            # OPTIMIZATION: Ensure there is at least a double newline before images
+            # to help Gradio formatting
+            if not content.startswith("\n"):
+                content = "\n\n" + content
             return {"messages": [AIMessage(content=content)]}
 
         # Detect raw matplotlib/seaborn code leaking through as plain text
@@ -1015,7 +1091,7 @@ def _route_after_tool(state: AgentState) -> str:
     # Tools that produce final output go to finalize_governance.
     # get_price_series_for_analysis returns an intermediate cache reference —
     # route back to chatbot so the LLM can chain it into generate_custom_plot.
-    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "generate_custom_plot"}:
+    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "generate_custom_plot", "plot_historical_prices"}:
         return "finalize_governance"
     return "chatbot"
 
