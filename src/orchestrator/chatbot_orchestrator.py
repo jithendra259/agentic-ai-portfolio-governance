@@ -40,6 +40,7 @@ from src.rag.rag_tools import (
     search_methodology_knowledge_base,
 )
 from src.agents.custom_plot_tool import generate_custom_plot
+from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 
 
 logger = logging.getLogger(__name__)
@@ -197,6 +198,8 @@ class AgentState(TypedDict, total=False):
     route_status: str
     route_result: dict[str, Any]
     summary: str  # The running executive summary for "infinite context"
+    caveman_mode: bool
+    caveman_intensity: str
 
 # 2. Bind the Tools to the LLM
 # Historical database lookup + advisory optimization only. No execution tools are exposed.
@@ -587,6 +590,26 @@ def chatbot_node(state: AgentState):
             message for message in working_messages if not isinstance(message, SystemMessage)
         ]
 
+    # STAGE -1: CAVEMAN MODE DETECTION & APPLICATION
+    caveman_mode = state.get("caveman_mode", False)
+    caveman_intensity = state.get("caveman_intensity", "full")
+
+    # Detect if the latest human message is a caveman command
+    last_human_msg = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    if last_human_msg:
+        user_text = _message_content_to_text(last_human_msg)
+        caveman_update = detect_caveman_request(user_text)
+        if caveman_update == "off":
+            caveman_mode = False
+        elif caveman_update:
+            caveman_mode = True
+            caveman_intensity = caveman_update
+
+    if caveman_mode:
+        # Inject Caveman rules into the system instructions
+        caveman_prompt = get_caveman_system_prompt(caveman_intensity)
+        working_messages.insert(1, SystemMessage(content=caveman_prompt))
+
     # STAGE 0: GLOBAL MEMORY RECOVERY (If this is a fresh conversation)
     # Check if we have any high-level activity in the last 24 hours to prime the bot's memory
     recent_activity = _get_global_activity_summary()
@@ -632,7 +655,12 @@ def chatbot_node(state: AgentState):
             clean_content = "\n".join(filtered_lines)
         response.content = clean_content.strip()
 
-    return {"messages": [response], "user_portfolio": remembered_portfolio}
+    return {
+        "messages": [response], 
+        "user_portfolio": remembered_portfolio,
+        "caveman_mode": caveman_mode,
+        "caveman_intensity": caveman_intensity
+    }
 
 
 def _get_global_activity_summary() -> str | None:
@@ -703,10 +731,14 @@ def summarize_conversation_node(state: AgentState):
     # Textualize the messages for the LLM
     history_str = "\n".join([f"{m.type}: {_message_content_to_text(m)}" for m in to_summarize])
     
+    # Use Ultra Caveman rules for the summarizer to save space in the permanent state
+    caveman_rules = get_caveman_system_prompt("ultra")
+    
     summarization_prompt = (
         "You are a long-term memory processor for a Portfolio Governance Assistant.\n"
         "Your task is to update the existing 'Distant Context Summary' by incorporating new historical messages.\n"
         "Keep the summary concise but preserve critical facts like user preferences, tickers discussed, and previous dates.\n\n"
+        f"SUMMARIZATION STYLE RULES: {caveman_rules}\n\n"
         f"EXISTING SUMMARY: {existing_summary or 'None'}\n\n"
         f"NEW HISTORICAL MESSAGES TO INCORPORATE:\n{history_str}\n\n"
         "Return ONLY the updated, comprehensive summary. No preamble."
