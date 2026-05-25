@@ -426,6 +426,7 @@ GENERAL RULES:
 7. If the user asks about universe membership or requests a universe roster, use get_stocks_by_universe or get_stock_database_snapshot as appropriate.
 8. If the user asks about a universe's sector identity or composition, use get_universe_overview.
 9. Prefer returning the direct tool result over paraphrasing when the tool already answers the request cleanly.
+10. For formulas, use LaTeX delimiters supported by the chat UI: inline math as \\(...\\) and display math as \\[...\\] or $$...$$. Do not use single-dollar delimiters because dollar amounts appear in finance answers.
 """
 
 # Override the legacy prompt block above with a cleaner, tool-complete version.
@@ -521,6 +522,7 @@ GENERAL RULES:
 7. If the user asks about universe membership or requests a universe roster, use get_stocks_by_universe or get_stock_database_snapshot as appropriate.
 8. If the user asks about a universe's sector identity or composition, use get_universe_overview.
 9. Prefer returning the direct tool result over paraphrasing when the tool already answers the request cleanly.
+10. For formulas, use LaTeX delimiters supported by the chat UI: inline math as \\(...\\) and display math as \\[...\\] or $$...$$. Do not use single-dollar delimiters because dollar amounts appear in finance answers.
 """
 
 # 4. Define the Nodes

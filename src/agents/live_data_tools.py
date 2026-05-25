@@ -1690,17 +1690,53 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
             return "Unable to fetch historical prices: no valid tickers were provided."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned_tickers}},
-            {
-                "ticker": 1, 
-                "historical_prices.Date": 1, 
-                "historical_prices.date": 1, 
-                "historical_prices.Close": 1, 
-                "historical_prices.close": 1
-            },
-        )
+        mongo_error = None
+        try:
+            docs = _find_documents_with_retry(
+                {"ticker": {"$in": cleaned_tickers}},
+                {
+                    "ticker": 1,
+                    "historical_prices.Date": 1,
+                    "historical_prices.date": 1,
+                    "historical_prices.Close": 1,
+                    "historical_prices.close": 1,
+                },
+            )
+        except Exception as exc:
+            docs = []
+            mongo_error = exc
+            logger.warning("MongoDB historical price lookup failed; attempting yfinance fallback. Error: %s", exc)
         if not docs:
+            fallback_lines = []
+            fallback_missing = []
+            for ticker in cleaned_tickers:
+                fallback_row = _fetch_yfinance_price_on_or_before(ticker, target_dt)
+                if fallback_row is not None:
+                    fallback_lines.append(
+                        f"- {ticker}: close={fallback_row['close']:.2f} on {fallback_row['date']} "
+                        f"(source: {fallback_row['source']})"
+                    )
+                else:
+                    fallback_missing.append(ticker)
+
+            if fallback_lines:
+                response = [
+                    f"Historical closing prices on or immediately before {target_date}:",
+                    *fallback_lines,
+                    "",
+                    "Source note:",
+                    f"- yfinance fallback used for: {', '.join(ticker for ticker in cleaned_tickers if ticker not in fallback_missing)}",
+                ]
+                if fallback_missing:
+                    response.extend(["", "Missing or unavailable:"])
+                    response.extend(f"- {ticker}" for ticker in fallback_missing)
+                return "\n".join(response)
+
+            if mongo_error is not None:
+                return (
+                    f"Unable to fetch historical prices for {target_date}. MongoDB lookup failed with "
+                    f"{type(mongo_error).__name__}: {str(mongo_error)} and yfinance fallback did not recover the requested tickers."
+                )
             return f"Unable to fetch historical prices: none of the requested tickers were found in MongoDB for {target_date}."
 
         found = {doc.get("ticker", "").upper(): doc for doc in docs}

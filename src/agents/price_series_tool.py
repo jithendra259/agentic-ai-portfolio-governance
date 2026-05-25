@@ -65,21 +65,11 @@ def get_price_series_for_analysis(
     end_date: str,
 ) -> dict:
     """
-    Fetch daily closing prices from MongoDB and return a structured payload for
-    downstream statistical analysis or custom plotting.
+    Fetch daily closing prices from MongoDB and return a compact structured
+    payload for downstream statistical analysis or custom plotting.
 
-    The returned dictionary is intentionally compact for chat-model efficiency and contains:
-    - analysis_cache_key: reference to the cached full dataset
-    - available_fields: fields available in the cached dataset
-    - stats: ticker -> summary stats
-    - tickers_included / tickers_missing
-    - observations_by_ticker
-    - start_date / end_date
-
-    Use this tool whenever the user asks for correlations, return
-    distributions, volatility comparisons, drawdowns, rolling volatility,
-    Sharpe-style comparisons, box plots, violin plots, or other analyses that
-    need the underlying time series rather than a pre-rendered line chart.
+    Stats are computed from the full filtered daily history. Long price series
+    are downsampled only for cached plotting payloads and never for return math.
     """
 
     start_time = time.perf_counter()
@@ -94,14 +84,13 @@ def get_price_series_for_analysis(
     def _coerce_date(raw: str, end_of_period: bool = False) -> pd.Timestamp:
         """Accept YYYY, YYYY-MM, or YYYY-MM-DD. Expand short forms gracefully."""
         raw = str(raw).strip()
-        if len(raw) == 4:  # just a year
+        if len(raw) == 4:
             return pd.Timestamp(f"{raw}-12-31") if end_of_period else pd.Timestamp(f"{raw}-01-01")
-        if len(raw) == 7:  # YYYY-MM
+        if len(raw) == 7:
             if end_of_period:
-                month_end = pd.Timestamp(raw).to_period("M").to_timestamp("M")
-                return month_end
+                return pd.Timestamp(raw).to_period("M").to_timestamp("M")
             return pd.Timestamp(f"{raw}-01")
-        return pd.to_datetime(raw)  # full YYYY-MM-DD
+        return pd.to_datetime(raw)
 
     try:
         start_dt = _coerce_date(start_date, end_of_period=False)
@@ -116,11 +105,11 @@ def get_price_series_for_analysis(
         docs = _find_documents_with_retry(
             {"ticker": {"$in": cleaned}},
             {
-                "ticker": 1, 
-                "historical_prices.Date": 1, 
-                "historical_prices.date": 1, 
-                "historical_prices.Close": 1, 
-                "historical_prices.close": 1
+                "ticker": 1,
+                "historical_prices.Date": 1,
+                "historical_prices.date": 1,
+                "historical_prices.Close": 1,
+                "historical_prices.close": 1,
             },
         )
     except Exception as exc:
@@ -131,7 +120,9 @@ def get_price_series_for_analysis(
 
     prices_out: dict[str, list[dict[str, float | str]]] = {}
     returns_out: dict[str, list[float]] = {}
-    stats_out: dict[str, dict[str, float | int]] = {}
+    price_dates_by_ticker: dict[str, list[str]] = {}
+    return_dates_by_ticker: dict[str, list[str]] = {}
+    stats_out: dict[str, dict[str, float | int | str]] = {}
     missing: list[str] = []
 
     for ticker in cleaned:
@@ -145,39 +136,55 @@ def get_price_series_for_analysis(
             missing.append(ticker)
             continue
 
-        filtered = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)].copy()
-        if len(filtered) < 5:
+        full_filtered = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)].copy()
+        if len(full_filtered) < 5:
             missing.append(ticker)
             continue
 
-        if len(filtered) > _MAX_OBSERVATIONS:
-            step = len(filtered) // _MAX_OBSERVATIONS + 1
-            filtered = filtered.iloc[::step].copy()
+        full_filtered = full_filtered.sort_values("Date")
+        full_close_arr = full_filtered["Close"].astype(float).to_numpy()
+        full_log_returns = np.diff(np.log(full_close_arr)).tolist()
+
+        sampled = full_filtered
+        if len(sampled) > _MAX_OBSERVATIONS:
+            step = len(sampled) // _MAX_OBSERVATIONS + 1
+            sampled = sampled.iloc[::step].copy()
+            if sampled.index[-1] != full_filtered.index[-1]:
+                sampled = pd.concat([sampled, full_filtered.tail(1)]).drop_duplicates()
 
         prices_out[ticker] = [
             {
                 "date": row["Date"].strftime("%Y-%m-%d"),
                 "close": round(float(row["Close"]), 4),
             }
-            for _, row in filtered.iterrows()
+            for _, row in sampled.iterrows()
         ]
+        returns_out[ticker] = [round(float(value), 6) for value in full_log_returns]
 
-        close_arr = filtered["Close"].astype(float).to_numpy()
-        log_returns = np.diff(np.log(close_arr)).tolist()
-        returns_out[ticker] = [round(float(value), 6) for value in log_returns]
-        
-        # Capture strictly aligned dates
-        p_dates = [ (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d") for _, row in filtered.iterrows() ]
-        # returns has N-1 points, shifted forward (start at index 1)
-        r_dates = p_dates[1:]
+        sampled_price_dates = [
+            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d")
+            for _, row in sampled.iterrows()
+        ]
+        full_price_dates = [
+            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d")
+            for _, row in full_filtered.iterrows()
+        ]
+        price_dates_by_ticker[ticker] = sampled_price_dates
+        return_dates_by_ticker[ticker] = full_price_dates[1:]
 
-        arr = np.array(log_returns, dtype=float)
+        arr = np.array(full_log_returns, dtype=float)
         stats_out[ticker] = {
             "mean_return": round(float(arr.mean()), 6) if len(arr) else 0.0,
             "std_return": round(float(arr.std()), 6) if len(arr) else 0.0,
             "annualised_vol": round(float(arr.std() * np.sqrt(252)), 6) if len(arr) else 0.0,
-            "total_return_pct": round((float(close_arr[-1]) / float(close_arr[0]) - 1.0) * 100.0, 4),
-            "observations": len(filtered),
+            "total_return_pct": round((float(full_close_arr[-1]) / float(full_close_arr[0]) - 1.0) * 100.0, 4),
+            "trading_days": len(full_filtered),
+            "observations": len(full_filtered),
+            "sampled_observations": len(sampled),
+            "first_price_date": full_price_dates[0],
+            "last_price_date": full_price_dates[-1],
+            "first_close": round(float(full_close_arr[0]), 6),
+            "last_close": round(float(full_close_arr[-1]), 6),
         }
 
     if not prices_out:
@@ -185,6 +192,28 @@ def get_price_series_for_analysis(
             "error": "No price data found for any requested ticker in the given date range.",
             "tickers_missing": missing,
         }
+
+    aligned_price_dates: list[str] = []
+    aligned_return_dates: list[str] = []
+    if prices_out:
+        aligned_series = [
+            pd.Series(
+                [row["close"] for row in rows],
+                index=pd.to_datetime([row["date"] for row in rows]),
+                name=ticker,
+            )
+            for ticker, rows in prices_out.items()
+            if rows
+        ]
+        common_start = max(series.index.min() for series in aligned_series)
+        common_end = min(series.index.max() for series in aligned_series)
+        aligned_prices = pd.concat(aligned_series, axis=1).sort_index()
+        aligned_prices = aligned_prices[
+            (aligned_prices.index >= common_start) & (aligned_prices.index <= common_end)
+        ]
+        aligned_prices = aligned_prices.ffill().dropna(how="any")
+        aligned_price_dates = [date.strftime("%Y-%m-%d") for date in aligned_prices.index]
+        aligned_return_dates = aligned_price_dates[1:]
 
     full_dataset = {
         "prices": prices_out,
@@ -194,8 +223,10 @@ def get_price_series_for_analysis(
         "tickers_missing": missing,
         "start_date": start_date,
         "end_date": end_date,
-        "price_dates": p_dates if 'p_dates' in locals() else [],
-        "return_dates": r_dates if 'r_dates' in locals() else [],
+        "price_dates": aligned_price_dates,
+        "return_dates": aligned_return_dates,
+        "price_dates_by_ticker": price_dates_by_ticker,
+        "return_dates_by_ticker": return_dates_by_ticker,
     }
     cache_key = _store_analysis_dataset(full_dataset)
     elapsed_seconds = time.perf_counter() - start_time
@@ -210,9 +241,9 @@ def get_price_series_for_analysis(
     return {
         "analysis_cache_key": cache_key,
         "available_fields": {
-            "prices": "ticker -> [{date, close}, ...]",
-            "returns": "ticker -> [daily log returns]",
-            "stats": "ticker -> {mean_return, std_return, annualised_vol, total_return_pct, observations}",
+            "prices": "ticker -> [{date, close}, ...] (downsampled for long ranges)",
+            "returns": "ticker -> [daily log returns] (full series in cache)",
+            "stats": "ticker -> summary stats computed from full daily history",
         },
         "stats": stats_out,
         "tickers_included": full_dataset["tickers_included"],
@@ -221,8 +252,14 @@ def get_price_series_for_analysis(
             ticker: details.get("observations", 0)
             for ticker, details in stats_out.items()
         },
+        "sampled_observations_by_ticker": {
+            ticker: details.get("sampled_observations", 0)
+            for ticker, details in stats_out.items()
+        },
         "start_date": start_date,
         "end_date": end_date,
-        "price_dates": full_dataset["price_dates"],
-        "return_dates": full_dataset["return_dates"],
+        "date_range_used": {
+            "start": aligned_price_dates[0] if aligned_price_dates else None,
+            "end": aligned_price_dates[-1] if aligned_price_dates else None,
+        },
     }

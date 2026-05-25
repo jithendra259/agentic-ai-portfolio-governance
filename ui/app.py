@@ -19,6 +19,12 @@ STREAM_API_URL = os.getenv("PORTFOLIO_STREAM_API_URL", "http://127.0.0.1:8000/ch
 HEALTH_URL = os.getenv("PORTFOLIO_HEALTH_URL", "http://127.0.0.1:8000/health")
 SESSION_ID_FILE = ".session_id"
 
+LATEX_DELIMITERS = [
+    {"left": "$$", "right": "$$", "display": True},
+    {"left": "\\[", "right": "\\]", "display": True},
+    {"left": "\\(", "right": "\\)", "display": False},
+]
+
 PREMIUM_CSS = """
 /* Premium Deep Sea Blue Theme with Glassmorphism */
 :root {
@@ -292,6 +298,18 @@ def check_api_health():
 
 
 def chat_with_api(user_message: str, history, session_id: str):
+    accumulated_response = ""
+    status_message = ""
+
+    def fallback_to_non_stream() -> str:
+        fallback = requests.post(
+            API_URL,
+            json={"session_id": session_id, "user_message": user_message},
+            timeout=(10, 180),
+        )
+        fallback.raise_for_status()
+        return str(fallback.json().get("response", "")).strip()
+
     try:
         response = requests.post(
             STREAM_API_URL,
@@ -300,9 +318,6 @@ def chat_with_api(user_message: str, history, session_id: str):
             stream=True,
         )
         response.raise_for_status()
-
-        accumulated_response = ""
-        status_message = ""
 
         for line in response.iter_lines(decode_unicode=True):
             if not line:
@@ -332,6 +347,15 @@ def chat_with_api(user_message: str, history, session_id: str):
             yield "No response returned from backend."
     except requests.exceptions.ConnectionError:
         yield "❌ **Backend API unreachable**. Please ensure the FastAPI server is running."
+    except requests.exceptions.ChunkedEncodingError:
+        if accumulated_response:
+            yield _rewrite_plot_markdown(accumulated_response)
+            return
+        try:
+            fallback_text = fallback_to_non_stream()
+            yield _rewrite_plot_markdown(fallback_text or "No response returned from backend.")
+        except Exception as fallback_exc:
+            yield f"❌ **System Error**: streaming ended early and fallback failed: {fallback_exc}"
     except Exception as exc:
         yield f"❌ **System Error**: {exc}"
 
@@ -351,6 +375,12 @@ def build_demo() -> gr.Blocks:
                 gr.ChatInterface(
                     fn=chat_with_api,
                     additional_inputs=[session_state],
+                    chatbot=gr.Chatbot(
+                        height=650,
+                        elem_id="portfolio-chatbot",
+                        latex_delimiters=LATEX_DELIMITERS,
+                        render_markdown=True,
+                    ),
                     textbox=gr.Textbox(
                         placeholder="Ask about historical risk, sectors, or CVaR optimization...",
                         container=False,

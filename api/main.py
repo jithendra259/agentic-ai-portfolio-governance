@@ -1,9 +1,64 @@
 import json
 import logging
 import shutil
+import socket
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+def _is_port_open(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex((host, port)) == 0
+
+
+def _port_owner(port: int) -> str:
+    command = (
+        "$conn = Get-NetTCPConnection -LocalPort "
+        f"{port} "
+        "-ErrorAction SilentlyContinue | "
+        "Where-Object { $_.State -eq 'Listen' } | Select-Object -First 1; "
+        "if ($conn) { "
+        "$proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue; "
+        "if ($proc) { Write-Output \"$($proc.ProcessName) (PID $($proc.Id))\" } "
+        "else { Write-Output \"PID $($conn.OwningProcess)\" } "
+        "}"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return ""
+
+    return result.stdout.strip()
+
+
+def _print_port_conflict(host: str, port: int) -> None:
+    owner = _port_owner(port)
+    owner_line = f"\nPort owner: {owner}" if owner else ""
+    print(
+        f"Backend API is already running or port is occupied at http://{host}:{port}.\n"
+        "Open http://127.0.0.1:8000/health to verify it, or stop the existing Python/uvicorn process before starting another."
+        f"{owner_line}"
+    )
+
+
+if __name__ == "__main__" and _is_port_open("127.0.0.1", 8000):
+    _print_port_conflict("127.0.0.1", 8000)
+    sys.exit(1)
+
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -23,8 +78,8 @@ from src.orchestrator.chatbot_orchestrator import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "outputs"
-LEGACY_OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "src" / "outputs"
+OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+LEGACY_OUTPUTS_DIR = PROJECT_ROOT / "src" / "outputs"
 
 
 def _sync_legacy_outputs() -> None:
@@ -198,6 +253,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     async def event_generator():
         accumulated_response = ""
         saw_tokens = False
+        suppressed_stream_tokens = False
+        final_sent = False
 
         try:
             logger.info("Streaming chat request for session_id=%s", request.session_id)
@@ -232,6 +289,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         if not is_leaking:
                             yield _stream_event({"type": "token", "content": text})
                         else:
+                            suppressed_stream_tokens = True
                             # Log the leak internally but don't show the user
                             if len(accumulated_response) % 100 == 0:
                                 logger.warning("Streaming Guard: Suppressing code leak in session %s", request.session_id)
@@ -245,15 +303,17 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
                     output = event.get("data", {}).get("output", {})
                     messages = output.get("messages", []) if isinstance(output, dict) else []
-                    if messages and not saw_tokens:
+                    if messages and (not saw_tokens or suppressed_stream_tokens):
                         final_text = _message_to_text(messages[-1])
                         if final_text:
                             accumulated_response = final_text
                             yield _stream_event({"type": "final", "content": final_text})
+                            suppressed_stream_tokens = False
+                            final_sent = True
 
-            if saw_tokens:
+            if saw_tokens and not suppressed_stream_tokens and not final_sent:
                 yield _stream_event({"type": "final", "content": accumulated_response})
-            elif not accumulated_response:
+            elif not accumulated_response and not final_sent:
                 yield _stream_event({"type": "final", "content": "Unable to generate a response for this request."})
 
         except Exception as exc:
@@ -271,4 +331,16 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("api.main:app", host="127.0.0.1", port=8000, reload=True)
+    host = "127.0.0.1"
+    port = 8000
+
+    if _is_port_open(host, port):
+        owner = _port_owner(port)
+        owner_line = f"\nPort owner: {owner}" if owner else ""
+        print(
+            f"Backend API is already running or port is occupied at http://{host}:{port}.\n"
+            "Open http://127.0.0.1:8000/health to verify it, or stop the existing Python/uvicorn process before starting another."
+            f"{owner_line}"
+        )
+    else:
+        uvicorn.run("api.main:app", host=host, port=port, reload=False)

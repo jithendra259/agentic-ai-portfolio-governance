@@ -68,6 +68,45 @@ class PriceSeriesToolTests(unittest.TestCase):
         self.assertIn("error", result)
         self.assertIn("tickers_missing", result)
 
+    def test_cache_keeps_per_ticker_dates_for_uneven_histories(self):
+        docs = [
+            {
+                "ticker": "AAPL",
+                "historical_prices": [
+                    {"Date": "2020-01-01", "Close": 100.0},
+                    {"Date": "2020-01-02", "Close": 101.0},
+                    {"Date": "2020-01-03", "Close": 102.0},
+                    {"Date": "2020-01-06", "Close": 103.0},
+                    {"Date": "2020-01-07", "Close": 104.0},
+                    {"Date": "2020-01-08", "Close": 105.0},
+                ],
+            },
+            {
+                "ticker": "MSFT",
+                "historical_prices": [
+                    {"Date": "2020-01-03", "Close": 51.0},
+                    {"Date": "2020-01-06", "Close": 52.0},
+                    {"Date": "2020-01-07", "Close": 53.0},
+                    {"Date": "2020-01-08", "Close": 54.0},
+                    {"Date": "2020-01-09", "Close": 55.0},
+                ],
+            },
+        ]
+
+        with patch("src.agents.price_series_tool._find_documents_with_retry", return_value=docs):
+            result = get_price_series_for_analysis.func(
+                tickers=["AAPL", "MSFT"],
+                start_date="2020-01-01",
+                end_date="2020-01-09",
+            )
+
+        cached = load_cached_analysis_dataset(result["analysis_cache_key"])
+        self.assertEqual(len(cached["prices"]["AAPL"]), 6)
+        self.assertEqual(len(cached["prices"]["MSFT"]), 5)
+        self.assertEqual(len(cached["price_dates_by_ticker"]["AAPL"]), 6)
+        self.assertEqual(len(cached["price_dates_by_ticker"]["MSFT"]), 5)
+        self.assertEqual(cached["price_dates"], ["2020-01-03", "2020-01-06", "2020-01-07", "2020-01-08"])
+
 
 if __name__ == "__main__":
     unittest.main()
