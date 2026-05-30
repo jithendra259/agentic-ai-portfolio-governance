@@ -5,6 +5,10 @@ import socket
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+
+print("=== MAIN.PY LOADED ===")
+print("PATH:", sys.executable)
+
 from pathlib import Path
 from typing import Any
 from dotenv import load_dotenv
@@ -76,7 +80,7 @@ from src.orchestrator.chatbot_orchestrator import (
     PRIMARY_OLLAMA_MODEL,
     portfolio_assistant,
 )
-from src.agents.custom_plot_tool import GLOBAL_PLOT_DATA
+
 
 
 logging.basicConfig(level=logging.INFO)
@@ -263,14 +267,22 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
 
     async def event_generator():
+        import uuid
+        msg_id = str(uuid.uuid4())
+        text_id = f"{msg_id}-text"
+        
+        yield _stream_event({"type": "start", "messageId": msg_id})
+        yield _stream_event({"type": "text-start", "id": text_id})
+
         accumulated_response = ""
         saw_tokens = False
         suppressed_stream_tokens = False
         final_sent = False
+        tool_runs = set()
+        tool_names_run = set()
 
         try:
             logger.info("Streaming chat request for session_id=%s", request.session_id)
-            yield _stream_event({"type": "status", "content": "Analyzing your request..."})
 
             async for event in portfolio_assistant.astream_events(
                 {"messages": [HumanMessage(content=request.user_message)]},
@@ -279,6 +291,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             ):
                 event_type = event.get("event", "")
                 event_name = event.get("name", "")
+                run_id = event.get("run_id", "")
 
                 if event_type == "on_chat_model_stream":
                     tags = event.get("tags", [])
@@ -291,7 +304,6 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         accumulated_response += text
                         
                         # STREAMING GUARD: If the AI is leaking code, stop sending tokens to the UI.
-                        # We wait for the final sanitized response instead.
                         _leak_markers = (
                             "```python", "import matplotlib", "plt.style.use", 
                             "pd.DataFrame", "plt.show(", "sns.set(", "import pandas"
@@ -299,18 +311,44 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         is_leaking = any(m in accumulated_response for m in _leak_markers)
                         
                         if not is_leaking:
-                            yield _stream_event({"type": "token", "content": text})
+                            yield _stream_event({"type": "text-delta", "id": text_id, "delta": text})
                         else:
                             suppressed_stream_tokens = True
-                            # Log the leak internally but don't show the user
                             if len(accumulated_response) % 100 == 0:
                                 logger.warning("Streaming Guard: Suppressing code leak in session %s", request.session_id)
 
                 elif event_type == "on_tool_start":
-                    yield _stream_event({"type": "status", "content": f"Running tool: {event_name}..."})
+                    # Filter out internal langgraph components
+                    if not event_name.startswith("_") and event_name != "LangGraph":
+                        tool_runs.add(run_id)
+                        tool_names_run.add(event_name)
+                        inputs = event.get("data", {}).get("input", {})
+                        yield _stream_event({
+                            "type": "tool-input-start", 
+                            "toolCallId": run_id, 
+                            "toolName": event_name, 
+                            "dynamic": True
+                        })
+                        yield _stream_event({
+                            "type": "tool-input-available", 
+                            "toolCallId": run_id, 
+                            "toolName": event_name, 
+                            "input": inputs,
+                            "dynamic": True
+                        })
 
                 elif event_type == "on_tool_end":
-                    yield _stream_event({"type": "status", "content": f"Finished tool: {event_name}."})
+                    if run_id in tool_runs:
+                        output = event.get("data", {}).get("output", "")
+                        out_str = str(output)
+                        # Truncate long outputs to avoid massive tool execution bubbles
+                        if len(out_str) > 200:
+                            out_str = out_str[:200] + "... [truncated]"
+                        yield _stream_event({
+                            "type": "tool-output-available", 
+                            "toolCallId": run_id, 
+                            "output": {"result": out_str}
+                        })
 
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
                     output = event.get("data", {}).get("output", {})
@@ -319,26 +357,49 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         final_text = _message_to_text(messages[-1])
                         if final_text:
                             accumulated_response = final_text
-                            yield _stream_event({"type": "final", "content": final_text})
+                            yield _stream_event({"type": "text-delta", "id": text_id, "delta": final_text})
                             suppressed_stream_tokens = False
                             final_sent = True
 
             if saw_tokens and not suppressed_stream_tokens and not final_sent:
-                yield _stream_event({"type": "final", "content": accumulated_response})
+                # Already yielded deltas, no need to yield final accumulated text again
+                pass
             elif not accumulated_response and not final_sent:
-                yield _stream_event({"type": "final", "content": "Unable to generate a response for this request."})
+                yield _stream_event({"type": "text-delta", "id": text_id, "delta": "Unable to generate a response for this request."})
+
+            yield _stream_event({"type": "text-end", "id": text_id})
+
+            # --- Emit interactive Plot events for all charts generated this request ---
+            from src.agents.plot_store import GLOBAL_PLOT_IDS
+            plot_ids = GLOBAL_PLOT_IDS.pop(request.session_id, None)
+
+            if plot_ids:
+                if isinstance(plot_ids, str):
+                    plot_ids = [plot_ids]
+                for p_id in plot_ids:
+                    yield _stream_event({"type": "data-plot", "plotId": p_id})
+            elif any(tool in tool_names_run for tool in ["generate_financial_plot", "plot_historical_prices"]):
+                # Tool ran but produced no spec (e.g. PNG-only types like network/heatmap)
+                pass
+
+            yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
 
         except Exception as exc:
             logger.exception("Backend streaming advisory request failed")
-            yield _stream_event(
-                {
-                    "type": "error",
-                    "content": f"Backend error while processing advisory request: {exc}",
-                }
-            )
+            yield _stream_event({"type": "text-delta", "id": text_id, "delta": f"\n\nError: {exc}"})
+            yield _stream_event({"type": "text-end", "id": text_id})
+            yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "error"})
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
+@app.get("/api/plots/{plot_id}")
+def get_plot_data(plot_id: str):
+    from src.memory.mongodb_memory_layer import MongoMemoryManager
+    mongo = MongoMemoryManager()
+    data = mongo.retrieve_plot(plot_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Plot not found or expired")
+    return data
 
 if __name__ == "__main__":
     import uvicorn

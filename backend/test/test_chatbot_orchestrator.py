@@ -85,7 +85,8 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
             ]
         }
 
-        response = self.module.finalize_governance_node(state)
+        config = {"configurable": {"thread_id": "test"}}
+        response = self.module.finalize_governance_node(state, config=config)
         content = response["messages"][0].content
 
         self.assertIn("Bank of America Corporation (BAC) is", content)

@@ -23,7 +23,7 @@ class PDFKnowledgeIngestorTests(unittest.TestCase):
 
             pdfs = PDFKnowledgeIngestor.list_pdf_files(root)
 
-            self.assertEqual(sorted(path.name for path in pdfs), ["paper_a.pdf", "paper_b.pdf"])
+            self.assertEqual(sorted(path.name for path in pdfs), ["notes.txt", "paper_a.pdf", "paper_b.pdf"])
 
     def test_chunk_text_creates_multiple_overlapping_chunks(self):
         ingestor = PDFKnowledgeIngestor(

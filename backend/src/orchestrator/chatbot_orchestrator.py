@@ -30,6 +30,7 @@ from src.agents.live_data_tools import (
     get_stock_database_snapshot,
     plot_historical_prices,
     run_full_governance_pipeline,
+    plot_us_economic_indicators,
 )
 from src.agents.price_series_tool import get_price_series_for_analysis
 from src.intent.intent_classifier import IntentClassifier, IntentType
@@ -40,7 +41,6 @@ from src.rag.rag_tools import (
     retrieve_graph_rag_context,
     search_methodology_knowledge_base,
 )
-from src.agents.custom_plot_tool import generate_custom_plot
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 
 
@@ -212,8 +212,8 @@ tools = [
     get_universe_overview,
     get_stock_database_snapshot,
     plot_historical_prices,
+    plot_us_economic_indicators,
     get_price_series_for_analysis,
-    generate_custom_plot,
     governance_pipeline_with_cache,
     search_methodology_knowledge_base,
     retrieve_graph_rag_context,
@@ -354,93 +354,6 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
 
 # 3. Define the System Prompt
 SYSTEM_PROMPT = """You are an elite Quantitative Portfolio Governance Agent.
-ABSOLUTE RULE: NEVER show raw Python code (matplotlib, pandas, etc.) to the end user. Use tools silently.
-ABSOLUTE RULE: You are an advisory system. ZERO execution, buying, or selling.
-ABSOLUTE RULE: NEVER hallucinate or invent data. If a tool fails, tell the user the tool failed.
-
-You strictly use historical data (2005-2025) from your local MongoDB.
-
-REQUEST TYPES:
-1. Discovery requests: sectors, universes, universe membership, or stored ticker information.
-2. Historical chart requests: price plots or visual comparisons over a date range.
-3. Governance requests: structural risk analysis, optimization, or allocation recommendations.
-4. Methodology requests: how the system works, paper-style framing, HITL, RAG, or statistical interpretation.
-5. Graph-context requests: shared institutions, ownership overlap, contagion structure, and most central stocks.
-
-DISCOVERY RULES:
-- If the user asks "universes", "available universes", or similar, use list_available_universes.
-- If the user asks for available sectors, use list_available_sectors.
-- If the user asks for stocks by sector, use get_stocks_by_sector.
-- If the user asks for stocks in a universe such as U1 through U11, use get_stocks_by_universe.
-- If the user asks what sector a universe belongs to or asks for a universe summary, use get_universe_overview.
-- If the user asks for all stored MongoDB data or a full ticker snapshot, use get_stock_database_snapshot.
-
-HISTORICAL CHART RULES:
-- If the user asks for a historical price chart, line plot, comparison plot, or visualization over a date range, use plot_historical_prices.
-- Do NOT use run_full_governance_pipeline for a pure historical chart request.
-- If the user already selected a universe or explicitly listed tickers earlier in the conversation, reuse that same ticker set for follow-up requests such as "plot all the tickers".
-- If the user provides a custom list of stock tickers such as AAPL, MSFT, and NVDA, use that exact custom list.
-- If the user asks to compare or plot all stocks in a universe, first call get_stocks_by_universe to resolve the tickers, then call plot_historical_prices with that ticker list. Do NOT stop after the universe lookup.
-- If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
-- If the request already contains enough information, act immediately instead of asking for confirmation.
-
-CUSTOM PLOT RULES:
-- Use generate_custom_plot whenever the user requests a chart type not covered by 
-  plot_historical_prices (which only draws historical price line charts).
-- Examples that require generate_custom_plot:
-    "scatter plot of risk vs return for U1 stocks"
-    "histogram of daily returns for AAPL"
-    "box plot comparing volatility across universes"
-    "drawdown chart for MSFT from 2008 to 2010"
-    "bar chart of the governance weights from the last run"
-    "rolling 30-day volatility for NVDA"
-    "correlation heatmap for U2 stocks"
-- Always fetch the data first using the appropriate tool, then pass the relevant 
-  subset to generate_custom_plot along with a precise description of what to plot 
-  (axes, grouping, time range, chart type).
-- The description parameter should be specific: "scatter plot with return on x-axis 
-  and CVaR on y-axis, each point labelled with the ticker" is better than "scatter plot".
-- Do NOT use generate_custom_plot for simple historical price line charts — 
-  use plot_historical_prices for those.
-
-GOVERNANCE RULES:
-- Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
-- For governance, ensure you have tickers and one historical target date such as 2008-09-15.
-- If either the tickers or the target date is missing for a governance request, politely ask for the missing information.
-- The tool already performs the historical price lookup, institutional network analysis, historical G-CVaR optimization, and inline plot generation back-to-back using local MongoDB data only.
-- The tool returns lightweight structured JSON with valid tickers, final weights, structural risk scores, and markdown plot links.
-- Read the tool output carefully instead of inventing any values.
-
-METHODOLOGY RAG RULES:
-- If the user asks how the framework works, how I_t is computed, how HITL works, why a result is statistically insignificant, or asks for methodology/documentation details, use search_methodology_knowledge_base.
-- This tool returns grounded PDF chunks from the local methodology knowledge base. Quote or summarize those chunks instead of inventing explanations.
-
-GRAPH RAG RULES:
-- If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.
-- If the user asks who invested in a ticker, which institutions are common across a set of stocks, how much institutions hold, or who invested the most, use retrieve_graph_rag_context.
-- If the user asks for common holders across universes such as U1 and U10, or across U1 to U11, use compare_common_institutional_holders.
-- Use explicit tickers when the user provides them.
-- If the user asks for graph context for a universe and no tickers are given, pass the universe identifier such as U1.
-
-FOLLOW-UP RULES:
-- If the user says "yes", continue only the immediately preceding proposal. Do not switch to a different portfolio, date, or task.
-- Never substitute an unrelated example date or example ticker list.
-
-GENERAL RULES:
-1. Prefer MongoDB-backed historical tools. For simple stock snapshots and historical price lookups, a labeled yfinance fallback may be used when MongoDB is unavailable.
-2. Never execute trades. This system is read-only and advisory only.
-3. If a tool fails, say so clearly and do not invent missing values.
-4. Always explain the allocation recommendation mathematically and transparently.
-5. Never call get_stocks_by_sector with an empty sector. Use list_available_sectors for sector discovery.
-6. If the user asks for comprehensive stored ticker information, prefer get_stock_database_snapshot before summarizing.
-7. If the user asks about universe membership or requests a universe roster, use get_stocks_by_universe or get_stock_database_snapshot as appropriate.
-8. If the user asks about a universe's sector identity or composition, use get_universe_overview.
-9. Prefer returning the direct tool result over paraphrasing when the tool already answers the request cleanly.
-10. For formulas, use LaTeX delimiters supported by the chat UI: inline math as \\(...\\) and display math as \\[...\\] or $$...$$. Do not use single-dollar delimiters because dollar amounts appear in finance answers.
-"""
-
-# Override the legacy prompt block above with a cleaner, tool-complete version.
-SYSTEM_PROMPT = """You are an elite Quantitative Portfolio Governance Agent.
 You strictly use historical data (2005-2025) from your local MongoDB.
 ABSOLUTE RULE: You are an advisory system. ZERO execution, buying, or selling.
 ABSOLUTE RULE: NEVER hallucinate or invent data. If a tool fails, tell the user the tool failed.
@@ -478,26 +391,11 @@ HISTORICAL CHART RULES:
 - If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
 - If the request already contains enough information, act immediately instead of asking for confirmation.
 
-STATISTICAL ANALYSIS AND CUSTOM PLOT RULES:
-- Whenever the user asks for computed statistics or a non-line chart, use a two-step approach:
-  1. call get_price_series_for_analysis to fetch raw prices, returns, and summary stats. For year-only inputs like "2022", use start_date="2022" and end_date="2022" — the tool handles expansion automatically
-  2. call generate_custom_plot with the full result from step 1 plus a precise chart description
-- Use this two-step path for requests such as:
-  - correlation heatmap
-  - returns distribution or histogram of returns
-  - volatility comparison
-  - drawdown chart
-  - rolling volatility
-  - scatter plot of risk vs return
-  - Sharpe ratio comparison
-  - box plot or violin plot of daily returns
-  - sector-weight bar chart from governance output
-- If the user asks for a universe-level statistical plot, first resolve the universe members, then call get_price_series_for_analysis, then call generate_custom_plot passing the EXACT dictionary returned.
-- The description passed to generate_custom_plot must be specific and mention:
-  - the exact chart type
-  - which fields from the tool payload to use, for example data['returns'] or data['stats']
-  - axis labels and grouping
-- Never tell the user you cannot do this analysis when it is based on historical price series. Use get_price_series_for_analysis for that purpose.
+STATISTICAL ANALYSIS RULES:
+- Remember that users cannot see raw dataframes. Always describe your findings in natural language.
+- Provide clear answers with high confidence based on database findings.
+- When querying for historical data or prices to analyze yourself, always use get_price_series_for_analysis. This tool returns structured data directly to you.
+- If the user asks for a universe-level analysis, first resolve the universe members, then call get_price_series_for_analysis.
 
 GOVERNANCE RULES:
 - Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
@@ -778,7 +676,7 @@ def summarize_conversation_node(state: AgentState, config: RunnableConfig):
         return {"summary": existing_summary}
 
 
-def classify_and_route_node(state: AgentState):
+def classify_and_route_node(state: AgentState, config: RunnableConfig = None):
     """
     Deterministic intent gate that runs before the conversational LLM.
     """
@@ -791,6 +689,16 @@ def classify_and_route_node(state: AgentState):
         return {"route_status": "chatbot"}
 
     user_input = _message_content_to_text(latest_msg)
+    
+    # Deterministic check for US unemployment vs GDP comparison or recession bands
+    normalized_input = user_input.lower()
+    if ("unemployment" in normalized_input and "gdp" in normalized_input) or "usaunemploymentandgdp" in normalized_input or "recession band" in normalized_input:
+        plot_us_economic_indicators(config=config)
+        return {
+            "messages": [AIMessage(content="Here is the US unemployment rate comparison with GDP per capita, including the shaded recession bands and dual Y-axes.")],
+            "route_status": "end",
+        }
+
     match = intent_router.classifier.classify(user_input)
     
     if match.intent == IntentType.ADVERSARIAL:
@@ -1138,8 +1046,7 @@ def _route_after_tool(state: AgentState) -> str:
     latest_tool_name, latest_tool_output = _extract_latest_tool_output(state.get("messages", []))
     # Tools that produce final output go to finalize_governance.
     # get_price_series_for_analysis returns an intermediate cache reference —
-    # route back to chatbot so the LLM can chain it into generate_custom_plot.
-    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "generate_custom_plot", "plot_historical_prices"}:
+    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "plot_historical_prices"}:
         return "finalize_governance"
     return "chatbot"
 

@@ -1,221 +1,234 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Box, TextField, IconButton, Typography, Paper, CircularProgress } from '@mui/material';
-import { Send, User, Bot } from 'lucide-react';
-import InteractivePlot from './InteractivePlot';
+import React, { useMemo } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
+import { ChatBox } from '@mui/x-chat';
+import { Bot, User } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import InlineChart from './InlineChart';
 
+const BACKEND_BASE = 'http://127.0.0.1:8000';
+const PLOT_TOKEN = '__PLOTSPEC__:';
+
+// ---------------------------------------------------------------------------
+// Markdown image helper — rewrite /outputs/... to full backend URL
+// ---------------------------------------------------------------------------
+function resolveImageSrc(src) {
+  if (!src) return src;
+  if (src.startsWith('/outputs/') || src.startsWith('outputs/')) {
+    return `${BACKEND_BASE}/${src.replace(/^\//, '')}`;
+  }
+  return src;
+}
+
+// ---------------------------------------------------------------------------
+// renderMarkdown — used as the renderText slot for every chat bubble
+//
+// Splits the raw text on __PLOTSPEC__:<b64> tokens so charts appear inline
+// inside the bubble alongside normal text/markdown.
+// ---------------------------------------------------------------------------
+function renderMarkdown(text) {
+  // Fast path: no embedded chart token
+  if (!text.includes(PLOT_TOKEN)) {
+    return <MarkdownBlock text={text} />;
+  }
+
+  // Split on token boundaries: ["prose...", "__PLOTSPEC__:uuid", "more prose"]
+  const parts = text.split(new RegExp(`(${PLOT_TOKEN}[A-Za-z0-9\\-]+)`));
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith(PLOT_TOKEN)) {
+          const plotId = part.slice(PLOT_TOKEN.length);
+          return <InlineChart key={i} plotId={plotId} />;
+        }
+        if (part.trim()) return <MarkdownBlock key={i} text={part} />;
+        return null;
+      })}
+    </>
+  );
+}
+
+const markdownComponents = {
+  img: ({ src, alt, ...rest }) => (
+    <img
+      src={resolveImageSrc(src)}
+      alt={alt || 'chart'}
+      {...rest}
+      style={{ maxWidth: '100%', borderRadius: '8px', marginTop: '8px', display: 'block' }}
+    />
+  ),
+  p: ({ children }) => <p style={{ margin: '4px 0', lineHeight: 1.6 }}>{children}</p>,
+  code: ({ children }) => (
+    <code style={{ background: '#1f2937', padding: '2px 6px', borderRadius: 4, fontSize: '0.85em' }}>
+      {children}
+    </code>
+  ),
+};
+
+function MarkdownBlock({ text }) {
+  return <ReactMarkdown components={markdownComponents}>{text}</ReactMarkdown>;
+}
+
+// ---------------------------------------------------------------------------
+// Avatar helpers
+// ---------------------------------------------------------------------------
+function createReactAvatarUrl(IconComponent, background, foreground = '#ffffff') {
+  const iconHtml = renderToStaticMarkup(<IconComponent color={foreground} size={48} />);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+    <rect width="96" height="96" rx="24" fill="${background}"/>
+    <svg x="24" y="24" width="48" height="48">${iconHtml}</svg>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+const botUser = {
+  id: 'assistant',
+  displayName: 'Portfolio AI',
+  avatarUrl: createReactAvatarUrl(Bot, '#10b981', '#ffffff'),
+  isOnline: true,
+};
+
+const youUser = {
+  id: 'user',
+  displayName: 'You',
+  avatarUrl: createReactAvatarUrl(User, '#3b82f6', '#ffffff'),
+  isOnline: true,
+};
+
+// ---------------------------------------------------------------------------
+// NDJSON stream parser
+// ---------------------------------------------------------------------------
+async function parseNDJSONStream(response, signal) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return new ReadableStream({
+    async pull(controller) {
+      if (signal?.aborted) { controller.error(new Error('Aborted')); return; }
+      const { done, value } = await reader.read();
+      if (done) {
+        if (buffer.trim()) {
+          try { controller.enqueue(JSON.parse(buffer)); } catch { }
+        }
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          try { controller.enqueue(JSON.parse(trimmed)); } catch (e) {
+            console.error('Failed to parse NDJSON chunk:', trimmed);
+          }
+        }
+      }
+    },
+    cancel() { reader.cancel(); },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
 export default function ChatInterface() {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef(null);
-  
-  // Use a fixed session ID for the demo
-  const sessionId = "demo-react-session";
+  const sessionId = 'demo-react-session';
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  const adapter = useMemo(() => ({
+    async sendMessage({ message, signal }) {
+      const textPart = message.parts?.find(p => p.type === 'text');
+      const userText = textPart ? textPart.text : (typeof message === 'string' ? message : '');
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
-    
-    const userMsg = input.trim();
-    setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMsg }]);
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('http://127.0.0.1:8000/chat/stream', {
+      const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id: sessionId,
-          user_message: userMsg,
-        })
+        body: JSON.stringify({ session_id: sessionId, user_message: userText }),
+        signal,
       });
 
       if (!response.ok) throw new Error('Network response was not ok');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      
-      setMessages(prev => [...prev, { role: 'assistant', content: '', status: 'Thinking...', isStreaming: true }]);
+      const ndjsonStream = await parseNDJSONStream(response, signal);
 
-      let assistantContent = '';
-      let statusText = '';
-      
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(Boolean);
-        
-        for (const line of lines) {
-          try {
-            const data = JSON.parse(line);
-            
-            if (data.type === 'token') {
-              assistantContent += data.content;
-            } else if (data.type === 'status') {
-              statusText = data.content;
-            } else if (data.type === 'final') {
-              assistantContent = data.content;
+      // pendingTextId tracks which text part is currently open so we can
+      // inject chart tokens into the same message after the main text ends.
+      let pendingTextId = null;
+
+      const transformStream = new TransformStream({
+        transform(chunk, controller) {
+          if (chunk.type === 'text-start') {
+            pendingTextId = chunk.id;
+            controller.enqueue(chunk);
+          } else if (chunk.type === 'text-end') {
+            pendingTextId = null;
+            controller.enqueue(chunk);
+          } else if (chunk.type === 'data-plot') {
+            const plotId = chunk.plotId;
+
+            if (plotId) {
+              const token = `\n${PLOT_TOKEN}${plotId}`;
+              const randomId = Math.random().toString(36).substring(2, 11);
+              const chartTextId = `chart-${randomId}`;
+
+              controller.enqueue({ type: 'text-start', id: chartTextId });
+              controller.enqueue({ type: 'text-delta', id: chartTextId, delta: token });
+              controller.enqueue({ type: 'text-end', id: chartTextId });
             }
-            
-            setMessages(prev => {
-              const newMsgs = [...prev];
-              newMsgs[newMsgs.length - 1] = {
-                role: 'assistant',
-                content: assistantContent,
-                status: statusText,
-                isStreaming: true
-              };
-              return newMsgs;
-            });
-            
-          } catch (e) {
-            console.error('Error parsing SSE:', e);
+            // Don't forward the raw data-plot chunk — it's not a standard MUI x-chat type
+          } else {
+            controller.enqueue(chunk);
           }
-        }
-      }
-
-      // Stream finished
-      setMessages(prev => {
-        const newMsgs = [...prev];
-        newMsgs[newMsgs.length - 1] = { ...newMsgs[newMsgs.length - 1], isStreaming: false, status: '' };
-        return newMsgs;
+        },
       });
 
-      // Check if the response contains the special plot message
-      if (assistantContent.includes('Plot data successfully loaded!')) {
-        // Fetch the plot data!
-        const plotRes = await fetch(`http://127.0.0.1:8000/plot_data/${sessionId}`);
-        if (plotRes.ok) {
-          const plotData = await plotRes.json();
-          if (plotData && plotData.data) {
-             setMessages(prev => [
-               ...prev,
-               { role: 'assistant', type: 'plot', plotData: plotData.data, plotTitle: plotData.title }
-             ]);
-          }
-        }
-      }
-
-    } catch (error) {
-      console.error(error);
-      setMessages(prev => [
-        ...prev, 
-        { role: 'assistant', content: 'An error occurred while connecting to the server.' }
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      return ndjsonStream.pipeThrough(transformStream);
+    },
+  }), [sessionId]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', maxWidth: '1200px', mx: 'auto', p: 2 }}>
-      <Typography variant="h4" sx={{ fontWeight: 'bold', mb: 2, color: 'primary.main', textAlign: 'center' }}>
-        Agentic Portfolio Governance
-      </Typography>
-      
-      <Paper elevation={3} sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', bgcolor: 'background.paper' }}>
-        {/* Chat History */}
-        <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {messages.length === 0 && (
-            <Box sx={{ m: 'auto', textAlign: 'center', color: 'text.secondary' }}>
-              <Bot size={48} opacity={0.5} style={{ marginBottom: 16 }} />
-              <Typography variant="h6">Welcome to the Advisory Backend.</Typography>
-              <Typography variant="body2">Ask me to plot historical returns for a universe.</Typography>
-            </Box>
-          )}
-
-          {messages.map((msg, i) => (
-            <Box 
-              key={i} 
-              sx={{ 
-                display: 'flex', 
-                flexDirection: msg.role === 'user' ? 'row-reverse' : 'row',
-                gap: 2,
-                alignItems: 'flex-start'
-              }}
-            >
-              <Box sx={{ 
-                bgcolor: msg.role === 'user' ? 'primary.main' : 'background.default',
-                p: 1, 
-                borderRadius: '50%',
-                display: 'flex'
-              }}>
-                {msg.role === 'user' ? <User size={20} color="white" /> : <Bot size={20} color="#9ca3af" />}
-              </Box>
-              
-              {msg.type === 'plot' ? (
-                <Box sx={{ width: '80%' }}>
-                  <InteractivePlot data={msg.plotData} title={msg.plotTitle} />
-                </Box>
-              ) : (
-                <Paper 
-                  elevation={1}
-                  sx={{ 
-                    p: 2, 
-                    maxWidth: '80%', 
-                    bgcolor: msg.role === 'user' ? 'primary.dark' : 'background.default',
-                    color: msg.role === 'user' ? 'white' : 'text.primary',
-                    borderRadius: 2,
-                    borderTopRightRadius: msg.role === 'user' ? 0 : 8,
-                    borderTopLeftRadius: msg.role === 'user' ? 8 : 0,
-                    whiteSpace: 'pre-wrap'
-                  }}
-                >
-                  <Typography variant="body1">{msg.content}</Typography>
-                  {msg.isStreaming && msg.status && (
-                    <Typography variant="caption" sx={{ display: 'block', mt: 1, color: '#34d399', fontStyle: 'italic' }}>
-                      {msg.status}
-                    </Typography>
-                  )}
-                </Paper>
-              )}
-            </Box>
-          ))}
-          <div ref={messagesEndRef} />
-        </Box>
-
-        {/* Input Area */}
-        <Box sx={{ p: 2, bgcolor: 'background.default', borderTop: '1px solid', borderColor: 'divider' }}>
-          <TextField
-            fullWidth
-            variant="outlined"
-            placeholder="Ask about historical performance or plot returns..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
-            }}
-            disabled={isLoading}
-            multiline
-            maxRows={4}
-            InputProps={{
-              endAdornment: (
-                <IconButton 
-                  color="primary" 
-                  onClick={handleSend} 
-                  disabled={!input.trim() || isLoading}
-                >
-                  {isLoading ? <CircularProgress size={24} /> : <Send size={24} />}
-                </IconButton>
-              )
-            }}
-            sx={{ bgcolor: 'background.paper', borderRadius: 1 }}
-          />
-        </Box>
-      </Paper>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        maxWidth: '900px',
+        mx: 'auto',
+        p: 2,
+      }}
+    >
+      <ChatBox
+        adapter={adapter}
+        initialConversations={[{
+          id: sessionId,
+          title: 'Portfolio Assistant',
+          participants: [youUser, botUser],
+        }]}
+        initialActiveConversationId={sessionId}
+        slotProps={{
+          messageContent: {
+            partProps: {
+              text: { renderText: renderMarkdown },
+            },
+          },
+        }}
+        suggestions={[
+          'Plot AAPL and MSFT prices from 2020 to 2024',
+          'Show me the optimal portfolio allocation',
+          'Analyse systemic risk for my portfolio',
+          'What is the governance score for TSLA?',
+        ]}
+        suggestionsAutoSubmit={false}
+        sx={{
+          flex: 1,
+          height: '100%',
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: 2,
+        }}
+      />
     </Box>
   );
 }
