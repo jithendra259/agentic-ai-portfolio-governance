@@ -12,6 +12,11 @@ from pathlib import Path
 import uuid
 
 from langchain_core.tools import tool
+from langchain_core.runnables import RunnableConfig
+from langchain_ollama import ChatOllama
+from src.agents.price_series_tool import load_cached_analysis_dataset
+
+GLOBAL_PLOT_DATA = {}
 from langchain_ollama import ChatOllama
 from src.agents.price_series_tool import load_cached_analysis_dataset
 
@@ -354,7 +359,7 @@ def _returns_to_frame(data: dict) -> pd.DataFrame:
     return np.log(prices / prices.shift(1)).replace([np.inf, -np.inf], np.nan).dropna(how="all")
 
 
-def _try_render_deterministic_return_plot(data: dict, description: str, output_path: str) -> str | None:
+def _try_store_interactive_plot_data(data: dict, description: str, session_id: str) -> str | None:
     if not _wants_close_return_plot(description):
         return None
 
@@ -362,48 +367,40 @@ def _try_render_deterministic_return_plot(data: dict, description: str, output_p
     if returns.empty:
         raise ValueError("Not enough clean close-return observations were available to plot.")
 
-    plt.style.use("dark_background")
-    plt.rcParams.update(
-        {
-            "figure.facecolor": "#0b1020",
-            "axes.facecolor": "#111827",
-            "axes.edgecolor": "#9ca3af",
-            "axes.labelcolor": "#e5e7eb",
-            "xtick.color": "#d1d5db",
-            "ytick.color": "#d1d5db",
-            "text.color": "#f3f4f6",
-        }
-    )
+    is_price = "price" in description.lower() or ("close" in description.lower() and "return" not in description.lower())
+    
+    if is_price:
+        try:
+            df = _prices_to_aligned_frame(data)
+            plot_title = "Daily Close Prices"
+        except:
+            df = returns
+            plot_title = "Daily Log Returns"
+    else:
+        df = returns
+        plot_title = "Daily Log Returns"
 
-    fig, ax = plt.subplots(figsize=(11, 6))
-    for ticker in returns.columns:
-        ax.plot(returns.index, returns[ticker], linewidth=1.4, label=ticker)
+    df.index = df.index.strftime("%Y-%m-%d")
+    long_df = df.reset_index().melt(id_vars="index", var_name="ticker", value_name="value")
+    long_df.rename(columns={"index": "date"}, inplace=True)
+    long_df["date"] = pd.to_datetime(long_df["date"])
 
-    start_date = returns.index.min().strftime("%Y-%m-%d")
-    end_date = returns.index.max().strftime("%Y-%m-%d")
-    ticker_text = ", ".join(map(str, returns.columns))
-    ax.axhline(0, color="#9ca3af", linewidth=0.9, alpha=0.7)
-    ax.set_title(f"Daily Close Returns: {ticker_text}", fontsize=14, fontweight="bold", pad=12)
-    ax.set_xlabel(f"{start_date} to {end_date}")
-    ax.set_ylabel("Daily log return")
-    ax.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
-    ax.grid(True, alpha=0.18, linewidth=0.7)
-    if len(returns.columns) > 1:
-        ax.legend(loc="best", frameon=False)
-    fig.autofmt_xdate(rotation=25)
+    GLOBAL_PLOT_DATA[session_id] = {
+        "title": f"{plot_title}: {', '.join(map(str, df.columns))}",
+        "data": long_df.to_dict(orient="records")
+    }
 
-    plt.savefig(output_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
-    plt.close("all")
     return (
-        f"Plot generated successfully: ![Daily close returns](/outputs/{Path(output_path).name})\n\n"
-        f"Computed from {len(returns)} daily close-return observations for {ticker_text}."
+        f"Plot data successfully loaded!\n\n"
+        f"Computed from {len(df)} daily observations for {', '.join(map(str, df.columns))}."
     )
 
 
 @tool
-def generate_custom_plot(data: dict, description: str) -> str:
+def generate_custom_plot(data: dict, description: str, config: RunnableConfig = None) -> str:
     """
     Generate any matplotlib/seaborn plot the user requests using AI-generated code.
+    IMPORTANT: For 'data', you MUST pass the EXACT dictionary returned by `get_price_series_for_analysis`. Do NOT create your own dictionary. It must contain the 'analysis_cache_key' field.
     """
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -436,10 +433,11 @@ def generate_custom_plot(data: dict, description: str) -> str:
         if deterministic_result is not None:
             return deterministic_result
 
-        deterministic_result = _try_render_deterministic_return_plot(
+        session_id = config.get("configurable", {}).get("thread_id", "default") if config else "default"
+        deterministic_result = _try_store_interactive_plot_data(
             resolved_data,
             description,
-            output_path,
+            session_id
         )
         if deterministic_result is not None:
             return deterministic_result

@@ -10,6 +10,7 @@ from langchain_ollama import ChatOllama
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from pymongo import MongoClient
 
@@ -44,8 +45,8 @@ from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_s
 
 
 logger = logging.getLogger(__name__)
-CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "mistral:latest").strip()
-CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "mistral:latest").strip()
+CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "qwen3-coder-next:cloud").strip()
+CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "qwen3:1.7b").strip()
 
 
 def _list_installed_ollama_models() -> list[str]:
@@ -91,18 +92,18 @@ INSTALLED_OLLAMA_MODELS = _list_installed_ollama_models()
 PRIMARY_OLLAMA_MODEL = _resolve_ollama_model(
     [
         CONFIGURED_PRIMARY_OLLAMA_MODEL,
+        "qwen3-coder-next:cloud",
+        "qwen3:1.7b",
         "mistral:latest",
-        "qwen2.5:7b",
-        "qwen2.5:latest",
     ],
     INSTALLED_OLLAMA_MODELS,
 )
 FALLBACK_OLLAMA_MODEL = _resolve_ollama_model(
     [
         CONFIGURED_FALLBACK_OLLAMA_MODEL,
+        "qwen3:1.7b",
+        "qwen3-coder-next:cloud",
         "mistral:latest",
-        "qwen2.5:7b",
-        "qwen2.5:latest",
         CONFIGURED_PRIMARY_OLLAMA_MODEL,
     ],
     [model for model in INSTALLED_OLLAMA_MODELS if model != PRIMARY_OLLAMA_MODEL],
@@ -291,20 +292,29 @@ def _model_not_found_message(model_name: str) -> AIMessage:
     )
 
 
-def _invoke_llm_with_fallback(messages: list[BaseMessage]) -> BaseMessage:
+def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfig = None) -> BaseMessage:
     """
     Primary LLM invocation wrapper with multi-stage recovery:
     1. Try Primary Model.
     2. If Memory/Crash occurs, retry Primary with AGGRESSIVE context trimming.
     3. If still fails, try Fallback Model.
     """
+    override_model = config.get("configurable", {}).get("override_model") if config else None
+    
+    if override_model:
+        active_llm = _build_llm_with_tools(override_model)
+        active_primary = override_model
+    else:
+        active_llm = llm_with_tools
+        active_primary = PRIMARY_OLLAMA_MODEL
+
     try:
-        return llm_with_tools.invoke(messages)
+        return active_llm.invoke(messages)
     except Exception as exc:
         if _is_ollama_model_not_found_error(exc):
-            logger.warning("Primary Ollama model %s is not installed. Error: %s", PRIMARY_OLLAMA_MODEL, exc)
+            logger.warning("Primary Ollama model %s is not installed. Error: %s", active_primary, exc)
             if fallback_llm_with_tools is None:
-                return _model_not_found_message(PRIMARY_OLLAMA_MODEL)
+                return _model_not_found_message(active_primary)
             try:
                 return fallback_llm_with_tools.invoke(messages)
             except Exception as fallback_exc:
@@ -325,7 +335,7 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage]) -> BaseMessage:
         try:
             # max_non_system=2 is extremely aggressive to guarantee a response
             emergency_messages = _trim_context(messages, max_non_system=2)
-            return llm_with_tools.invoke(emergency_messages)
+            return active_llm.invoke(emergency_messages)
         except Exception as retry_exc:
             if not _is_ollama_memory_error(retry_exc):
                 raise
@@ -482,7 +492,7 @@ STATISTICAL ANALYSIS AND CUSTOM PLOT RULES:
   - Sharpe ratio comparison
   - box plot or violin plot of daily returns
   - sector-weight bar chart from governance output
-- If the user asks for a universe-level statistical plot, first resolve the universe members, then call get_price_series_for_analysis, then call generate_custom_plot.
+- If the user asks for a universe-level statistical plot, first resolve the universe members, then call get_price_series_for_analysis, then call generate_custom_plot passing the EXACT dictionary returned.
 - The description passed to generate_custom_plot must be specific and mention:
   - the exact chart type
   - which fields from the tool payload to use, for example data['returns'] or data['stats']
@@ -566,7 +576,7 @@ def _trim_context(messages: list, max_non_system: int = _MAX_CONTEXT_MESSAGES) -
     return system_msgs + non_system
 
 
-def chatbot_node(state: AgentState):
+def chatbot_node(state: AgentState, config: RunnableConfig):
     """The main LLM brain that reads the chat and decides what to do."""
     messages = state["messages"]
 
@@ -642,7 +652,7 @@ def chatbot_node(state: AgentState):
         ))
 
     working_messages = _trim_context(working_messages)
-    response = _invoke_llm_with_fallback(working_messages)
+    response = _invoke_llm_with_fallback(working_messages, config)
 
     # RECTIFICATION: Strip conversational code leaks (```python ... ```)
     if hasattr(response, "content") and response.content:
@@ -716,7 +726,7 @@ def _get_global_activity_summary() -> str | None:
         return None
 
 
-def summarize_conversation_node(state: AgentState):
+def summarize_conversation_node(state: AgentState, config: RunnableConfig):
     """
     Compresses distant history into a running summary to manage the token budget.
     This enables 'infinite memory' by migrating older details to the 'summary' field.
@@ -749,7 +759,9 @@ def summarize_conversation_node(state: AgentState):
     try:
         # Use a deterministic call for summarization
         from langchain_ollama import ChatOllama
-        summarizer = ChatOllama(model=PRIMARY_OLLAMA_MODEL, temperature=0, num_predict=512)
+        override_model = config.get("configurable", {}).get("override_model") if config else None
+        active_model = override_model or PRIMARY_OLLAMA_MODEL
+        summarizer = ChatOllama(model=active_model, temperature=0, num_predict=512)
         response = summarizer.invoke(summarization_prompt)
         new_summary = (response.content if hasattr(response, "content") else str(response)).strip()
         
@@ -1039,7 +1051,7 @@ def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
     return "\n".join(lines)
 
 
-def finalize_governance_node(state: AgentState):
+def finalize_governance_node(state: AgentState, config: RunnableConfig):
     """Render governance JSON or return direct tool output for simpler linear tool flow."""
     messages = state["messages"]
     if not messages:
@@ -1099,7 +1111,9 @@ def finalize_governance_node(state: AgentState):
                     f"Please synthesise this into a clear, concise answer for the user."
                 )
                 from langchain_ollama import ChatOllama
-                synth_llm = ChatOllama(model=PRIMARY_OLLAMA_MODEL, temperature=0.2)
+                override_model = config.get("configurable", {}).get("override_model") if config else None
+                active_model = override_model or PRIMARY_OLLAMA_MODEL
+                synth_llm = ChatOllama(model=active_model, temperature=0.2)
                 synth_response = synth_llm.invoke(synthesis_prompt)
                 synthesised = (synth_response.content if hasattr(synth_response, "content") else str(synth_response)).strip()
                 if synthesised:

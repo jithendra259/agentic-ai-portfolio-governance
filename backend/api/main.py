@@ -7,6 +7,9 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from dotenv import load_dotenv
+
+load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -73,6 +76,7 @@ from src.orchestrator.chatbot_orchestrator import (
     PRIMARY_OLLAMA_MODEL,
     portfolio_assistant,
 )
+from src.agents.custom_plot_tool import GLOBAL_PLOT_DATA
 
 
 logging.basicConfig(level=logging.INFO)
@@ -133,6 +137,7 @@ app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
 class ChatRequest(BaseModel):
     session_id: str
     user_message: str
+    model: str | None = None
 
 
 class ChatResponse(BaseModel):
@@ -220,7 +225,7 @@ def chat(request: ChatRequest) -> ChatResponse:
 
         result = portfolio_assistant.invoke(
             {"messages": [HumanMessage(content=request.user_message)]},
-            config={"configurable": {"thread_id": request.session_id}},
+            config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
         )
 
         messages = result.get("messages", [])
@@ -240,6 +245,13 @@ def chat(request: ChatRequest) -> ChatResponse:
             status_code=500,
             detail=f"Backend error while processing advisory request: {exc}",
         ) from exc
+
+
+@app.get("/plot_data/{session_id}")
+def get_plot_data(session_id: str):
+    if session_id in GLOBAL_PLOT_DATA:
+        return GLOBAL_PLOT_DATA[session_id]
+    return {}
 
 
 @app.post("/chat/stream")
@@ -262,7 +274,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
             async for event in portfolio_assistant.astream_events(
                 {"messages": [HumanMessage(content=request.user_message)]},
-                config={"configurable": {"thread_id": request.session_id}},
+                config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
                 version="v2",
             ):
                 event_type = event.get("event", "")
