@@ -52,7 +52,9 @@ export default function InteractivePlot({ data, title }) {
     color: COLORS[index % COLORS.length],
     showMark: false,
     connectNulls: true, // Interpolate over missing data gracefully
+    curve: 'monotoneX', // Smooth financial curves
     valueFormatter: formatValue,
+    highlightScope: { highlight: 'series', fade: 'global' },
   }));
 
   return (
@@ -95,12 +97,15 @@ export default function InteractivePlot({ data, title }) {
           series={seriesConfig}
           margin={{ top: 20, right: 30, left: 50, bottom: 30 }}
           grid={{ horizontal: true }}
+          experimentalFeatures={{ enablePositionBasedPointerInteraction: true }}
           slotProps={{
             legend: {
               labelStyle: { fill: '#e5e7eb' },
             }
           }}
-          experimentalFeatures={{ enablePositionBasedPointerInteraction: true }}
+          sx={{
+            '& .MuiChartsGrid-line': { stroke: '#374151', strokeDasharray: '4 4' },
+          }}
         />
       </Box>
     </Paper>

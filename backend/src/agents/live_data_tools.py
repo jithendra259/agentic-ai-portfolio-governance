@@ -155,7 +155,7 @@ def _downsample_df(df: pd.DataFrame, target_points: int = 500) -> pd.DataFrame:
     return downsampled
 
 
-def _extract_price_frame(doc: dict, downsample: bool = False) -> pd.DataFrame:
+def _extract_price_frame(doc: dict, downsample: bool = False, keep_ohlcv: bool = False) -> pd.DataFrame:
     historical_prices = doc.get("historical_prices", [])
     if not historical_prices:
         return pd.DataFrame()
@@ -170,10 +170,23 @@ def _extract_price_frame(doc: dict, downsample: bool = False) -> pd.DataFrame:
     if date_col is None or close_col is None:
         return pd.DataFrame()
 
-    df = df[[date_col, close_col]].rename(columns={date_col: "Date", close_col: "Close"})
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
-    df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
+    if keep_ohlcv:
+        cols_to_keep = [date_col, close_col]
+        for col in ["Open", "open", "High", "high", "Low", "low", "Volume", "volume"]:
+            if col in df.columns:
+                cols_to_keep.append(col)
+        df = df[cols_to_keep].rename(columns={date_col: "Date", close_col: "Close"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        for col in ["Open", "open", "High", "high", "Low", "low", "Volume", "volume"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
+    else:
+        df = df[[date_col, close_col]].rename(columns={date_col: "Date", close_col: "Close"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
+        df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
     
     if downsample:
         df = _downsample_df(df)
@@ -436,25 +449,67 @@ def _build_optimization_payload(
     lambda_t = float(lambda_max / (1.0 + np.exp(-k * (instability_index - i_thresh))))
     graph_penalty = lambda_t * (c_vector @ weights)
 
+    max_weight_limit = max(0.15, 1.2 / num_assets)
     constraints = [
         cp.sum(weights) == 1,
         weights >= 0,
-        weights <= 0.15,
+        weights <= max_weight_limit,
         tail_excess >= losses - alpha,
         mean_daily_returns @ weights >= target_daily_return,
     ]
 
     problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
 
+    solved = False
     for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
         try:
             problem.solve(solver=solver, verbose=False)
             if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+                solved = True
                 break
         except Exception:
             continue
 
-    if problem.status not in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} or weights.value is None:
+    # Fallback 1: Relax return constraint to minimum daily return
+    if not solved or weights.value is None:
+        min_daily_return = float(mean_daily_returns.min())
+        constraints = [
+            cp.sum(weights) == 1,
+            weights >= 0,
+            weights <= max_weight_limit,
+            tail_excess >= losses - alpha,
+            mean_daily_returns @ weights >= min_daily_return,
+        ]
+        problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
+        for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
+            try:
+                problem.solve(solver=solver, verbose=False)
+                if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+                    solved = True
+                    break
+            except Exception:
+                continue
+
+    # Fallback 2: Remove upper bound on weights
+    if not solved or weights.value is None:
+        min_daily_return = float(mean_daily_returns.min())
+        constraints = [
+            cp.sum(weights) == 1,
+            weights >= 0,
+            tail_excess >= losses - alpha,
+            mean_daily_returns @ weights >= min_daily_return,
+        ]
+        problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
+        for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
+            try:
+                problem.solve(solver=solver, verbose=False)
+                if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
+                    solved = True
+                    break
+            except Exception:
+                continue
+
+    if not solved or weights.value is None:
         return {
             "status": "error",
             "message": (
@@ -523,7 +578,7 @@ def _generate_inline_governance_plots(
     generated_plots = []
     plot_requests = []
     risk_scores = network_payload.get("scores", {}) if isinstance(network_payload, dict) else {}
-    holder_edges = network_payload.get("holder_edges", []) if isinstance(network_payload, dict) else []
+    holder_edges = network_payload.get("holder_edges", []) if isinstance(network_payload, dict) else {}
 
     if weights:
         plot_requests.append(
@@ -548,10 +603,14 @@ def _generate_inline_governance_plots(
 
     for request in plot_requests:
         try:
-            invoke_input = dict(request)
-            if config:
-                invoke_input["config"] = config
-            plot_output = generate_financial_plot.invoke(invoke_input)
+            plot_output = generate_financial_plot.invoke(
+                {
+                    "data": request["data"],
+                    "plot_type": request["plot_type"],
+                    "title": request["title"],
+                },
+                config=config,
+            )
         except Exception as exc:
             logger.warning("Unable to generate %s plot inline: %s", request["plot_type"], exc)
             continue
@@ -1340,11 +1399,15 @@ def plot_historical_prices(
         series = [
             {
                 "name": ticker,
+                "label": ticker,
                 "color": PALETTE[i % len(PALETTE)],
                 "data": [
                     {"x": row["date"], "y": row["close"]}
                     for row in rows
                 ],
+                "showMark": False,
+                "connectNulls": True,
+                "highlightScope": {"highlight": "series", "fade": "global"},
             }
             for i, (ticker, rows) in enumerate(included.items())
         ]
@@ -1355,6 +1418,11 @@ def plot_historical_prices(
             "x_type": "time",
             "y_label": "Close Price (USD)",
             "series": series,
+            # ── MUI X Line Chart features (backend-decided) ──
+            "grid": {"horizontal": True},
+            "curve": "monotoneX",
+            "highlightScope": {"highlight": "series", "fade": "global"},
+            "experimentalFeatures": {"enablePositionBasedPointerInteraction": True},
         }
 
         import uuid
@@ -2059,6 +2127,7 @@ def run_full_governance_pipeline(
     tickers: list[str],
     target_date: str,
     risk_tolerance: str = "moderate",
+    config: RunnableConfig = None,
 ) -> str:
     """
     Run the full deterministic governance pipeline against local MongoDB only:
@@ -2154,6 +2223,7 @@ def run_full_governance_pipeline(
                 target_date=target_date,
                 weights={},
                 network_payload=network_payload,
+                config=config,
             )
             return json.dumps(
                 _build_lightweight_governance_payload(
@@ -2184,6 +2254,7 @@ def run_full_governance_pipeline(
             target_date=target_date,
             weights=optimization_payload.get("weights", {}) if optimization_succeeded else {},
             network_payload=network_payload,
+            config=config,
         )
 
         if dropped_tickers:

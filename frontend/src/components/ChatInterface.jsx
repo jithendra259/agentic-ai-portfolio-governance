@@ -5,6 +5,9 @@ import Typography from '@mui/material/Typography';
 import { ChatBox } from '@mui/x-chat';
 import { Bot, User } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import InlineChart from './InlineChart';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
@@ -22,12 +25,25 @@ function resolveImageSrc(src) {
 }
 
 // ---------------------------------------------------------------------------
+// Preprocess LaTeX delimiters before ReactMarkdown parsing
+// remark-math expects $$ and $ but LLMs often output \[ and \(
+// ---------------------------------------------------------------------------
+function preprocessLaTeX(text) {
+  if (!text) return text;
+  return text
+    .replace(/\\\[([\s\S]*?)\\\]/g, '$$$$$1$$$$')
+    .replace(/\\\(([\s\S]*?)\\\)/g, '$$$1$$');
+}
+
+// ---------------------------------------------------------------------------
 // renderMarkdown — used as the renderText slot for every chat bubble
 //
 // Splits the raw text on __PLOTSPEC__:<b64> tokens so charts appear inline
 // inside the bubble alongside normal text/markdown.
 // ---------------------------------------------------------------------------
-function renderMarkdown(text) {
+function renderMarkdown(rawText) {
+  const text = preprocessLaTeX(rawText);
+
   // Fast path: no embedded chart token
   if (!text.includes(PLOT_TOKEN)) {
     return <MarkdownBlock text={text} />;
@@ -67,7 +83,15 @@ const markdownComponents = {
 };
 
 function MarkdownBlock({ text }) {
-  return <ReactMarkdown components={markdownComponents}>{text}</ReactMarkdown>;
+  return (
+    <ReactMarkdown 
+      components={markdownComponents}
+      remarkPlugins={[remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+    >
+      {text}
+    </ReactMarkdown>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -194,9 +218,7 @@ export default function ChatInterface() {
         display: 'flex',
         flexDirection: 'column',
         height: '100vh',
-        maxWidth: '900px',
-        mx: 'auto',
-        p: 2,
+        width: '100vw',
       }}
     >
       <ChatBox
@@ -213,6 +235,9 @@ export default function ChatInterface() {
               text: { renderText: renderMarkdown },
             },
           },
+          composerInput: {
+            sx: { color: '#ffffff' }
+          }
         }}
         suggestions={[
           'Plot AAPL and MSFT prices from 2020 to 2024',

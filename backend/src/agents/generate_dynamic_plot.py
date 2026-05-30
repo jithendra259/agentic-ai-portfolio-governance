@@ -17,7 +17,7 @@ from src.agents.plot_store import GLOBAL_PLOT_IDS
 
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "outputs"
-SUPPORTED_PLOTS = {"heatmap", "pie", "line", "bar", "network"}
+SUPPORTED_PLOTS = {"heatmap", "pie", "line", "bar", "network", "scatter", "sparkline", "sankey", "candlestick"}
 
 # ---------------------------------------------------------------------------
 # Palette used by the frontend InlineChart component (must match COLORS in
@@ -126,12 +126,21 @@ def _build_line_spec(data: dict, title: str) -> dict:
       {"price_history": {ticker: [{date, close}, ...], ...}}
       {"series": {name: [{date, value}, ...], ...}}
       {name: [{date, close}, ...], ...}          (bare dict)
+
+    The returned PlotSpec can include all MUI X Charts line features.
+    The backend decides which features to enable; the frontend reads them.
+    All feature fields are optional for backward compatibility.
     """
+    # ── Extract the raw time-series mapping ──
     raw = data.get("price_history") or data.get("series") or data
     if not isinstance(raw, dict) or not raw:
         raise ValueError("Line chart data must contain a price_history or series mapping.")
 
+    # ── Per-series feature overrides passed from the tool caller ──
+    series_overrides = data.get("series_config", {})  # {name: {area, curve, …}}
+
     series = []
+    total_points = 0
     for i, (name, rows) in enumerate(raw.items()):
         if isinstance(rows, dict):
             rows = [{"date": k, "close": v} for k, v in rows.items()]
@@ -151,19 +160,128 @@ def _build_line_spec(data: dict, title: str) -> dict:
             {"x": row[date_col].strftime("%Y-%m-%d"), "y": round(float(row[val_col]), 6)}
             for _, row in frame.iterrows()
         ]
-        series.append({"name": str(name).upper(), "color": PALETTE[i % len(PALETTE)], "data": pts})
+        total_points += len(pts)
+
+        # Build per-series entry with all MUI X line chart features
+        upper_name = str(name).upper()
+        overrides = series_overrides.get(name, series_overrides.get(upper_name, {}))
+
+        entry = {
+            "name": upper_name,
+            "label": overrides.get("label", upper_name),
+            "color": overrides.get("color", PALETTE[i % len(PALETTE)]),
+            "data": pts,
+        }
+
+        # ── Area fill ──
+        if overrides.get("area") is not None:
+            entry["area"] = bool(overrides["area"])
+        # ── Area baseline ──
+        if "baseline" in overrides:
+            entry["baseline"] = overrides["baseline"]  # 'min', 'max', or number
+        # ── Stacking ──
+        if "stack" in overrides:
+            entry["stack"] = overrides["stack"]
+        if "stackOffset" in overrides:
+            entry["stackOffset"] = overrides["stackOffset"]
+        # ── Curve interpolation ──
+        if "curve" in overrides:
+            entry["curve"] = overrides["curve"]
+        # ── Marks ──
+        if overrides.get("showMark") is not None:
+            entry["showMark"] = bool(overrides["showMark"])
+        if "shape" in overrides:
+            entry["shape"] = overrides["shape"]
+        # ── Connect nulls ──
+        if overrides.get("connectNulls") is not None:
+            entry["connectNulls"] = bool(overrides["connectNulls"])
+        # ── Highlight scope ──
+        if "highlightScope" in overrides:
+            entry["highlightScope"] = overrides["highlightScope"]
+        # ── Disable highlight ──
+        if overrides.get("disableHighlight") is not None:
+            entry["disableHighlight"] = bool(overrides["disableHighlight"])
+        # ── Value format ──
+        if "value_format" in overrides:
+            entry["value_format"] = overrides["value_format"]
+        # ── Y-axis binding ──
+        if "yAxisId" in overrides:
+            entry["yAxisId"] = overrides["yAxisId"]
+
+        series.append(entry)
 
     if not series:
         raise ValueError("No valid series found for line chart.")
 
-    return {
+    # ── Build the PlotSpec with all backend-decided features ──
+    spec = {
         "plot_type": "line",
         "title": title,
-        "x_label": "Date",
-        "x_type": "time",
-        "y_label": "Price",
+        "x_label": data.get("x_label", "Date"),
+        "x_type": data.get("x_type", "time"),
+        "y_label": data.get("y_label", "Price"),
         "series": series,
     }
+
+    # ── Grid (default: horizontal lines for readability) ──
+    spec["grid"] = data.get("grid", {"horizontal": True})
+
+    # ── Global curve interpolation (smoother lines for financial data) ──
+    if "curve" in data:
+        spec["curve"] = data["curve"]
+    else:
+        spec["curve"] = "monotoneX"
+
+    # ── Skip animation (useful for large datasets or SSR) ──
+    if data.get("skipAnimation") is not None:
+        spec["skipAnimation"] = bool(data["skipAnimation"])
+
+    # ── Global highlight scope ──
+    if "highlightScope" in data:
+        spec["highlightScope"] = data["highlightScope"]
+    else:
+        # Default: highlight the hovered series, fade the rest
+        spec["highlightScope"] = {"highlight": "series", "fade": "global"}
+
+    # ── Experimental features (position-based pointer interaction) ──
+    if "experimentalFeatures" in data:
+        spec["experimentalFeatures"] = data["experimentalFeatures"]
+    else:
+        spec["experimentalFeatures"] = {"enablePositionBasedPointerInteraction": True}
+
+    # ── Y-axis format ──
+    if "y_format" in data:
+        spec["y_format"] = data["y_format"]
+
+    # ── Multi-axis support ──
+    if "yAxis" in data and isinstance(data["yAxis"], list):
+        y_axes = []
+        for axis in data["yAxis"]:
+            ax = {"id": axis.get("id", "default-y-axis")}
+            if "label" in axis:
+                ax["label"] = axis["label"]
+            if "position" in axis:
+                ax["position"] = axis["position"]
+            if "value_format" in axis:
+                ax["value_format"] = axis["value_format"]
+            if "width" in axis:
+                ax["width"] = axis["width"]
+            # ── Y-axis colorMap ──
+            if "colorMap" in axis:
+                ax["colorMap"] = axis["colorMap"]
+            # ── Y-axis domainLimit ──
+            ax["domainLimit"] = axis.get("domainLimit", "nice")
+            y_axes.append(ax)
+        spec["yAxis"] = y_axes
+
+    # ── Recession bands overlay ──
+    if "recessions" in data:
+        spec["recessions"] = data["recessions"]
+
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
 
 
 def _build_bar_spec(data: dict, title: str) -> dict:
@@ -174,25 +292,129 @@ def _build_bar_spec(data: dict, title: str) -> dict:
       {"scores": {ticker: value, ...}}
       {"risk_scores": {ticker: value, ...}}
       {ticker: value, ...}                       (bare dict of floats)
+      {"categories": [...], "series": [{"name": ..., "data": [...]}, ...]}
+
+    The returned PlotSpec can include all MUI X Charts bar features.
+    The backend decides which features to enable; the frontend reads them.
+    All feature fields are optional for backward compatibility.
     """
-    raw = data.get("scores") or data.get("risk_scores") or data
-    if not isinstance(raw, dict) or not raw:
-        raise ValueError("Bar chart data must contain a scores or risk_scores mapping.")
+    # ── Detect multi-series shape ──
+    if "categories" in data and "series" in data and isinstance(data["series"], list):
+        categories = data["categories"]
+        series = []
+        series_overrides = data.get("series_config", {})
+        for i, s in enumerate(data["series"]):
+            name = s.get("name", f"Series {i+1}")
+            overrides = series_overrides.get(name, {})
+            entry = {
+                "name": name,
+                "label": overrides.get("label", s.get("label", name)),
+                "color": overrides.get("color", s.get("color", PALETTE[i % len(PALETTE)])),
+                "data": [{"x": cat, "y": val} for cat, val in zip(categories, s.get("data", []))],
+            }
+            # ── Stacking ──
+            if s.get("stack") or overrides.get("stack"):
+                entry["stack"] = overrides.get("stack", s.get("stack"))
+            if s.get("stackOffset") or overrides.get("stackOffset"):
+                entry["stackOffset"] = overrides.get("stackOffset", s.get("stackOffset"))
+            # ── Bar labels ──
+            if s.get("barLabel") is not None or overrides.get("barLabel") is not None:
+                entry["barLabel"] = overrides.get("barLabel", s.get("barLabel"))
+            if s.get("barLabelPlacement") or overrides.get("barLabelPlacement"):
+                entry["barLabelPlacement"] = overrides.get("barLabelPlacement", s.get("barLabelPlacement"))
+            # ── Min bar size ──
+            if s.get("minBarSize") is not None or overrides.get("minBarSize") is not None:
+                entry["minBarSize"] = overrides.get("minBarSize", s.get("minBarSize"))
+            # ── Highlight scope ──
+            if "highlightScope" in overrides:
+                entry["highlightScope"] = overrides["highlightScope"]
+            elif "highlightScope" in s:
+                entry["highlightScope"] = s["highlightScope"]
+            series.append(entry)
+    else:
+        # ── Single-series shape: scores dict ──
+        raw = data.get("scores") or data.get("risk_scores") or data
+        # Filter out known non-data keys
+        skip_keys = {
+            "plot_type", "title", "config", "layout", "borderRadius", "grid",
+            "skipAnimation", "highlightScope", "categoryGapRatio", "barGapRatio",
+            "x_label", "y_label", "y_format", "xAxis", "yAxis", "series_config",
+        }
+        if not isinstance(raw, dict) or not raw:
+            raise ValueError("Bar chart data must contain a scores or risk_scores mapping.")
 
-    items = [(str(k), float(v)) for k, v in raw.items() if v is not None]
-    if not items:
-        raise ValueError("Bar chart scores are empty.")
-    items.sort(key=lambda t: t[1], reverse=True)
+        items = []
+        for k, v in raw.items():
+            if k in skip_keys:
+                continue
+            try:
+                items.append((str(k), float(v)))
+            except (TypeError, ValueError):
+                continue
+        if not items:
+            raise ValueError("Bar chart scores are empty.")
+        items.sort(key=lambda t: t[1], reverse=True)
 
-    pts = [{"x": k, "y": round(v, 6)} for k, v in items]
-    return {
+        pts = [{"x": k, "y": round(v, 6)} for k, v in items]
+        series = [{"name": "Score", "label": "Score", "color": PALETTE[0], "data": pts}]
+
+    if not series:
+        raise ValueError("No valid series found for bar chart.")
+
+    # ── Build the PlotSpec with all backend-decided features ──
+    spec = {
         "plot_type": "bar",
         "title": title,
-        "x_label": "Ticker",
-        "x_type": "band",
-        "y_label": "Score",
-        "series": [{"name": "Score", "color": PALETTE[0], "data": pts}],
+        "x_label": data.get("x_label", "Category"),
+        "x_type": data.get("x_type", "band"),
+        "y_label": data.get("y_label", "Value"),
+        "series": series,
     }
+
+    # ── Layout: vertical (default) or horizontal ──
+    if "layout" in data:
+        spec["layout"] = data["layout"]
+
+    # ── Border radius (rounded bar corners, default 4 for polished look) ──
+    spec["borderRadius"] = data.get("borderRadius", 4)
+
+    # ── Grid (default: horizontal lines for readability) ──
+    spec["grid"] = data.get("grid", {"horizontal": True})
+
+    # ── Category gap ratio ──
+    if "categoryGapRatio" in data:
+        spec["categoryGapRatio"] = data["categoryGapRatio"]
+
+    # ── Bar gap ratio ──
+    if "barGapRatio" in data:
+        spec["barGapRatio"] = data["barGapRatio"]
+
+    # ── Skip animation ──
+    if data.get("skipAnimation") is not None:
+        spec["skipAnimation"] = bool(data["skipAnimation"])
+
+    # ── Global highlight scope ──
+    if "highlightScope" in data:
+        spec["highlightScope"] = data["highlightScope"]
+    else:
+        spec["highlightScope"] = {"highlight": "item", "fade": "global"}
+
+    # ── Y-axis format ──
+    if "y_format" in data:
+        spec["y_format"] = data["y_format"]
+
+    # ── X-axis config (colorMap, tickPlacement, tickLabelPlacement) ──
+    if "xAxis" in data and isinstance(data["xAxis"], list):
+        spec["xAxis"] = data["xAxis"]
+
+    # ── Y-axis config (colorMap, width, label) ──
+    if "yAxis" in data and isinstance(data["yAxis"], list):
+        spec["yAxis"] = data["yAxis"]
+
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
 
 
 def _build_pie_spec(data: dict, title: str) -> dict:
@@ -200,28 +422,485 @@ def _build_pie_spec(data: dict, title: str) -> dict:
     Build a PlotSpec for a pie / donut chart.
 
     Accepted input shapes:
-      {"weights": {label: weight, ...}}
-      {"optimal_weights": {label: weight, ...}}
-      {label: weight, ...}                       (bare dict of floats)
+      {"series": [{"name": ..., "data": [{"x": ..., "y": ...}], ...}]} (multi-series/nested)
+      {"weights": {label: weight, ...}}                                (single-series)
+      {"optimal_weights": {label: weight, ...}}                        (single-series)
+      {label: weight, ...}                                             (bare dict of floats)
     """
-    raw = data.get("weights") or data.get("optimal_weights") or data
-    if not isinstance(raw, dict) or not raw:
-        raise ValueError("Pie chart data must contain a weights mapping.")
+    series_list = []
+    
+    # 1. Multi-series structure
+    if "series" in data and isinstance(data["series"], list):
+        for i, s in enumerate(data["series"]):
+            name = s.get("name", f"Series {i+1}")
+            
+            raw_data = s.get("data", [])
+            pts = []
+            for j, pt in enumerate(raw_data):
+                if not isinstance(pt, dict):
+                    continue
+                # Normalize point fields: id/x for label, value/y for numeric value
+                id_val = pt.get("id") or pt.get("x") or f"slice-{j}"
+                val_val = pt.get("value") if pt.get("value") is not None else pt.get("y", 0.0)
+                
+                pt_entry = {
+                    "id": id_val,
+                    "value": float(val_val),
+                }
+                if "color" in pt:
+                    pt_entry["color"] = pt["color"]
+                if "label" in pt:
+                    pt_entry["label"] = pt["label"]
+                if "labelMarkType" in pt:
+                    pt_entry["labelMarkType"] = pt["labelMarkType"]
+                pts.append(pt_entry)
+            
+            # Sort data values if requested
+            sorting = s.get("sorting", "none")
+            if sorting == "asc":
+                pts.sort(key=lambda x: x["value"])
+            elif sorting == "desc":
+                pts.sort(key=lambda x: x["value"], reverse=True)
 
-    items = [(str(k), float(v)) for k, v in raw.items() if v and float(v) > 0]
-    if not items:
-        raise ValueError("Pie chart weights are empty after filtering non-positive values.")
-    items.sort(key=lambda t: t[1], reverse=True)
-
-    pts = [
-        {"x": k, "y": round(v, 6), "color": PALETTE[i % len(PALETTE)]}
-        for i, (k, v) in enumerate(items)
-    ]
-    return {
+            series_entry = {
+                "name": name,
+                "data": pts
+            }
+            
+            # Forward all valid pie series properties
+            props = [
+                "innerRadius", "outerRadius", "paddingAngle", "cornerRadius",
+                "startAngle", "endAngle", "cx", "cy", "arcLabel", "arcLabelMinAngle",
+                "arcLabelRadius", "highlightScope", "faded", "highlighted",
+                "valueFormatter", "sorting"
+            ]
+            for prop in props:
+                if prop in s:
+                    series_entry[prop] = s[prop]
+            
+            series_list.append(series_entry)
+            
+    # 2. Single-series structure (legacy weights / optimal_weights / bare dict)
+    else:
+        raw = data.get("weights") or data.get("optimal_weights") or data
+        skip_keys = {
+            "plot_type", "title", "config", "series_config", "innerRadius", "outerRadius",
+            "paddingAngle", "cornerRadius", "startAngle", "endAngle", "cx", "cy",
+            "arcLabel", "arcLabelMinAngle", "arcLabelRadius", "highlightScope",
+            "faded", "highlighted", "sorting", "skipAnimation", "hideLegend", "colors",
+        }
+        
+        if not isinstance(raw, dict):
+            raise ValueError("Pie chart data must contain a weights mapping or series list.")
+            
+        items = []
+        for k, v in raw.items():
+            if k in skip_keys:
+                continue
+            try:
+                items.append((str(k), float(v)))
+            except (TypeError, ValueError):
+                continue
+                
+        if not items:
+            raise ValueError("Pie chart weights are empty.")
+            
+        # Default behavior: sort descending
+        items.sort(key=lambda t: t[1], reverse=True)
+        
+        pts = [
+            {
+                "id": k, 
+                "value": round(v, 6), 
+                "color": PALETTE[i % len(PALETTE)]
+            }
+            for i, (k, v) in enumerate(items)
+        ]
+        
+        series_entry = {
+            "name": "Allocation",
+            "data": pts
+        }
+        
+        # Forward any series properties passed directly to data
+        props = [
+            "innerRadius", "outerRadius", "paddingAngle", "cornerRadius",
+            "startAngle", "endAngle", "cx", "cy", "arcLabel", "arcLabelMinAngle",
+            "arcLabelRadius", "highlightScope", "faded", "highlighted",
+            "valueFormatter", "sorting"
+        ]
+        for prop in props:
+            if prop in data:
+                series_entry[prop] = data[prop]
+                
+        series_list.append(series_entry)
+        
+    spec = {
         "plot_type": "pie",
         "title": title,
-        "series": [{"name": "Allocation", "data": pts}],
+        "series": series_list,
     }
+    
+    # Top-level general chart props
+    if "skipAnimation" in data:
+        spec["skipAnimation"] = bool(data["skipAnimation"])
+    if "hideLegend" in data:
+        spec["hideLegend"] = bool(data["hideLegend"])
+    if "colors" in data and isinstance(data["colors"], list):
+        spec["colors"] = data["colors"]
+        
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
+
+
+def _build_scatter_spec(data: dict, title: str) -> dict:
+    """
+    Build a PlotSpec for a scatter chart.
+
+    Accepted data shapes:
+      {"series": [{"name": "Group A", "data": [{"x": 1.0, "y": 2.0, "z": 5.0, "id": 0}], "markerSize": 3, "highlightScope": ...}]}
+      {"data": [{"x": 1.0, "y": 2.0}], "name": "Series 1"} (shorthand for single-series)
+    """
+    series_list = []
+    raw_series = data.get("series")
+    
+    # 1. Shorthand single-series format
+    if not raw_series and "data" in data and isinstance(data["data"], list):
+        raw_series = [{"name": data.get("name", "Series 1"), "data": data["data"]}]
+        
+    if raw_series and isinstance(raw_series, list):
+        for i, s in enumerate(raw_series):
+            name = s.get("name", f"Series {i+1}")
+            raw_pts = s.get("data", [])
+            pts = []
+            for j, pt in enumerate(raw_pts):
+                if not isinstance(pt, dict):
+                    continue
+                x_val = pt.get("x", 0.0)
+                y_val = pt.get("y", 0.0)
+                pt_entry = {
+                    "x": float(x_val),
+                    "y": float(y_val),
+                    "id": pt.get("id") if pt.get("id") is not None else f"pt-{j}"
+                }
+                if "z" in pt:
+                    pt_entry["z"] = float(pt["z"])
+                pts.append(pt_entry)
+                
+            series_entry = {
+                "name": name,
+                "label": s.get("label", name),
+                "color": s.get("color", PALETTE[i % len(PALETTE)]),
+                "data": pts
+            }
+            if "markerSize" in s:
+                series_entry["markerSize"] = s["markerSize"]
+            if "highlightScope" in s:
+                series_entry["highlightScope"] = s["highlightScope"]
+                
+            series_list.append(series_entry)
+    else:
+        raise ValueError("Scatter chart data must contain a series list or data list.")
+        
+    spec = {
+        "plot_type": "scatter",
+        "title": title,
+        "x_label": data.get("x_label", "X"),
+        "y_label": data.get("y_label", "Y"),
+        "series": series_list,
+    }
+    
+    # Optional axes config
+    if "xAxis" in data and isinstance(data["xAxis"], list):
+        spec["xAxis"] = data["xAxis"]
+    if "yAxis" in data and isinstance(data["yAxis"], list):
+        spec["yAxis"] = data["yAxis"]
+    if "zAxis" in data and isinstance(data["zAxis"], list):
+        spec["zAxis"] = data["zAxis"]
+        
+    # Optional general chart settings
+    if "grid" in data:
+        spec["grid"] = data["grid"]
+    else:
+        # Default: grids are enabled on both axes for scatter positioning reference
+        spec["grid"] = {"horizontal": True, "vertical": True}
+        
+    if "skipAnimation" in data:
+        spec["skipAnimation"] = bool(data["skipAnimation"])
+    if "hideLegend" in data:
+        spec["hideLegend"] = bool(data["hideLegend"])
+    if "hitAreaRadius" in data:
+        spec["hitAreaRadius"] = data["hitAreaRadius"]
+    if "colors" in data and isinstance(data["colors"], list):
+        spec["colors"] = data["colors"]
+        
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
+
+
+def _build_sparkline_spec(data: dict, title: str) -> dict:
+    """
+    Build a PlotSpec for a sparkline chart.
+
+    Accepted data shape:
+      {"data": [10, 15, 8, 12, 20], "plotType": "line", ...}
+    """
+    raw_data = data.get("data", [])
+    if not isinstance(raw_data, list):
+        raise ValueError("Sparkline data must be a list of numbers.")
+        
+    spec = {
+        "plot_type": "sparkline",
+        "title": title,
+        "data": [float(x) for x in raw_data],
+    }
+    
+    # Forward optional sparkline-specific properties
+    if "plotType" in data:
+        spec["plotType"] = data["plotType"]
+    if "area" in data:
+        spec["area"] = bool(data["area"])
+    if "curve" in data:
+        spec["curve"] = data["curve"]
+    if "color" in data:
+        spec["color"] = data["color"]
+        
+    # Defaults showHighlight and showTooltip to True
+    spec["showHighlight"] = bool(data.get("showHighlight", True))
+    spec["showTooltip"] = bool(data.get("showTooltip", True))
+    
+    if "xAxis" in data:
+        spec["xAxis"] = data["xAxis"]
+    if "yAxis" in data:
+        spec["yAxis"] = data["yAxis"]
+    if "baseline" in data:
+        spec["baseline"] = data["baseline"]
+    if "height" in data:
+        spec["height"] = data["height"]
+        
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
+
+
+def _build_sankey_spec(data: dict, title: str) -> dict:
+    """
+    Build a PlotSpec for a Sankey chart.
+
+    Expected data shape:
+      {
+        "nodes": [{"id": "A", "label": "Source A", "color": "#e57373"}],
+        "links": [{"source": "A", "target": "B", "value": 15, "color": ...}],
+        "nodeOptions": {"align": "justify", "width": 15, "padding": 10, "showLabels": True, "sort": "auto"},
+        "linkOptions": {"color": "source", "opacity": 0.6, "showValues": True, "curveCorrection": 10},
+        "valueFormatter": "currency" / "percent" / "raw"
+      }
+    """
+    raw_nodes = data.get("nodes", [])
+    raw_links = data.get("links", [])
+    
+    if not isinstance(raw_links, list) or not raw_links:
+        raise ValueError("Sankey chart data must contain a links list.")
+        
+    nodes = []
+    for n in raw_nodes:
+        if not isinstance(n, dict) or "id" not in n:
+            continue
+        node_entry = {"id": str(n["id"])}
+        if "label" in n:
+            node_entry["label"] = str(n["label"])
+        if "color" in n:
+            node_entry["color"] = str(n["color"])
+        nodes.append(node_entry)
+        
+    links = []
+    for l in raw_links:
+        if not isinstance(l, dict) or "source" not in l or "target" not in l or "value" not in l:
+            continue
+        link_entry = {
+            "source": str(l["source"]),
+            "target": str(l["target"]),
+            "value": float(l["value"])
+        }
+        if "color" in l:
+            link_entry["color"] = str(l["color"])
+        links.append(link_entry)
+        
+    spec = {
+        "plot_type": "sankey",
+        "title": title,
+        "nodes": nodes,
+        "links": links
+    }
+    
+    # Forward optional nodeOptions & linkOptions
+    if "nodeOptions" in data and isinstance(data["nodeOptions"], dict):
+        spec["nodeOptions"] = data["nodeOptions"]
+    if "linkOptions" in data and isinstance(data["linkOptions"], dict):
+        spec["linkOptions"] = data["linkOptions"]
+    if "valueFormatter" in data:
+        spec["valueFormatter"] = data["valueFormatter"]
+    if "height" in data:
+        spec["height"] = data["height"]
+        
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
+
+
+def _build_candlestick_spec(data: dict, title: str) -> dict:
+    """
+    Build a PlotSpec for a Candlestick chart.
+
+    Expected data shape:
+      {"series": [{"name": "AAPL", "data": [{"date": "2026-05-25", "open": 180.2, "high": 182.5, "low": 179.8, "close": 181.9}]}]}
+      or
+      {"data": [{"date": "2026-05-25", "open": 180.2, ...}], "name": "AAPL"}
+      or
+      {"prices": {"AAPL": [{"date": "2026-05-25", "open": 180.2, ...}]}} (from price tool output)
+    """
+    raw = data.get("prices") or data.get("series") or data.get("data") or data
+    if isinstance(raw, dict) and not any(k in raw for k in ("series", "data", "prices")):
+        # If it's a dict like {"AAPL": [...]}
+        raw_series = []
+        for ticker, rows in raw.items():
+            if isinstance(rows, list):
+                raw_series.append({"name": ticker, "data": rows})
+    elif isinstance(raw, list):
+        raw_series = [{"name": data.get("name", "Stock"), "data": raw}]
+    elif isinstance(raw, dict) and "data" in raw and isinstance(raw["data"], list):
+        raw_series = [{"name": raw.get("name", "Stock"), "data": raw["data"]}]
+    else:
+        raw_series = raw
+
+    if not isinstance(raw_series, list) or not raw_series:
+        raise ValueError("Candlestick chart data must contain a list of series or data rows.")
+
+    series_list = []
+    for i, s in enumerate(raw_series):
+        if not isinstance(s, dict):
+            continue
+        name = s.get("name", f"Series {i+1}")
+        raw_pts = s.get("data", [])
+        pts = []
+        for pt in raw_pts:
+            if not isinstance(pt, dict):
+                continue
+            date_val = pt.get("date") or pt.get("Date") or pt.get("x")
+            if not date_val:
+                continue
+            
+            o = pt.get("open") if pt.get("open") is not None else pt.get("Open")
+            h = pt.get("high") if pt.get("high") is not None else pt.get("High")
+            l = pt.get("low") if pt.get("low") is not None else pt.get("Low")
+            c = pt.get("close") if pt.get("close") is not None else pt.get("Close")
+            v = pt.get("volume") if pt.get("volume") is not None else pt.get("Volume")
+            
+            if o is None or h is None or l is None or c is None:
+                continue
+
+            pts.append({
+                "date": str(date_val),
+                "open": float(o),
+                "high": float(h),
+                "low": float(l),
+                "close": float(c),
+                "volume": int(v) if v is not None else None,
+            })
+            
+        if pts:
+            series_list.append({
+                "name": name,
+                "label": s.get("label", name),
+                "color": s.get("color", PALETTE[i % len(PALETTE)]),
+                "data": pts
+            })
+
+    if not series_list:
+        raise ValueError("No valid OHLC data points found for candlestick chart.")
+
+    spec = {
+        "plot_type": "candlestick",
+        "title": title,
+        "series": series_list,
+        "x_label": data.get("x_label", "Date"),
+        "y_label": data.get("y_label", "Price"),
+    }
+
+    if "height" in data:
+        spec["height"] = data["height"]
+    if "animation" in data and isinstance(data["animation"], dict):
+        spec["animation"] = data["animation"]
+
+    return spec
+
+
+def _build_network_spec(data: dict, title: str) -> dict:
+    """
+    Build a PlotSpec for a Network graph, pre-computing positions on the backend
+    via networkx spring layout.
+    """
+    edges, risk_scores = _extract_network_payload(data)
+
+    import networkx as nx
+    graph = nx.Graph()
+    stock_nodes = set(risk_scores.keys())
+
+    for edge in edges:
+        ticker = str(edge.get("ticker", "")).upper()
+        holder = str(edge.get("holder", "")).strip()
+        weight = float(edge.get("weight", 0.0))
+        if ticker:
+            stock_nodes.add(ticker)
+        if ticker and holder:
+            graph.add_node(ticker, bipartite=0)
+            graph.add_node(holder, bipartite=1)
+            graph.add_edge(ticker, holder, weight=weight)
+
+    for ticker in stock_nodes:
+        graph.add_node(ticker, bipartite=0)
+
+    node_positions = {}
+    if graph.number_of_nodes() > 0:
+        positions = nx.spring_layout(graph, seed=42, k=0.8)
+        node_positions = {str(node): [float(p[0]), float(p[1])] for node, p in positions.items()}
+
+    # Standardize nodes list for frontend
+    nodes = []
+    for node, attrs in graph.nodes(data=True):
+        bipartite = attrs.get("bipartite", 0)
+        is_stock = (bipartite == 0)
+        nodes.append({
+            "id": str(node),
+            "is_stock": is_stock,
+            "risk_score": float(risk_scores.get(node, 0.0)) if is_stock else None,
+        })
+
+    spec = {
+        "plot_type": "network",
+        "title": title,
+        "nodes": nodes,
+        "edges": [
+            {
+                "source": str(edge.get("ticker", "")).upper(),
+                "target": str(edge.get("holder", "")).strip(),
+                "weight": float(edge.get("weight", 0.0)),
+            }
+            for edge in edges if edge.get("ticker") and edge.get("holder")
+        ],
+        "node_positions": node_positions,
+    }
+
+    if "height" in data:
+        spec["height"] = data["height"]
+
+    return spec
 
 
 # ---------------------------------------------------------------------------
@@ -238,12 +917,61 @@ def generate_financial_plot(
     """
     Generate a financial chart from structured data.
 
-    For plot_type = line / bar / pie  → stores an interactive PlotSpec in
+    For plot_type = line / bar / pie / scatter / sparkline / sankey / candlestick / network  → stores an interactive PlotSpec in
     GLOBAL_PLOT_DATA so the MUI frontend renders an interactive chart in the
     chat bubble (no PNG saved).
 
-    For plot_type = heatmap / network → falls back to saving a PNG (no MUI X
-    Charts equivalent exists yet) and returns a markdown image link.
+    For plot_type = heatmap → falls back to saving a PNG.
+
+    Args:
+        data: dict with chart data. Shape depends on plot_type:
+            LINE: {"dates": [...], "series": {"AAPL": [...], "MSFT": [...]}, ...}
+                  Optional keys: curve, grid, highlightScope, yAxis, experimentalFeatures,
+                  series_config (per-series overrides: area, baseline, stack, showMark, etc.)
+
+            BAR (single-series): {"scores": {"AAPL": 0.85, "MSFT": 0.72}}
+            BAR (multi-series):  {"categories": ["Q1","Q2"], "series": [{"name":"Revenue", "data":[10,20], "stack":"financials"}]}
+                  Optional keys: layout ("horizontal"/"vertical"), borderRadius (number),
+                  grid, categoryGapRatio, barGapRatio, highlightScope, skipAnimation,
+                  xAxis (list with colorMap/tickPlacement), yAxis (list with colorMap),
+                  series_config (per-series: barLabel, barLabelPlacement, minBarSize, stack, etc.)
+
+            PIE (single-series): {"weights": {"AAPL": 0.15, "MSFT": 0.12}}
+                  Optional keys: innerRadius, outerRadius, paddingAngle, cornerRadius,
+                  startAngle, endAngle, cx, cy, arcLabel ("value"/"label"/"formattedValue"/"percent"/"label-percent"),
+                  arcLabelMinAngle, arcLabelRadius, highlightScope, faded, highlighted, sorting ("asc"/"desc"/"none"),
+                  skipAnimation, hideLegend, colors (custom color palette list)
+            PIE (multi-series/nested): {"series": [{"name": "layer1", "data": [{"id": "A", "value": 10}], "innerRadius": 0, "outerRadius": 50}, ...]}
+
+            SCATTER (multi-series): {"series": [{"name": "Group A", "data": [{"x": 1.0, "y": 2.0, "z": 5.0, "id": 0}], "markerSize": 3}]}
+            SCATTER (single-series): {"data": [{"x": 1.0, "y": 2.0}], "name": "Series 1"}
+                  Optional keys: grid ({"horizontal": bool, "vertical": bool}), skipAnimation,
+                  hideLegend, hitAreaRadius (number/"item"), colors, xAxis, yAxis, zAxis (list configs)
+
+            SPARKLINE: {"data": [10, 15, 8, 12, 20]}
+                  Optional keys: plotType ("line"/"bar"), area, curve ("linear"/"natural"/"step"/"monotoneX"),
+                  color, showHighlight, showTooltip, xAxis (config), yAxis (config), baseline, height
+
+            SANKEY: {"nodes": [{"id": "A", "label": "Label", "color": "#hex"}], "links": [{"source": "A", "target": "B", "value": 10, "color": "#hex"}]}
+                  Optional keys: nodeOptions (dict with align, width, padding, showLabels, sort),
+                  linkOptions (dict with color, opacity, showValues, curveCorrection),
+                  valueFormatter ("currency" / "percent" / "raw"), height (number)
+
+            CANDLESTICK: {"series": [{"name": "AAPL", "data": [{"date": "2026-05-25", "open": 180.2, "high": 182.5, "low": 179.8, "close": 181.9, "volume": 1200000}]}]}
+                  Optional keys: height (number)
+
+            NETWORK: {"holder_edges": [{"ticker": "AAPL", "holder": "Vanguard Group", "weight": 0.08}], "risk_scores": {"AAPL": 0.65}}
+                  Optional keys: height (number)
+
+            All interactive plot types (LINE, BAR, PIE, SCATTER, SPARKLINE, SANKEY, CANDLESTICK, NETWORK) also support:
+                  animation: optional dict:
+                      "duration": duration string (e.g., "1.5s", "800ms")
+                      "delay": delay string (e.g., "0.5s")
+                      "easing": easing curve (e.g., "ease-in-out", "cubic-bezier(...)")
+                      "animatedLabels": boolean (defaults to true; applies to bar labels)
+
+        plot_type: One of "line", "bar", "pie", "scatter", "sparkline", "sankey", "candlestick", "network", "heatmap".
+        title: Chart title string.
     """
     try:
         payload = _coerce_dict(data)
@@ -263,6 +991,16 @@ def generate_financial_plot(
             spec = _build_bar_spec(payload, plot_title)
         elif normalized == "pie":
             spec = _build_pie_spec(payload, plot_title)
+        elif normalized == "scatter":
+            spec = _build_scatter_spec(payload, plot_title)
+        elif normalized == "sparkline":
+            spec = _build_sparkline_spec(payload, plot_title)
+        elif normalized == "sankey":
+            spec = _build_sankey_spec(payload, plot_title)
+        elif normalized == "candlestick":
+            spec = _build_candlestick_spec(payload, plot_title)
+        elif normalized == "network":
+            spec = _build_network_spec(payload, plot_title)
         else:
             spec = None  # falls through to PNG path below
 
