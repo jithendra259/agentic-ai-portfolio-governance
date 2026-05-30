@@ -33,6 +33,7 @@ from src.agents.live_data_tools import (
     plot_us_economic_indicators,
 )
 from src.agents.price_series_tool import get_price_series_for_analysis
+from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
@@ -159,6 +160,7 @@ def governance_pipeline_with_cache(
     tickers: list[str],
     target_date: str,
     risk_tolerance: str = "moderate",
+    config: RunnableConfig = None,
 ) -> str:
     """
     Governance wrapper with L2 semantic cache.
@@ -180,7 +182,8 @@ def governance_pipeline_with_cache(
             "tickers": tickers,
             "target_date": target_date,
             "risk_tolerance": normalized_risk_tolerance,
-        }
+        },
+        config=config,
     )
     if isinstance(result, str):
         memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
@@ -220,6 +223,7 @@ tools = [
     compare_common_institutional_holders,
     get_user_analysis_history,
     get_detailed_past_weights,
+    generate_financial_plot,
 ]
 
 
@@ -390,6 +394,109 @@ HISTORICAL CHART RULES:
 - If the user asks to compare or plot all stocks in a universe, first call get_stocks_by_universe to resolve the tickers, then call plot_historical_prices with that ticker list. Do NOT stop after the universe lookup.
 - If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
 - If the request already contains enough information, act immediately instead of asking for confirmation.
+
+PLOT INTELLIGENCE RULES — CHART TYPE SELECTION:
+When the user requests a visualization, you MUST select the correct chart type.
+The generate_financial_plot tool supports plot_type = "line", "bar", "pie", "scatter", "sparkline", "sankey", "candlestick", "heatmap", and "network".
+
+LINE CHART (plot_type="line"):
+- Time-series data: stock prices over time, returns over time, cumulative growth curves.
+- Trend visualization: comparing how multiple tickers move over time.
+- Continuous data with a time or sequence dimension.
+- For raw price history, prefer plot_historical_prices (it handles fetch + plot in one step).
+- For computed statistics over time (rolling volatility, cumulative returns, drawdowns), use get_price_series_for_analysis to compute the data, then generate_financial_plot with plot_type="line".
+- Features available: area fill, stacking, smooth curves (monotoneX), dual Y-axes, recession bands, marks, highlight interactions.
+
+BAR CHART (plot_type="bar"):
+- Comparing discrete categories: sector weights, ticker risk scores, allocation percentages.
+- Ranking: top performers sorted high to low, risk scores.
+- Distribution snapshots: portfolio weights at a single point in time.
+- Side-by-side comparison of small groups (fewer than 20 categories).
+- For many categories (more than 8), use layout="horizontal" in the data dict.
+- Features available: stacking, horizontal layout, rounded corners (borderRadius), bar labels, colorMap, highlight interactions.
+- Multi-series bar: pass data as {"categories": [...], "series": [{"name": ..., "data": [...], "stack": "group"}]}.
+- Single-series bar: pass data as {"scores": {"AAPL": 0.85, "MSFT": 0.72, ...}}.
+
+PIE CHART (plot_type="pie"):
+- Portfolio composition: allocation weights showing parts of a whole.
+- ONLY when showing proportions that sum to 100% or categorical shares.
+- Best for 3-12 slices. If more than 12, use a bar chart instead.
+- Pass data as {"weights": {"AAPL": 0.15, "MSFT": 0.12, ...}} or use multi-series and styling customisations.
+- Single-series customization options (pass directly to data dict):
+  - "innerRadius": number or percentage string (e.g. 50 or "50%") to create a donut chart.
+  - "outerRadius": number or percentage string (e.g. 100 or "90%").
+  - "cornerRadius": number (e.g. 6) to round slice corners.
+  - "paddingAngle": number (e.g. 3) to space slices apart.
+  - "startAngle" / "endAngle": angles in degrees (e.g. startAngle=-90, endAngle=90 for semicircle/gauge).
+  - "arcLabel": "value" | "label" | "formattedValue" | "percent" | "label-percent" to display labels directly on slices.
+  - "arcLabelMinAngle": number (e.g. 20) to hide labels on small slices.
+  - "highlightScope": {"fade": "global", "highlight": "item"} or similar.
+  - "sorting": "asc" | "desc" | "none" (defaults to "desc").
+- Multi-series or nested pie charts: pass data as {"series": [{"name": "inner", "data": [{"x": "A", "y": 10}], "innerRadius": 0, "outerRadius": 50}, {"name": "outer", "data": [{"x": "A1", "y": 6}], "innerRadius": 60, "outerRadius": 80}]}.
+
+SCATTER CHART (plot_type="scatter"):
+- Exploring relationship between two variables: returns vs volatility, risk vs reward, beta vs alpha.
+- Correlation analysis: plotting historical points to show trend clusters or outliers.
+- Bubble charts: when a third variable (e.g., market cap, asset volume) is mapped to point sizes or colors.
+- Data format: pass series array: {"series": [{"name": "Equities", "data": [{"x": 0.05, "y": 0.12, "z": 100, "id": "AAPL"}, ...]}]} (z is optional for size/color mapping).
+- Shorthand single-series: {"data": [{"x": 1.0, "y": 2.0}], "name": "Assets"}.
+- Customization options:
+  - "grid": {"horizontal": true, "vertical": true} (default is true on both axes for positioning reference).
+  - "xAxis" / "yAxis": list config with properties like "scaleType": "log" for logarithmic axes, or "value_format": "percent".
+  - "zAxis": list config to specify z-value mapping boundaries or ordinal/continuous "colorMap" scales.
+  - "hitAreaRadius": number (e.g. 25) or "item" to customize marker selectability on hover.
+  - "series" overrides: specify "markerSize" per series.
+
+SPARKLINE CHART (plot_type="sparkline"):
+- Compact inline trend summaries: stock price tickers in textual paragraphs, simple daily volume trends, dashboard widgets.
+- It is a minimal chart without grid lines, axes, or coordinate ticks.
+- Data format: pass bare data array of numbers: {"data": [10, 15, 8, 12, 20]} (representing the y-values).
+- Customization options:
+  - "plotType": "line" (default) or "bar".
+  - "area": boolean (fills the area under the trend curve).
+  - "curve": "linear" | "natural" | "step" | "monotoneX" (interpolation types).
+  - "color": custom trendline color string.
+  - "showHighlight" / "showTooltip": boolean toggle interaction flags (defaults to true).
+  - "baseline": custom reference bottom value ("min" | "max" | "zero" | number).
+  - "height": custom height (defaults to 60px for compact dashboard inline view).
+
+SANKEY CHART (plot_type="sankey"):
+- Flow visualization: income statements, financial routing, capital/funds distribution, resource routing where link widths represent magnitude.
+- Data format: pass nodes and links:
+  {"nodes": [{"id": "Revenue", "label": "Total Revenue", "color": "#hex"}], "links": [{"source": "Revenue", "target": "Gross Profit", "value": 193.8, "color": "#hex"}]}
+- Customization options:
+  - "nodeOptions": {"align": "justify" | "left" | "right" | "center", "width": number, "padding": number, "showLabels": boolean, "sort": "auto" | "fixed"}
+  - "linkOptions": {"color": "source" | "target" | color_hex, "opacity": number, "showValues": boolean, "curveCorrection": number}
+  - "valueFormatter": "currency" | "percent" | "raw" (defaults to currency/raw formatting)
+  - "height": custom height (defaults to 350px to ensure sufficient vertical height)
+
+CANDLESTICK CHART (plot_type="candlestick"):
+- Financial price history: open, high, low, close (OHLC) stock prices over time.
+- Use this when the user specifically requests a candlestick chart or mentions "OHLC data" or "candle plot" for stock tickers.
+- Data format: pass series list containing OHLC data points:
+  {"series": [{"name": "AAPL", "data": [{"date": "2026-05-25", "open": 180.2, "high": 182.5, "low": 179.8, "close": 181.9}]}]}
+
+NETWORK GRAPH (plot_type="network"):
+- Institutional relationship networks: showing connections between stock tickers and their top institutional holders.
+- Use this when the user requests a network graph, ownership overlap graph, or relationship network of holdings.
+- Data format: pass holder edges and risk scores:
+  {"holder_edges": [{"ticker": "AAPL", "holder": "Vanguard Group", "weight": 0.08}], "risk_scores": {"AAPL": 0.65}}
+- Customization options:
+  - "height": custom height (defaults to 400px to ensure adequate canvas space for nodes)
+
+CHART ANIMATIONS CONFIGURATION:
+- All interactive charts (line, bar, pie, scatter, sparkline, sankey, candlestick, network) support custom animations.
+- Pass an optional "animation" config dictionary:
+  {"duration": "1.5s", "delay": "0.2s", "easing": "ease-out", "animatedLabels": true}
+  - "duration": length of the animation (e.g. "800ms", "2s")
+  - "delay": delay before animation starts (e.g. "0.5s")
+  - "easing": animation timing function (e.g. "ease-in-out", "cubic-bezier(...)")
+  - "animatedLabels": boolean to enable smooth JS-based coordinate animation on bar labels (defaults to true)
+
+NEVER:
+- Use a pie chart for time-series data.
+- Use a line chart for comparing discrete non-sequential categories.
+- Use a bar chart when data has more than 30 categories (too dense; summarize first).
 
 STATISTICAL ANALYSIS RULES:
 - Remember that users cannot see raw dataframes. Always describe your findings in natural language.

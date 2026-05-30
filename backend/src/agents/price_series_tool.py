@@ -108,8 +108,16 @@ def get_price_series_for_analysis(
                 "ticker": 1,
                 "historical_prices.Date": 1,
                 "historical_prices.date": 1,
+                "historical_prices.Open": 1,
+                "historical_prices.open": 1,
+                "historical_prices.High": 1,
+                "historical_prices.high": 1,
+                "historical_prices.Low": 1,
+                "historical_prices.low": 1,
                 "historical_prices.Close": 1,
                 "historical_prices.close": 1,
+                "historical_prices.Volume": 1,
+                "historical_prices.volume": 1,
             },
         )
     except Exception as exc:
@@ -131,7 +139,7 @@ def get_price_series_for_analysis(
             missing.append(ticker)
             continue
 
-        df = _extract_price_frame(doc)
+        df = _extract_price_frame(doc, keep_ohlcv=True)
         if df.empty:
             missing.append(ticker)
             continue
@@ -155,7 +163,11 @@ def get_price_series_for_analysis(
         prices_out[ticker] = [
             {
                 "date": row["Date"].strftime("%Y-%m-%d"),
+                "open": round(float(row["Open"]), 4) if "Open" in row and not pd.isna(row["Open"]) else (round(float(row["open"]), 4) if "open" in row and not pd.isna(row["open"]) else None),
+                "high": round(float(row["High"]), 4) if "High" in row and not pd.isna(row["High"]) else (round(float(row["high"]), 4) if "high" in row and not pd.isna(row["high"]) else None),
+                "low": round(float(row["Low"]), 4) if "Low" in row and not pd.isna(row["Low"]) else (round(float(row["low"]), 4) if "low" in row and not pd.isna(row["low"]) else None),
                 "close": round(float(row["Close"]), 4),
+                "volume": int(row["Volume"]) if "Volume" in row and not pd.isna(row["Volume"]) else (int(row["volume"]) if "volume" in row and not pd.isna(row["volume"]) else None),
             }
             for _, row in sampled.iterrows()
         ]
