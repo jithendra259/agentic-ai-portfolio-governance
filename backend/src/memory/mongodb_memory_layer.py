@@ -64,11 +64,16 @@ class MongoMemoryManager:
         try:
             plan_cache = self._collection("plan_cache")
             regime_patterns = self._collection("regime_patterns")
+            visualizations = self._collection("visualizations")
             if plan_cache is None or regime_patterns is None:
                 return
 
             plan_cache.create_index([("query_hash", ASCENDING)], unique=True, background=True)
             plan_cache.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True)
+
+            if visualizations is not None:
+                visualizations.create_index([("plot_id", ASCENDING)], unique=True, background=True)
+                visualizations.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True)
 
             regime_patterns.create_index([("regime_type", ASCENDING), ("created_at", DESCENDING)], background=True)
             regime_patterns.create_index([("target_date", DESCENDING)], background=True)
@@ -210,3 +215,48 @@ class MongoMemoryManager:
         except (PyMongoError, ValueError, TypeError) as exc:
             logger.warning("Failed to retrieve similar regimes: %s", exc)
             return []
+
+    def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 1) -> None:
+        """Store a visualization payload in MongoDB."""
+        if not self.is_available:
+            return
+            
+        try:
+            plots_col = self._collection("visualizations")
+            if plots_col is None:
+                return
+                
+            now = datetime.now(timezone.utc)
+            expires_at = now + timedelta(days=ttl_days)
+            plots_col.update_one(
+                {"plot_id": plot_id},
+                {
+                    "$set": {
+                        "plot_id": plot_id,
+                        "data": plot_data,
+                        "updated_at": now,
+                        "expires_at": expires_at,
+                    },
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+        except PyMongoError as exc:
+            logger.warning("Failed to store plot %s: %s", plot_id, exc)
+
+    def retrieve_plot(self, plot_id: str) -> dict | None:
+        """Retrieve a visualization payload from MongoDB."""
+        if not self.is_available:
+            return None
+            
+        try:
+            plots_col = self._collection("visualizations")
+            if plots_col is None:
+                return None
+            doc = plots_col.find_one({"plot_id": plot_id}, {"data": 1, "_id": 0})
+            if not doc:
+                return None
+            return doc.get("data")
+        except PyMongoError as exc:
+            logger.warning("Failed to retrieve plot %s: %s", plot_id, exc)
+            return None
