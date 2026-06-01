@@ -1,9 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect, useRef, forwardRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
-import { ChatBox } from '@mui/x-chat';
-import { Bot, User } from 'lucide-react';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+import FormControl from '@mui/material/FormControl';
+import { ChatBox, ChatComposerAttachButton } from '@mui/x-chat';
+import { Bot, User, Cpu } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -76,7 +79,7 @@ const markdownComponents = {
   ),
   p: ({ children }) => <p style={{ margin: '4px 0', lineHeight: 1.6 }}>{children}</p>,
   code: ({ children }) => (
-    <code style={{ background: '#1f2937', padding: '2px 6px', borderRadius: 4, fontSize: '0.85em' }}>
+    <code style={{ background: '#2A2A2A', color: '#ECECEC', padding: '2px 6px', borderRadius: 4, fontSize: '0.85em' }}>
       {children}
     </code>
   ),
@@ -109,14 +112,14 @@ function createReactAvatarUrl(IconComponent, background, foreground = '#ffffff')
 const botUser = {
   id: 'assistant',
   displayName: 'Portfolio AI',
-  avatarUrl: createReactAvatarUrl(Bot, '#10b981', '#ffffff'),
+  avatarUrl: createReactAvatarUrl(Bot, '#404040', '#ECECEC'),
   isOnline: true,
 };
 
 const youUser = {
   id: 'user',
   displayName: 'You',
-  avatarUrl: createReactAvatarUrl(User, '#3b82f6', '#ffffff'),
+  avatarUrl: createReactAvatarUrl(User, '#2A2A2A', '#ECECEC'),
   isOnline: true,
 };
 
@@ -156,10 +159,150 @@ async function parseNDJSONStream(response, signal) {
 }
 
 // ---------------------------------------------------------------------------
+// Custom Composer Attach Button with inline model selector
+// ---------------------------------------------------------------------------
+const CustomAttachButtonWithModelSelector = forwardRef(({
+  selectedModel,
+  setSelectedModel,
+  availableModels,
+  loadingModels,
+  ...otherProps
+}, ref) => {
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
+      <ChatComposerAttachButton ref={ref} {...otherProps} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 0.5 }}>
+        <Cpu size={16} color="#00E5FF" style={{ filter: 'drop-shadow(0 0 4px rgba(0,229,255,0.4))' }} />
+        <FormControl size="small">
+          <Select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            displayEmpty
+            sx={{
+              height: 32,
+              minWidth: 140,
+              fontSize: '0.8rem',
+              color: '#ECECEC',
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              backgroundColor: '#1A1A1A',
+              borderRadius: '16px',
+              transition: 'all 0.2s ease-in-out',
+              border: '1px solid #404040',
+              '&:hover': {
+                borderColor: '#666666',
+                backgroundColor: '#222222',
+              },
+              '&.Mui-focused': {
+                borderColor: '#FFFFFF',
+                boxShadow: '0 0 8px rgba(255, 255, 255, 0.1)',
+              },
+              '& .MuiOutlinedInput-notchedOutline': {
+                border: 'none',
+              },
+              '& .MuiSelect-select': {
+                paddingLeft: '8px',
+                paddingRight: '24px',
+                paddingTop: '4px',
+                paddingBottom: '4px',
+              },
+              '& .MuiSvgIcon-root': {
+                color: '#ECECEC',
+              },
+            }}
+            MenuProps={{
+              PaperProps: {
+                sx: {
+                  backgroundColor: '#1A1A1A',
+                  color: '#ECECEC',
+                  border: '1px solid #404040',
+                  borderRadius: '8px',
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                  '& .MuiMenuItem-root': {
+                    fontSize: '0.8rem',
+                    padding: '8px 12px',
+                    fontFamily: 'system-ui, -apple-system, sans-serif',
+                    '&:hover': {
+                      backgroundColor: '#2A2A2A',
+                    },
+                    '&.Mui-selected': {
+                      backgroundColor: 'rgba(0, 229, 255, 0.15)',
+                      color: '#00E5FF',
+                      fontWeight: 600,
+                      '&:hover': {
+                        backgroundColor: 'rgba(0, 229, 255, 0.25)',
+                      },
+                    },
+                  },
+                },
+              },
+            }}
+          >
+            {loadingModels ? (
+              <MenuItem disabled value="">
+                Loading...
+              </MenuItem>
+            ) : availableModels.length === 0 ? (
+              <MenuItem disabled value="">
+                No models available
+              </MenuItem>
+            ) : (
+              availableModels.map((model) => (
+                <MenuItem key={model} value={model}>
+                  {model}
+                </MenuItem>
+              ))
+            )}
+          </Select>
+        </FormControl>
+      </Box>
+    </Box>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface() {
   const sessionId = 'demo-react-session';
+
+  const [selectedModel, setSelectedModel] = useState('');
+  const [availableModels, setAvailableModels] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(true);
+  const selectedModelRef = useRef('');
+
+  useEffect(() => {
+    selectedModelRef.current = selectedModel;
+  }, [selectedModel]);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`${BACKEND_BASE}/health`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch health');
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        const models = data?.models?.available || [];
+        const primary = data?.models?.primary || '';
+        setAvailableModels(models);
+        if (primary && models.includes(primary)) {
+          setSelectedModel(primary);
+        } else if (models.length > 0) {
+          setSelectedModel(models[0]);
+        }
+        setLoadingModels(false);
+      })
+      .catch((err) => {
+        console.error('Failed to fetch Ollama models from backend:', err);
+        if (active) {
+          setLoadingModels(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const adapter = useMemo(() => ({
     async sendMessage({ message, signal }) {
@@ -169,7 +312,11 @@ export default function ChatInterface() {
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, user_message: userText }),
+        body: JSON.stringify({ 
+          session_id: sessionId, 
+          user_message: userText,
+          model: selectedModelRef.current || null
+        }),
         signal,
       });
 
@@ -244,6 +391,9 @@ export default function ChatInterface() {
         }]}
         initialActiveConversationId={sessionId}
         initialMessages={initialMessages}
+        slots={{
+          composerAttachButton: CustomAttachButtonWithModelSelector,
+        }}
         slotProps={{
           messageContent: {
             partProps: {
@@ -251,7 +401,28 @@ export default function ChatInterface() {
             },
           },
           composerInput: {
-            sx: { color: '#ffffff' }
+            sx: {
+              color: '#ECECEC',
+              backgroundColor: '#1A1A1A',
+              '& .MuiOutlinedInput-root': {
+                color: '#ECECEC',
+                '& fieldset': {
+                  borderColor: '#404040',
+                },
+                '&:hover fieldset': {
+                  borderColor: '#666666',
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: '#FFFFFF',
+                },
+              },
+            }
+          },
+          composerAttachButton: {
+            selectedModel,
+            setSelectedModel,
+            availableModels,
+            loadingModels,
           }
         }}
         suggestions={[
@@ -264,9 +435,10 @@ export default function ChatInterface() {
         sx={{
           flex: 1,
           height: '100%',
-          border: '1px solid',
-          borderColor: 'divider',
+          border: '1px solid #404040',
           borderRadius: 2,
+          backgroundColor: '#0D0D0D',
+          color: '#ECECEC',
         }}
       />
     </Box>
