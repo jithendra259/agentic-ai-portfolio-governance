@@ -180,80 +180,90 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
           sx={{
             height: 34,
             minWidth: 130,
-            fontSize: '0.88rem',
-            fontWeight: 600,
-            color: '#B4B4B4',
-            fontFamily: 'system-ui, -apple-system, sans-serif',
-            backgroundColor: 'transparent',
+            fontSize: '0.88rem !important',
+            fontWeight: '600 !important',
+            color: '#B4B4B4 !important',
+            fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important',
+            letterSpacing: '-0.01em !important',
+            backgroundColor: 'transparent !important', // Ensure no global MuiInputBase grey box
             borderRadius: '8px',
             transition: 'all 0.15s ease',
-            border: 'none',
+            border: 'none !important',
+            boxShadow: 'none !important',
             '&:hover': {
-              color: '#FFFFFF',
-              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              color: '#FFFFFF !important',
+              backgroundColor: 'rgba(255, 255, 255, 0.06) !important',
             },
             '&.Mui-focused': {
-              color: '#FFFFFF',
-              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              color: '#FFFFFF !important',
+              backgroundColor: 'rgba(255, 255, 255, 0.06) !important',
             },
             '& .MuiOutlinedInput-notchedOutline': {
-              border: 'none',
+              border: 'none !important', // Strictly no border outline
+            },
+            '&:hover .MuiOutlinedInput-notchedOutline': {
+              border: 'none !important',
+            },
+            '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+              border: 'none !important',
             },
             '& .MuiSelect-select': {
-              paddingLeft: '8px',
-              paddingRight: '28px',
-              paddingTop: '4px',
-              paddingBottom: '4px',
-              display: 'flex',
-              alignItems: 'center',
+              paddingLeft: '8px !important',
+              paddingRight: '28px !important',
+              paddingTop: '4px !important',
+              paddingBottom: '4px !important',
+              display: 'flex !important',
+              alignItems: 'center !important',
+              backgroundColor: 'transparent !important',
             },
             '& .MuiSelect-icon': {
-              color: '#B4B4B4',
-              right: '8px',
-              width: '15px',
-              height: '15px',
-              transition: 'transform 0.15s ease, color 0.15s ease',
+              color: '#B4B4B4 !important',
+              right: '8px !important',
+              width: '15px !important',
+              height: '15px !important',
+              transition: 'transform 0.15s ease, color 0.15s ease !important',
             },
             '&:hover .MuiSelect-icon': {
-              color: '#FFFFFF',
+              color: '#FFFFFF !important',
             },
             '&.Mui-focused .MuiSelect-icon': {
-              transform: 'rotate(180deg)',
-              color: '#FFFFFF',
+              transform: 'rotate(180deg) !important',
+              color: '#FFFFFF !important',
             },
           }}
           MenuProps={{
             TransitionProps: { timeout: 120 },
             PaperProps: {
               sx: {
-                backgroundColor: '#2F2F2F', // Solid dark grey card matching screenshot
-                color: '#FFFFFF',
-                border: '1px solid #3F3F3F',
-                borderRadius: '10px',
-                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
+                backgroundColor: '#2F2F2F !important', // ChatGPT pop-up color
+                color: '#FFFFFF !important',
+                border: '1px solid #3F3F3F !important',
+                borderRadius: '10px !important',
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important',
                 marginTop: '6px',
                 transformOrigin: 'top center',
                 '& .MuiList-root': {
-                  padding: '4px 0',
+                  padding: '4px 0 !important',
                 },
                 '& .MuiMenuItem-root': {
-                  fontSize: '0.92rem',
-                  fontWeight: 500,
-                  padding: '10px 18px', // Spacious classic padding
-                  transition: 'background-color 0.1s ease, color 0.1s ease',
-                  fontFamily: 'system-ui, -apple-system, sans-serif',
-                  color: '#ECECEC',
-                  borderRadius: 0, // Classic edge-to-edge highlight
+                  fontSize: '0.92rem !important',
+                  fontWeight: '500 !important',
+                  padding: '12px 18px !important', // Generous clean padding
+                  transition: 'background-color 0.1s ease, color 0.1s ease !important',
+                  fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important',
+                  letterSpacing: '-0.015em !important',
+                  color: '#ECECEC !important',
+                  borderRadius: '0 !important', // Edge-to-edge classic list item highlight
                   '&:hover': {
-                    backgroundColor: '#3E3E3E', // Highlight color from screenshot
-                    color: '#FFFFFF',
+                    backgroundColor: '#3E3E3E !important', // Dark gray highlight matching screenshot
+                    color: '#FFFFFF !important',
                   },
                   '&.Mui-selected': {
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                    color: '#FFFFFF',
-                    fontWeight: 600,
+                    backgroundColor: 'rgba(255, 255, 255, 0.08) !important',
+                    color: '#FFFFFF !important',
+                    fontWeight: '600 !important',
                     '&:hover': {
-                      backgroundColor: '#3E3E3E',
+                      backgroundColor: '#3E3E3E !important',
                     },
                   },
                 },
