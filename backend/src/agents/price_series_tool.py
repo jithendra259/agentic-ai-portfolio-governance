@@ -65,7 +65,7 @@ def get_price_series_for_analysis(
     end_date: str,
 ) -> dict:
     """
-    Fetch daily closing prices from MongoDB and return a compact structured
+    Fetch daily OHLCV prices from MongoDB and return a compact structured
     payload for downstream statistical analysis or custom plotting.
 
     Stats are computed from the full filtered daily history. Long price series
@@ -154,11 +154,7 @@ def get_price_series_for_analysis(
         full_log_returns = np.diff(np.log(full_close_arr)).tolist()
 
         sampled = full_filtered
-        if len(sampled) > _MAX_OBSERVATIONS:
-            step = len(sampled) // _MAX_OBSERVATIONS + 1
-            sampled = sampled.iloc[::step].copy()
-            if sampled.index[-1] != full_filtered.index[-1]:
-                sampled = pd.concat([sampled, full_filtered.tail(1)]).drop_duplicates()
+        # Full data requested - bypassing downsampling
 
         prices_out[ticker] = [
             {
@@ -253,7 +249,7 @@ def get_price_series_for_analysis(
     return {
         "analysis_cache_key": cache_key,
         "available_fields": {
-            "prices": "ticker -> [{date, close}, ...] (downsampled for long ranges)",
+            "prices": "ticker -> [{date, open, high, low, close, volume}, ...] (downsampled for long ranges)",
             "returns": "ticker -> [daily log returns] (full series in cache)",
             "stats": "ticker -> summary stats computed from full daily history",
         },

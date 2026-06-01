@@ -212,6 +212,20 @@ export default function ChatInterface() {
     },
   }), [sessionId]);
 
+  const initialMessages = useMemo(() => [
+    {
+      id: 'msg-welcome-1',
+      senderId: 'assistant',
+      createdAt: new Date(),
+      parts: [
+        {
+          type: 'text',
+          text: 'Hello! I am your Portfolio Assistant. How can I help you analyze your portfolio today?'
+        }
+      ]
+    }
+  ], []);
+
   return (
     <Box
       sx={{
@@ -229,6 +243,7 @@ export default function ChatInterface() {
           participants: [youUser, botUser],
         }]}
         initialActiveConversationId={sessionId}
+        initialMessages={initialMessages}
         slotProps={{
           messageContent: {
             partProps: {

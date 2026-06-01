@@ -773,7 +773,10 @@ def _build_candlestick_spec(data: dict, title: str) -> dict:
             if isinstance(rows, list):
                 raw_series.append({"name": ticker, "data": rows})
     elif isinstance(raw, list):
-        raw_series = [{"name": data.get("name", "Stock"), "data": raw}]
+        if raw and all(isinstance(x, dict) and "data" in x for x in raw):
+            raw_series = raw
+        else:
+            raw_series = [{"name": data.get("name", "Stock"), "data": raw}]
     elif isinstance(raw, dict) and "data" in raw and isinstance(raw["data"], list):
         raw_series = [{"name": raw.get("name", "Stock"), "data": raw["data"]}]
     else:
@@ -903,8 +906,40 @@ def _build_network_spec(data: dict, title: str) -> dict:
     return spec
 
 
+def _build_heatmap_spec(data: dict, title: str) -> dict:
+    try:
+        df = _extract_matrix(data)
+    except Exception:
+        # Fallback if matrix missing
+        return None
+
+    x_categories = list(df.columns)
+    y_categories = list(df.index)
+    
+    series_data = []
+    for i, col in enumerate(x_categories):
+        for j, row in enumerate(y_categories):
+            val = df.at[row, col]
+            if not pd.isna(val):
+                series_data.append([i, j, float(val)])
+                
+    spec = {
+        "plot_type": "heatmap",
+        "title": title,
+        "xAxis": [{"data": [str(c) for c in x_categories]}],
+        "yAxis": [{"data": [str(r) for r in y_categories]}],
+        "series": [{"data": series_data}]
+    }
+    
+    if "height" in data:
+        spec["height"] = data["height"]
+    else:
+        spec["height"] = max(400, len(y_categories) * 40 + 100)
+        
+    return spec
+
 # ---------------------------------------------------------------------------
-# Main tool — MUI-native for line/bar/pie; PNG fallback for heatmap/network
+# Main tool — MUI-native for line/bar/pie/heatmap; PNG fallback for network
 # ---------------------------------------------------------------------------
 
 @tool
@@ -917,11 +952,11 @@ def generate_financial_plot(
     """
     Generate a financial chart from structured data.
 
-    For plot_type = line / bar / pie / scatter / sparkline / sankey / candlestick / network  → stores an interactive PlotSpec in
+    For plot_type = line / bar / pie / scatter / sparkline / sankey / candlestick / network / heatmap → stores an interactive PlotSpec in
     GLOBAL_PLOT_DATA so the MUI frontend renders an interactive chart in the
     chat bubble (no PNG saved).
 
-    For plot_type = heatmap → falls back to saving a PNG.
+    For plot_type = network → falls back to saving a PNG if not handled yet.
 
     Args:
         data: dict with chart data. Shape depends on plot_type:
@@ -975,6 +1010,48 @@ def generate_financial_plot(
     """
     try:
         payload = _coerce_dict(data)
+        
+        normalized = str(plot_type or "").strip().lower()
+        # Check if analysis_cache_key is provided to load from cache
+        cache_key = payload.get("analysis_cache_key")
+        if cache_key:
+            from src.agents.price_series_tool import load_cached_analysis_dataset
+            cached_data = load_cached_analysis_dataset(cache_key)
+            if cached_data:
+                if normalized == "heatmap":
+                    returns_dict = cached_data.get("returns", {})
+                    dates_dict = cached_data.get("return_dates_by_ticker", {})
+                    df_list = []
+                    for ticker, returns in returns_dict.items():
+                        dates = dates_dict.get(ticker, [])
+                        if dates and returns:
+                            df_list.append(pd.Series(returns, index=pd.to_datetime(dates), name=ticker))
+                    if df_list:
+                        df = pd.concat(df_list, axis=1).sort_index().dropna()
+                        if not df.empty:
+                            payload["correlation_matrix"] = df.corr().to_dict()
+                else:
+                    metric = payload.get("metric", "prices")
+                    if metric == "returns" or "return" in payload.get("y_label", "").lower():
+                        # Reconstruct returns series for plotting
+                        series_data = {}
+                        for ticker in cached_data.get("tickers_included", []):
+                            dates = cached_data.get("return_dates_by_ticker", {}).get(ticker, [])
+                            returns = cached_data.get("returns", {}).get(ticker, [])
+                            series_data[ticker] = [
+                                {"date": d, "value": r} for d, r in zip(dates, returns)
+                            ]
+                        payload["series"] = series_data
+                        if "y_label" not in payload:
+                            payload["y_label"] = "Log Return"
+                    else:
+                        # Reconstruct prices series
+                        prices_data = cached_data.get("prices", {})
+                        payload["price_history"] = prices_data
+                        payload["prices"] = prices_data
+                        if "y_label" not in payload:
+                            payload["y_label"] = "Price"
+
         normalized = str(plot_type or "").strip().lower()
         plot_title = str(title or "Financial Plot").strip()
 
@@ -1001,6 +1078,8 @@ def generate_financial_plot(
             spec = _build_candlestick_spec(payload, plot_title)
         elif normalized == "network":
             spec = _build_network_spec(payload, plot_title)
+        elif normalized == "heatmap":
+            spec = _build_heatmap_spec(payload, plot_title)
         else:
             spec = None  # falls through to PNG path below
 

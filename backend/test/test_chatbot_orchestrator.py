@@ -102,5 +102,20 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
         self.assertIn("Never tell the user you cannot do this analysis", self.module.SYSTEM_PROMPT)
 
 
+    @patch('src.orchestrator.chatbot_orchestrator.plot_us_economic_indicators.func')
+    def test_classify_and_route_routes_recession_bands_deterministically(self, mock_plot_func):
+        state = {
+            "messages": [
+                HumanMessage(content="show me recession bands and unemployment")
+            ]
+        }
+        config = {"configurable": {"thread_id": "test_thread"}}
+        response = self.module.classify_and_route_node(state, config=config)
+        
+        self.assertEqual(response["route_status"], "end")
+        self.assertEqual(response["messages"][0].content, "Here is the US unemployment rate comparison with GDP per capita, including the shaded recession bands and dual Y-axes.")
+        mock_plot_func.assert_called_once_with(config=config)
+
+
 if __name__ == "__main__":
     unittest.main()
