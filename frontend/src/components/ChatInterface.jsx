@@ -6,7 +6,7 @@ import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 import FormControl from '@mui/material/FormControl';
 import { ChatBox, ChatComposerAttachButton } from '@mui/x-chat';
-import { Bot, User, Cpu } from 'lucide-react';
+import { Bot, User, Cpu, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -171,65 +171,86 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
       <ChatComposerAttachButton ref={ref} {...otherProps} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, pl: 0.5 }}>
-        <Cpu size={16} color="#00E5FF" style={{ filter: 'drop-shadow(0 0 4px rgba(0,229,255,0.4))' }} />
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, pl: 0.5 }}>
+        <Cpu size={14} color="rgba(255, 255, 255, 0.45)" style={{ transition: 'all 0.3s ease' }} />
         <FormControl size="small">
           <Select
             value={selectedModel}
             onChange={(e) => setSelectedModel(e.target.value)}
             displayEmpty
+            IconComponent={ChevronDown}
             sx={{
-              height: 32,
-              minWidth: 140,
-              fontSize: '0.8rem',
-              color: '#ECECEC',
+              height: 30,
+              minWidth: 150,
+              fontSize: '0.78rem',
+              fontWeight: 500,
+              color: 'rgba(255, 255, 255, 0.85)',
               fontFamily: 'system-ui, -apple-system, sans-serif',
-              backgroundColor: '#1A1A1A',
-              borderRadius: '16px',
-              transition: 'all 0.2s ease-in-out',
-              border: '1px solid #404040',
+              backgroundColor: 'rgba(255, 255, 255, 0.03)',
+              borderRadius: '6px',
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
               '&:hover': {
-                borderColor: '#666666',
-                backgroundColor: '#222222',
+                borderColor: 'rgba(255, 255, 255, 0.2)',
+                backgroundColor: 'rgba(255, 255, 255, 0.05)',
               },
               '&.Mui-focused': {
-                borderColor: '#FFFFFF',
-                boxShadow: '0 0 8px rgba(255, 255, 255, 0.1)',
+                borderColor: 'rgba(255, 255, 255, 0.4)',
+                backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                boxShadow: '0 0 12px rgba(255, 255, 255, 0.03)',
               },
               '& .MuiOutlinedInput-notchedOutline': {
                 border: 'none',
               },
               '& .MuiSelect-select': {
                 paddingLeft: '8px',
-                paddingRight: '24px',
-                paddingTop: '4px',
-                paddingBottom: '4px',
+                paddingRight: '28px',
+                paddingTop: '2px',
+                paddingBottom: '2px',
+                display: 'flex',
+                alignItems: 'center',
               },
-              '& .MuiSvgIcon-root': {
-                color: '#ECECEC',
+              '& .MuiSelect-icon': {
+                color: 'rgba(255, 255, 255, 0.4)',
+                right: '6px',
+                width: '14px',
+                height: '14px',
+                transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+              },
+              '&.Mui-focused .MuiSelect-icon': {
+                transform: 'rotate(180deg)',
+                color: 'rgba(255, 255, 255, 0.8)',
               },
             }}
             MenuProps={{
+              TransitionProps: { timeout: 150 },
               PaperProps: {
                 sx: {
-                  backgroundColor: '#1A1A1A',
+                  backgroundColor: 'rgba(18, 18, 18, 0.95)',
+                  backdropFilter: 'blur(16px)',
                   color: '#ECECEC',
-                  border: '1px solid #404040',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
                   borderRadius: '8px',
-                  boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+                  boxShadow: '0 10px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
+                  marginTop: '6px',
                   '& .MuiMenuItem-root': {
-                    fontSize: '0.8rem',
-                    padding: '8px 12px',
+                    fontSize: '0.78rem',
+                    fontWeight: 500,
+                    padding: '6px 12px',
+                    margin: '2px 4px',
+                    borderRadius: '4px',
+                    transition: 'all 0.15s ease',
                     fontFamily: 'system-ui, -apple-system, sans-serif',
                     '&:hover': {
-                      backgroundColor: '#2A2A2A',
+                      backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                      color: '#FFFFFF',
                     },
                     '&.Mui-selected': {
-                      backgroundColor: 'rgba(0, 229, 255, 0.15)',
+                      backgroundColor: 'rgba(0, 229, 255, 0.12)',
                       color: '#00E5FF',
                       fontWeight: 600,
                       '&:hover': {
-                        backgroundColor: 'rgba(0, 229, 255, 0.25)',
+                        backgroundColor: 'rgba(0, 229, 255, 0.18)',
                       },
                     },
                   },
