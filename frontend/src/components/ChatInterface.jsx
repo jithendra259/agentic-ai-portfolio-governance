@@ -169,113 +169,115 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
   ...otherProps
 }, ref) => {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 1 }}>
       <ChatComposerAttachButton ref={ref} {...otherProps} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, pl: 0.5 }}>
-        <Cpu size={14} color="rgba(255, 255, 255, 0.45)" style={{ transition: 'all 0.3s ease' }} />
-        <FormControl size="small">
-          <Select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            displayEmpty
-            IconComponent={ChevronDown}
-            sx={{
-              height: 30,
-              minWidth: 150,
-              fontSize: '0.78rem',
-              fontWeight: 500,
-              color: 'rgba(255, 255, 255, 0.85)',
-              fontFamily: 'system-ui, -apple-system, sans-serif',
-              backgroundColor: 'rgba(255, 255, 255, 0.03)',
-              borderRadius: '6px',
-              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              '&:hover': {
-                borderColor: 'rgba(255, 255, 255, 0.2)',
-                backgroundColor: 'rgba(255, 255, 255, 0.05)',
-              },
-              '&.Mui-focused': {
-                borderColor: 'rgba(255, 255, 255, 0.4)',
-                backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                boxShadow: '0 0 12px rgba(255, 255, 255, 0.03)',
-              },
-              '& .MuiOutlinedInput-notchedOutline': {
-                border: 'none',
-              },
-              '& .MuiSelect-select': {
-                paddingLeft: '8px',
-                paddingRight: '28px',
-                paddingTop: '2px',
-                paddingBottom: '2px',
-                display: 'flex',
-                alignItems: 'center',
-              },
-              '& .MuiSelect-icon': {
-                color: 'rgba(255, 255, 255, 0.4)',
-                right: '6px',
-                width: '14px',
-                height: '14px',
-                transition: 'transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-              },
-              '&.Mui-focused .MuiSelect-icon': {
-                transform: 'rotate(180deg)',
-                color: 'rgba(255, 255, 255, 0.8)',
-              },
-            }}
-            MenuProps={{
-              TransitionProps: { timeout: 150 },
-              PaperProps: {
-                sx: {
-                  backgroundColor: 'rgba(18, 18, 18, 0.95)',
-                  backdropFilter: 'blur(16px)',
+      <FormControl size="small">
+        <Select
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          displayEmpty
+          IconComponent={ChevronDown}
+          sx={{
+            height: 34,
+            minWidth: 130,
+            fontSize: '0.88rem',
+            fontWeight: 600,
+            color: '#B4B4B4',
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+            backgroundColor: 'transparent',
+            borderRadius: '8px',
+            transition: 'all 0.15s ease',
+            border: 'none',
+            '&:hover': {
+              color: '#FFFFFF',
+              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+            },
+            '&.Mui-focused': {
+              color: '#FFFFFF',
+              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+            },
+            '& .MuiOutlinedInput-notchedOutline': {
+              border: 'none',
+            },
+            '& .MuiSelect-select': {
+              paddingLeft: '8px',
+              paddingRight: '28px',
+              paddingTop: '4px',
+              paddingBottom: '4px',
+              display: 'flex',
+              alignItems: 'center',
+            },
+            '& .MuiSelect-icon': {
+              color: '#B4B4B4',
+              right: '8px',
+              width: '15px',
+              height: '15px',
+              transition: 'transform 0.15s ease, color 0.15s ease',
+            },
+            '&:hover .MuiSelect-icon': {
+              color: '#FFFFFF',
+            },
+            '&.Mui-focused .MuiSelect-icon': {
+              transform: 'rotate(180deg)',
+              color: '#FFFFFF',
+            },
+          }}
+          MenuProps={{
+            TransitionProps: { timeout: 120 },
+            PaperProps: {
+              sx: {
+                backgroundColor: '#2F2F2F', // Solid dark grey card matching screenshot
+                color: '#FFFFFF',
+                border: '1px solid #3F3F3F',
+                borderRadius: '10px',
+                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5)',
+                marginTop: '6px',
+                transformOrigin: 'top center',
+                '& .MuiList-root': {
+                  padding: '4px 0',
+                },
+                '& .MuiMenuItem-root': {
+                  fontSize: '0.92rem',
+                  fontWeight: 500,
+                  padding: '10px 18px', // Spacious classic padding
+                  transition: 'background-color 0.1s ease, color 0.1s ease',
+                  fontFamily: 'system-ui, -apple-system, sans-serif',
                   color: '#ECECEC',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: '8px',
-                  boxShadow: '0 10px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
-                  marginTop: '6px',
-                  '& .MuiMenuItem-root': {
-                    fontSize: '0.78rem',
-                    fontWeight: 500,
-                    padding: '6px 12px',
-                    margin: '2px 4px',
-                    borderRadius: '4px',
-                    transition: 'all 0.15s ease',
-                    fontFamily: 'system-ui, -apple-system, sans-serif',
+                  borderRadius: 0, // Classic edge-to-edge highlight
+                  '&:hover': {
+                    backgroundColor: '#3E3E3E', // Highlight color from screenshot
+                    color: '#FFFFFF',
+                  },
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    color: '#FFFFFF',
+                    fontWeight: 600,
                     '&:hover': {
-                      backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                      color: '#FFFFFF',
-                    },
-                    '&.Mui-selected': {
-                      backgroundColor: 'rgba(0, 229, 255, 0.12)',
-                      color: '#00E5FF',
-                      fontWeight: 600,
-                      '&:hover': {
-                        backgroundColor: 'rgba(0, 229, 255, 0.18)',
-                      },
+                      backgroundColor: '#3E3E3E',
                     },
                   },
                 },
               },
-            }}
-          >
-            {loadingModels ? (
-              <MenuItem disabled value="">
-                Loading...
+            },
+          }}
+        >
+          {loadingModels ? (
+            <MenuItem disabled value="">
+              Loading...
+            </MenuItem>
+          ) : availableModels.length === 0 ? (
+            <MenuItem disabled value="">
+              No models available
+            </MenuItem>
+          ) : (
+            availableModels.map((model) => (
+              <MenuItem key={model} value={model}>
+                {model}
               </MenuItem>
-            ) : availableModels.length === 0 ? (
-              <MenuItem disabled value="">
-                No models available
-              </MenuItem>
-            ) : (
-              availableModels.map((model) => (
-                <MenuItem key={model} value={model}>
-                  {model}
-                </MenuItem>
-              ))
-            )}
-          </Select>
-        </FormControl>
-      </Box>
+            ))
+          )}
+        </Select>
+      </FormControl>
     </Box>
   );
 });
