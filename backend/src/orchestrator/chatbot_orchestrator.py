@@ -329,6 +329,23 @@ def _model_not_found_message(model_name: str) -> AIMessage:
     )
 
 
+def _clean_messages_for_ashna(messages: list[BaseMessage]) -> list[BaseMessage]:
+    cleaned = []
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            continue
+        if isinstance(msg, AIMessage):
+            content = msg.content
+            if not content:
+                if msg.tool_calls:
+                    continue
+                content = "I will process that for you."
+            cleaned.append(AIMessage(content=content))
+        else:
+            cleaned.append(msg)
+    return cleaned
+
+
 def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfig = None) -> BaseMessage:
     """
     Primary LLM invocation wrapper with multi-stage recovery:
@@ -344,6 +361,13 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     else:
         active_llm = llm_with_tools
         active_primary = PRIMARY_OLLAMA_MODEL
+
+    is_ashna = (
+        active_primary.startswith("ashna") or 
+        active_primary == "ashnaai"
+    )
+    if is_ashna:
+        messages = _clean_messages_for_ashna(messages)
 
     try:
         return active_llm.invoke(messages)
@@ -372,6 +396,8 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
         try:
             # max_non_system=2 is extremely aggressive to guarantee a response
             emergency_messages = _trim_context(messages, max_non_system=2)
+            if is_ashna:
+                emergency_messages = _clean_messages_for_ashna(emergency_messages)
             return active_llm.invoke(emergency_messages)
         except Exception as retry_exc:
             if not _is_ollama_memory_error(retry_exc):
