@@ -12,10 +12,23 @@ class GenerativeExplainerAgent:
 
     def __init__(self):
 
-        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "mistral:latest").strip()
-        self.llm = ChatOllama(model=model_name, temperature=0.5)
-
-        self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "gpt-oss:120b-cloud").strip()
+        if model_name.startswith("ashna") or model_name == "ashnaai" or (os.getenv("ASHNA_API_KEY") and model_name == "gpt-oss:120b-cloud"):
+            active_model = "ashnaai" if model_name == "gpt-oss:120b-cloud" else model_name
+            from langchain_openai import ChatOpenAI
+            api_key = os.getenv("ASHNA_API_KEY")
+            base_url = os.getenv("ASHNA_BASE_URL") or "https://api.ashna.ai/v1/api"
+            if api_key:
+                self.llm = ChatOpenAI(
+                    model=active_model,
+                    temperature=0.5,
+                    api_key=api_key,
+                    base_url=base_url,
+                )
+            else:
+                self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+        else:
+            self.llm = ChatOllama(model=model_name, temperature=0.5)
 
         self.prompt = PromptTemplate(
             input_variables=[

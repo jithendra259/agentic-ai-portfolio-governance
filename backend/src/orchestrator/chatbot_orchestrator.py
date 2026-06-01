@@ -46,7 +46,10 @@ from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_s
 
 
 logger = logging.getLogger(__name__)
-CONFIGURED_PRIMARY_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "qwen3-coder-next:cloud").strip()
+CONFIGURED_PRIMARY_OLLAMA_MODEL = (
+    os.getenv("PORTFOLIO_OLLAMA_MODEL") or 
+    ("ashnaai" if os.getenv("ASHNA_API_KEY") else "qwen3-coder-next:cloud")
+).strip()
 CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "qwen3:1.7b").strip()
 
 
@@ -83,7 +86,7 @@ def _list_installed_ollama_models() -> list[str]:
 def _resolve_ollama_model(preferred_models: list[str], installed_models: list[str]) -> str:
     for model_name in preferred_models:
         candidate = (model_name or "").strip()
-        if candidate and candidate in installed_models:
+        if candidate and (candidate.startswith("ashna") or candidate == "ashnaai" or candidate in installed_models):
             return candidate
 
     return (preferred_models[0] if preferred_models else "").strip()
@@ -227,14 +230,40 @@ tools = [
 ]
 
 
+def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Optional[int] = None):
+    if model_name.startswith("ashna") or model_name == "ashnaai":
+        from langchain_openai import ChatOpenAI
+        api_key = os.getenv("ASHNA_API_KEY")
+        base_url = os.getenv("ASHNA_BASE_URL") or "https://api.ashna.ai/v1/api"
+        if api_key:
+            kwargs = {
+                "model": model_name,
+                "temperature": temperature,
+                "api_key": api_key,
+                "base_url": base_url,
+                "tags": ["orchestrator_llm"],
+            }
+            if num_predict is not None:
+                kwargs["max_tokens"] = num_predict
+            return ChatOpenAI(**kwargs)
+        else:
+            logger.warning("ASHNA_API_KEY is not set in environment. Falling back to local default.")
+            model_name = "qwen3-coder-next:cloud"
+
+    kwargs = {
+        "model": model_name,
+        "temperature": temperature,
+        "num_ctx": 8192,
+        "keep_alive": "10m",
+        "tags": ["orchestrator_llm"],
+    }
+    if num_predict is not None:
+        kwargs["num_predict"] = num_predict
+    return ChatOllama(**kwargs)
+
+
 def _build_llm_with_tools(model_name: str):
-    return ChatOllama(
-        model=model_name,
-        temperature=0.2,
-        num_ctx=8192,   # 8k tokens: safe for 30 msgs at avg 250 tokens each (~7500 total)
-        keep_alive="10m",
-        tags=["orchestrator_llm"],
-    ).bind_tools(tools)
+    return _get_chat_llm(model_name).bind_tools(tools)
 
 
 llm_with_tools = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL)
@@ -766,10 +795,9 @@ def summarize_conversation_node(state: AgentState, config: RunnableConfig):
     
     try:
         # Use a deterministic call for summarization
-        from langchain_ollama import ChatOllama
         override_model = config.get("configurable", {}).get("override_model") if config else None
         active_model = override_model or PRIMARY_OLLAMA_MODEL
-        summarizer = ChatOllama(model=active_model, temperature=0, num_predict=512)
+        summarizer = _get_chat_llm(active_model, temperature=0, num_predict=512)
         response = summarizer.invoke(summarization_prompt)
         new_summary = (response.content if hasattr(response, "content") else str(response)).strip()
         
@@ -1128,10 +1156,9 @@ def finalize_governance_node(state: AgentState, config: RunnableConfig):
                     f"The knowledge base returned the following grounded context:\n{content}\n\n"
                     f"Please synthesise this into a clear, concise answer for the user."
                 )
-                from langchain_ollama import ChatOllama
                 override_model = config.get("configurable", {}).get("override_model") if config else None
                 active_model = override_model or PRIMARY_OLLAMA_MODEL
-                synth_llm = ChatOllama(model=active_model, temperature=0.2)
+                synth_llm = _get_chat_llm(active_model, temperature=0.2)
                 synth_response = synth_llm.invoke(synthesis_prompt)
                 synthesised = (synth_response.content if hasattr(synth_response, "content") else str(synth_response)).strip()
                 if synthesised:

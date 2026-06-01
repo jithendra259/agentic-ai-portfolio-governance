@@ -197,8 +197,19 @@ def _stream_event(payload: dict[str, Any]) -> bytes:
 def health_check() -> dict:
     mongo_status = getattr(app.state, "mongo_available", False)
     
-    # Basic check for Ollama model presence
-    ollama_status = PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS
+    import os
+    has_ashna_key = bool(os.getenv("ASHNA_API_KEY"))
+    
+    # Basic check for model presence
+    ollama_status = (
+        PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS 
+        or (PRIMARY_OLLAMA_MODEL.startswith("ashna") and has_ashna_key)
+    )
+    
+    available_models = list(INSTALLED_OLLAMA_MODELS)
+    if has_ashna_key:
+        if "ashnaai" not in available_models:
+            available_models.insert(0, "ashnaai")
     
     return {
         "status": "ok" if mongo_status and ollama_status else "degraded",
@@ -207,11 +218,12 @@ def health_check() -> dict:
         "components": {
             "mongodb": "connected" if mongo_status else "disconnected",
             "ollama": "ready" if ollama_status else "model_missing",
+            "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
         "models": {
             "primary": PRIMARY_OLLAMA_MODEL,
             "fallback": FALLBACK_OLLAMA_MODEL,
-            "available": INSTALLED_OLLAMA_MODELS
+            "available": available_models
         }
     }
 
