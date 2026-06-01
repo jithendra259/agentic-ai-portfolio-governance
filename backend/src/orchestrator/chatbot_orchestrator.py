@@ -236,8 +236,11 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         api_key = os.getenv("ASHNA_API_KEY")
         base_url = os.getenv("ASHNA_BASE_URL") or "https://api.ashna.ai/v1/api"
         if api_key:
+            actual_model = model_name
+            if model_name.startswith("ashna/"):
+                actual_model = model_name[len("ashna/"):]
             kwargs = {
-                "model": model_name,
+                "model": actual_model,
                 "temperature": temperature,
                 "api_key": api_key,
                 "base_url": base_url,

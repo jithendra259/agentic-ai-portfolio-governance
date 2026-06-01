@@ -208,8 +208,16 @@ def health_check() -> dict:
     
     available_models = list(INSTALLED_OLLAMA_MODELS)
     if has_ashna_key:
-        if "ashnaai" not in available_models:
-            available_models.insert(0, "ashnaai")
+        ashna_models = [
+            "ashnaai",
+            "ashna/gpt-4",
+            "ashna/gpt-3.5",
+            "ashna/gemini-pro",
+            "ashna/gemini-flash"
+        ]
+        for model in reversed(ashna_models):
+            if model not in available_models:
+                available_models.insert(0, model)
     
     return {
         "status": "ok" if mongo_status and ollama_status else "degraded",
