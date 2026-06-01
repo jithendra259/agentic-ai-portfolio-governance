@@ -394,6 +394,156 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
 @app.get("/api/plots/{plot_id}")
 def get_plot_data(plot_id: str):
+    if plot_id == "test-candlestick":
+        return {
+            "plot_type": "candlestick",
+            "title": "AAPL Candlestick Chart (Interactive)",
+            "series": [
+                {
+                    "name": "AAPL",
+                    "data": [
+                        {"date": "2024-01-02", "open": 183.73, "high": 185.22, "low": 182.5, "close": 184.89, "volume": 120000000},
+                        {"date": "2024-01-03", "open": 184.89, "high": 186.15, "low": 184.22, "close": 185.92, "volume": 98000000},
+                        {"date": "2024-01-04", "open": 185.92, "high": 187.3, "low": 185.5, "close": 186.8, "volume": 85000000},
+                        {"date": "2024-01-05", "open": 186.8, "high": 189.5, "low": 186.0, "close": 188.9, "volume": 105000000},
+                        {"date": "2024-01-08", "open": 188.9, "high": 190.2, "low": 187.5, "close": 188.2, "volume": 92000000},
+                        {"date": "2024-01-09", "open": 188.2, "high": 191.5, "low": 187.0, "close": 190.5, "volume": 88000000},
+                        {"date": "2024-01-10", "open": 190.5, "high": 192.3, "low": 189.8, "close": 191.9, "volume": 95000000},
+                        {"date": "2024-01-11", "open": 191.9, "high": 193.0, "low": 190.5, "close": 191.2, "volume": 80000000},
+                        {"date": "2024-01-12", "open": 191.2, "high": 192.5, "low": 189.2, "close": 190.1, "volume": 78000000},
+                        {"date": "2024-01-16", "open": 190.1, "high": 191.0, "low": 188.5, "close": 189.3, "volume": 82000000},
+                        {"date": "2024-01-17", "open": 189.3, "high": 190.5, "low": 187.2, "close": 188.0, "volume": 90000000},
+                        {"date": "2024-01-18", "open": 188.0, "high": 192.0, "low": 187.8, "close": 191.5, "volume": 115000000},
+                        {"date": "2024-01-19", "open": 191.5, "high": 193.5, "low": 191.0, "close": 192.8, "volume": 102000000},
+                        {"date": "2024-01-22", "open": 192.8, "high": 194.2, "low": 192.0, "close": 193.5, "volume": 85000000},
+                        {"date": "2024-01-23", "open": 193.5, "high": 195.0, "low": 193.0, "close": 194.5, "volume": 72000000},
+                        {"date": "2024-01-24", "open": 194.5, "high": 196.3, "low": 194.0, "close": 195.2, "volume": 94000000},
+                        {"date": "2024-01-25", "open": 195.2, "high": 195.5, "low": 192.8, "close": 193.8, "volume": 89000000},
+                        {"date": "2024-01-26", "open": 193.8, "high": 194.8, "low": 192.5, "close": 193.2, "volume": 68000000},
+                        {"date": "2024-01-29", "open": 193.2, "high": 195.2, "low": 192.8, "close": 194.9, "volume": 74000000},
+                        {"date": "2024-01-30", "open": 194.9, "high": 196.0, "low": 194.0, "close": 195.5, "volume": 80000000},
+                        {"date": "2024-01-31", "open": 195.5, "high": 195.8, "low": 192.2, "close": 193.1, "volume": 122000000},
+                    ]
+                }
+            ]
+        }
+    elif plot_id == "test-pie":
+        return {
+            "plot_type": "pie",
+            "title": "Portfolio Asset Weights (Interactive)",
+            "centerLabel": "Allocation",
+            "series": [
+                {
+                    "data": [
+                        {"id": "AAPL", "value": 0.40, "color": "#3b82f6"},
+                        {"id": "MSFT", "value": 0.30, "color": "#10b981"},
+                        {"id": "GOOG", "value": 0.20, "color": "#f59e0b"},
+                        {"id": "AMZN", "value": 0.10, "color": "#ef4444"}
+                    ],
+                    "innerRadius": 60,
+                    "outerRadius": 110,
+                    "paddingAngle": 3,
+                    "cornerRadius": 6,
+                    "arcLabel": "percent"
+                }
+            ]
+        }
+    elif plot_id == "test-bar":
+        return {
+            "plot_type": "bar",
+            "title": "Quarterly Performance (Interactive)",
+            "xAxis": [
+                {
+                    "dataKey": "label",
+                    "scaleType": "band",
+                    "categoryGapRatio": 0.3,
+                    "barGapRatio": 0.1
+                }
+            ],
+            "series": [
+                {
+                    "name": "Revenue",
+                    "label": "Revenue",
+                    "color": "#3b82f6",
+                    "barLabel": "value",
+                    "data": [
+                        {"x": "Q1", "y": 120},
+                        {"x": "Q2", "y": 150},
+                        {"x": "Q3", "y": 180},
+                        {"x": "Q4", "y": 220}
+                    ]
+                },
+                {
+                    "name": "Expenses",
+                    "label": "Expenses",
+                    "color": "#ef4444",
+                    "barLabel": "value",
+                    "data": [
+                        {"x": "Q1", "y": 90},
+                        {"x": "Q2", "y": 100},
+                        {"x": "Q3", "y": 110},
+                        {"x": "Q4", "y": 130}
+                    ]
+                }
+            ]
+        }
+    elif plot_id == "test-sankey":
+        return {
+            "plot_type": "sankey",
+            "title": "Governance Fund Flow (Interactive Pro)",
+            "valueFormatter": "currency",
+            "nodes": [
+                {"id": "A", "label": "Dividends Received", "color": "#3b82f6"},
+                {"id": "B", "label": "Reinvestment", "color": "#10b981"},
+                {"id": "C", "label": "Taxes Paid", "color": "#ef4444"},
+                {"id": "D", "label": "Retained Cash Reserve", "color": "#f59e0b"}
+            ],
+            "links": [
+                {"source": "A", "target": "B", "value": 50000},
+                {"source": "A", "target": "C", "value": 15000},
+                {"source": "A", "target": "D", "value": 35000}
+            ]
+        }
+    elif plot_id == "test-scatter":
+        return {
+            "plot_type": "scatter",
+            "title": "Risk vs Expected Return (Interactive)",
+            "x_label": "Volatility (Risk %)",
+            "y_label": "Expected Return (%)",
+            "series": [
+                {
+                    "name": "Equities",
+                    "color": "#3b82f6",
+                    "markerSize": 8,
+                    "data": [
+                        {"x": 12, "y": 8, "id": "AAPL"},
+                        {"x": 15, "y": 10, "id": "TSLA"},
+                        {"x": 10, "y": 6, "id": "MSFT"}
+                    ]
+                },
+                {
+                    "name": "Bonds",
+                    "color": "#10b981",
+                    "markerSize": 8,
+                    "data": [
+                        {"x": 4, "y": 2, "id": "UST10Y"},
+                        {"x": 5, "y": 3, "id": "CORP"}
+                    ]
+                }
+            ]
+        }
+    elif plot_id == "test-sparkline":
+        return {
+            "plot_type": "sparkline",
+            "title": "Asset Valuation History (Interactive Sparkline)",
+            "data": [10, 12, 15, 13, 16, 18, 17, 21, 24, 23, 26],
+            "plotType": "line",
+            "area": True,
+            "curve": "natural",
+            "color": "#10b981",
+            "height": 60
+        }
+
     from src.memory.mongodb_memory_layer import MongoMemoryManager
     mongo = MongoMemoryManager()
     data = mongo.retrieve_plot(plot_id)

@@ -1,2 +1,2 @@
 allowBuilds:
-  '@mui/x-telemetry': set this to true or false
+  '@mui/x-telemetry': true

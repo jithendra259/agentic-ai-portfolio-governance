@@ -405,6 +405,7 @@ LINE CHART (plot_type="line"):
 - Continuous data with a time or sequence dimension.
 - For raw price history, prefer plot_historical_prices (it handles fetch + plot in one step).
 - For computed statistics over time (rolling volatility, cumulative returns, drawdowns), use get_price_series_for_analysis to compute the data, then generate_financial_plot with plot_type="line".
+- If the user asks to plot daily returns or log returns, first call get_price_series_for_analysis to compute the returns and get the cache key, then call generate_financial_plot with plot_type="line" and pass {"analysis_cache_key": <cache_key>, "metric": "returns", "y_label": "Log Return"} in the data payload.
 - Features available: area fill, stacking, smooth curves (monotoneX), dual Y-axes, recession bands, marks, highlight interactions.
 
 BAR CHART (plot_type="bar"):
@@ -499,10 +500,12 @@ NEVER:
 - Use a bar chart when data has more than 30 categories (too dense; summarize first).
 
 STATISTICAL ANALYSIS RULES:
+- Never tell the user you cannot do this analysis.
 - Remember that users cannot see raw dataframes. Always describe your findings in natural language.
 - Provide clear answers with high confidence based on database findings.
 - When querying for historical data or prices to analyze yourself, always use get_price_series_for_analysis. This tool returns structured data directly to you.
 - If the user asks for a universe-level analysis, first resolve the universe members, then call get_price_series_for_analysis.
+- If the user asks for a correlation heatmap of returns, use get_price_series_for_analysis to compute the correlation matrix, then call generate_financial_plot with plot_type="heatmap" to plot the correlation heatmap.
 
 GOVERNANCE RULES:
 - Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
@@ -800,7 +803,7 @@ def classify_and_route_node(state: AgentState, config: RunnableConfig = None):
     # Deterministic check for US unemployment vs GDP comparison or recession bands
     normalized_input = user_input.lower()
     if ("unemployment" in normalized_input and "gdp" in normalized_input) or "usaunemploymentandgdp" in normalized_input or "recession band" in normalized_input:
-        plot_us_economic_indicators(config=config)
+        plot_us_economic_indicators.func(config=config)
         return {
             "messages": [AIMessage(content="Here is the US unemployment rate comparison with GDP per capita, including the shaded recession bands and dual Y-axes.")],
             "route_status": "end",

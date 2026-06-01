@@ -1371,9 +1371,7 @@ def plot_historical_prices(
                 )
                 continue
 
-            # Intelligent downsampling for large ranges to avoid latency
-            if len(filtered) > 600:
-                filtered = _downsample_df(filtered, target_points=500)
+            # Full data requested - bypassing downsampling
 
             included[ticker] = [
                 {
@@ -2456,16 +2454,28 @@ def plot_us_economic_indicators(config: RunnableConfig = None) -> str:
         "recessions": recessions
     }
 
+    import uuid
+    from src.memory.mongodb_memory_layer import MongoMemoryManager
+    
+    plot_id = str(uuid.uuid4())
+    
+    try:
+        mongo = MongoMemoryManager()
+        mongo.store_plot(plot_id, spec, ttl_days=1)
+    except Exception as e:
+        logger.error("Failed to store plot in MongoDB: %s", e)
+
     session_id = (
         config.get("configurable", {}).get("thread_id", "default")
         if config
         else "default"
     )
-    if session_id not in GLOBAL_PLOT_DATA:
-        GLOBAL_PLOT_DATA[session_id] = []
-    if isinstance(GLOBAL_PLOT_DATA[session_id], dict):
-        GLOBAL_PLOT_DATA[session_id] = [GLOBAL_PLOT_DATA[session_id]]
-    GLOBAL_PLOT_DATA[session_id].append(spec)
+    from src.agents.plot_store import GLOBAL_PLOT_IDS
+    if session_id not in GLOBAL_PLOT_IDS:
+        GLOBAL_PLOT_IDS[session_id] = []
+    if isinstance(GLOBAL_PLOT_IDS[session_id], str):
+        GLOBAL_PLOT_IDS[session_id] = [GLOBAL_PLOT_IDS[session_id]]
+    GLOBAL_PLOT_IDS[session_id].append(plot_id)
 
     return "Chart ready: US unemployment rate comparison with GDP per capita"
 

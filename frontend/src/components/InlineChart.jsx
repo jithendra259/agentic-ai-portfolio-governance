@@ -9,6 +9,22 @@ import { Box, Typography, Paper } from '@mui/material';
 import { useDrawingArea, useXScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
 import { useTheme, alpha } from '@mui/material/styles';
 
+// Premium Candlestick Chart imports
+import { ChartsClipPath } from '@mui/x-charts-premium/ChartsClipPath';
+import { Unstable_CandlestickPlot as CandlestickPlot } from '@mui/x-charts-premium/CandlestickChart';
+import { LinePlot } from '@mui/x-charts-premium/LineChart';
+import { BarPlot } from '@mui/x-charts-premium/BarChart';
+import { ChartsXAxis } from '@mui/x-charts-premium/ChartsXAxis';
+import { ChartsYAxis } from '@mui/x-charts-premium/ChartsYAxis';
+import { useAxesTooltip } from '@mui/x-charts-premium/ChartsTooltip';
+import { ChartsDataProviderPremium } from '@mui/x-charts-premium/ChartsDataProviderPremium';
+import { ChartsWrapper } from '@mui/x-charts-premium/ChartsWrapper';
+import { ChartsAxisHighlight } from '@mui/x-charts-premium/ChartsAxisHighlight';
+import { ChartsGrid } from '@mui/x-charts-premium/ChartsGrid';
+import { ChartsWebGLLayer } from '@mui/x-charts-premium/ChartsWebGLLayer';
+import { ChartsLayerContainer } from '@mui/x-charts-premium/ChartsLayerContainer';
+import { ChartsSvgLayer } from '@mui/x-charts-premium/ChartsSvgLayer';
+
 // Must match PALETTE in generate_dynamic_plot.py
 const PALETTE = [
   '#3b82f6',
@@ -410,11 +426,16 @@ function SpecBarChart({ spec }) {
     // ── X-axis configuration ──
     let xAxisConfig;
     if (spec.xAxis && Array.isArray(spec.xAxis)) {
-      xAxisConfig = spec.xAxis.map(ax => ({
-        ...ax,
-        scaleType: ax.scaleType || 'band',
-        tickLabelStyle: { ...AXIS_STYLE, angle: -30, textAnchor: 'end' },
-      }));
+      xAxisConfig = spec.xAxis.map(ax => {
+        const xAx = {
+          ...ax,
+          scaleType: ax.scaleType || 'band',
+          tickLabelStyle: { ...AXIS_STYLE, angle: -30, textAnchor: 'end' },
+        };
+        if (spec.categoryGapRatio != null) xAx.categoryGapRatio = spec.categoryGapRatio;
+        if (spec.barGapRatio != null) xAx.barGapRatio = spec.barGapRatio;
+        return xAx;
+      });
     } else {
       const xAx = {
         dataKey: 'label',
@@ -480,6 +501,25 @@ function SpecBarChart({ spec }) {
       }}
       slotProps={{ legend: { labelStyle: { fill: '#e5e7eb', fontSize: 12 } } }}
     />
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom Pie Center Label
+// ─────────────────────────────────────────────────────────────────────────────
+function PieCenterLabel({ children }) {
+  const { width, height, left, top } = useDrawingArea();
+  return (
+    <text
+      x={left + width / 2}
+      y={top + height / 2}
+      textAnchor="middle"
+      dominantBaseline="central"
+      fill="#ffffff"
+      style={{ fontSize: '1.25rem', fontWeight: 'bold' }}
+    >
+      {children}
+    </text>
   );
 }
 
@@ -644,7 +684,9 @@ function SpecPieChart({ spec }) {
         },
       }}
       {...chartProps}
-    />
+    >
+      {spec.centerLabel && <PieCenterLabel>{spec.centerLabel}</PieCenterLabel>}
+    </PieChart>
   );
 }
 
@@ -821,8 +863,21 @@ function SpecSankeyChart({ spec }) {
         nodes: spec.nodes || [],
         links: spec.links || [],
       },
-      nodeOptions: spec.nodeOptions || {},
-      linkOptions: spec.linkOptions || {},
+      nodeOptions: {
+        highlight: 'links',
+        fade: 'global',
+        sort: 'fixed',
+        width: 12,
+        padding: 18,
+        ...spec.nodeOptions,
+      },
+      linkOptions: {
+        highlight: 'nodes',
+        fade: 'global',
+        color: 'target-gradient',
+        opacity: 0.5,
+        ...spec.linkOptions,
+      },
       valueFormatter,
     };
   }, [spec.nodes, spec.links, spec.nodeOptions, spec.linkOptions, valueFormatter]);
@@ -843,26 +898,86 @@ function SpecSankeyChart({ spec }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Candlestick chart
 // ─────────────────────────────────────────────────────────────────────────────
+function CandlestickTooltip({ hasVolume, formatVolume }) {
+  const drawingArea = useDrawingArea();
+  const axesTooltipData = useAxesTooltip({
+    directions: ['x'],
+  });
+
+  const tooltipData = axesTooltipData?.[0];
+
+  if (!tooltipData) {
+    return null;
+  }
+
+  const ohlcItem = tooltipData.seriesItems.find(
+    (item) => item.seriesId === 'ohlc'
+  );
+  const movingAverageItem = tooltipData.seriesItems.find(
+    (item) => item.seriesId === 'moving-average'
+  );
+  const volumeItem = tooltipData.seriesItems.find(
+    (item) => item.seriesId === 'volume'
+  );
+
+  const formatVal = (v) => v == null ? '' : v.toFixed(2);
+
+  const ohlcValue = ohlcItem?.value;
+  const maValue = movingAverageItem?.value;
+  const volValue = volumeItem?.value;
+
+  return (
+    <foreignObject
+      x={drawingArea.left}
+      y={drawingArea.top}
+      width={drawingArea.width}
+      height={drawingArea.height}
+      style={{ pointerEvents: 'none' }}
+    >
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '4px',
+        fontSize: '11px',
+        padding: '6px 8px',
+        color: '#e5e7eb',
+        background: 'rgba(17, 24, 39, 0.85)',
+        backdropFilter: 'blur(4px)',
+        border: '1px solid #374151',
+        borderRadius: '4px',
+        width: 'fit-content',
+        margin: '8px',
+        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
+      }}>
+        {ohlcValue && (
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <span><strong style={{ color: '#9ca3af' }}>O:</strong> ${formatVal(ohlcValue.open)}</span>
+            <span><strong style={{ color: '#9ca3af' }}>H:</strong> ${formatVal(ohlcValue.high)}</span>
+            <span><strong style={{ color: '#9ca3af' }}>L:</strong> ${formatVal(ohlcValue.low)}</span>
+            <span><strong style={{ color: '#9ca3af' }}>C:</strong> ${formatVal(ohlcValue.close)}</span>
+            {hasVolume && volValue != null && (
+              <span><strong style={{ color: '#9ca3af' }}>V:</strong> {formatVolume(volValue)}</span>
+            )}
+          </div>
+        )}
+        {maValue != null && (
+          <div>
+            <span style={{ color: '#3b82f6', fontWeight: 600 }}>20-day MA:</span> ${formatVal(maValue)}
+          </div>
+        )}
+      </div>
+    </foreignObject>
+  );
+}
+
 function SpecCandlestickChart({ spec }) {
   const height = spec.height !== undefined ? spec.height : CHART_HEIGHT;
   const series = spec.series;
   const pts = series?.[0]?.data || [];
 
-  const containerRef = React.useRef(null);
-  const [containerWidth, setContainerWidth] = React.useState(600);
-  const [hoveredIndex, setHoveredIndex] = React.useState(null);
-  const [tooltipPos, setTooltipPos] = React.useState(null);
-
-  React.useEffect(() => {
-    if (!containerRef.current) return;
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries && entries[0]) {
-        setContainerWidth(entries[0].contentRect.width || 600);
-      }
-    });
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []);
+  const theme = useTheme();
+  const clipId = React.useId();
+  const clipPathId = `clip-path-${clipId.replace(/:/g, '')}`;
 
   const formatVolume = (val) => {
     if (val == null) return '';
@@ -870,6 +985,11 @@ function SpecCandlestickChart({ spec }) {
     if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
     if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
     return val.toString();
+  };
+
+  const formatAsDollar = (value) => {
+    if (value == null) return '';
+    return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
   };
 
   const { maxVolume, hasVolume } = useMemo(() => {
@@ -884,134 +1004,37 @@ function SpecCandlestickChart({ spec }) {
     return { maxVolume: maxVol, hasVolume: hasVol };
   }, [pts]);
 
-  const margin = useMemo(() => {
-    return {
-      top: 20,
-      right: hasVolume ? 60 : 30,
-      bottom: 40,
-      left: 60
-    };
-  }, [hasVolume]);
+  const xData = useMemo(() => pts.map((entry) => new Date(entry.date)), [pts]);
 
-  const plotWidth = containerWidth - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
+  const ohlcData = useMemo(() => pts.map((entry) => [
+    entry.open,
+    entry.high,
+    entry.low,
+    entry.close,
+  ]), [pts]);
 
-  const priceHeight = hasVolume ? plotHeight * 0.73 : plotHeight;
-  const volumeHeight = hasVolume ? plotHeight * 0.22 : 0;
-  const gap = hasVolume ? plotHeight * 0.05 : 0;
+  const volumeData = useMemo(() => pts.map((entry) => entry.volume || 0), [pts]);
 
-  const { minVal, maxVal, maData } = useMemo(() => {
-    let min = Infinity;
-    let max = -Infinity;
-
-    // Compute 20-day SMA
-    const ma = [];
-    const period = 20;
-    for (let i = 0; i < pts.length; i++) {
-      if (i < period - 1) {
-        ma.push(null);
-      } else {
-        const sum = pts.slice(i - period + 1, i + 1).reduce((acc, p) => acc + p.close, 0);
-        ma.push(sum / period);
+  const movingAverageData = useMemo(() => {
+    const windowSize = 20;
+    return pts.map((_, i) => {
+      if (i < windowSize - 1) {
+        return null;
       }
-    }
-
-    pts.forEach((pt, idx) => {
-      if (pt.low < min) min = pt.low;
-      if (pt.high > max) max = pt.high;
-
-      const maVal = ma[idx];
-      if (maVal !== null && maVal !== undefined) {
-        if (maVal < min) min = maVal;
-        if (maVal > max) max = maVal;
-      }
+      const sum = pts
+        .slice(i - windowSize + 1, i + 1)
+        .reduce((acc, entry) => acc + entry.close, 0);
+      return sum / windowSize;
     });
-
-    const range = max - min;
-    const pad = range > 0 ? range * 0.05 : 1.0;
-    return { minVal: min - pad, maxVal: max + pad, maData: ma };
   }, [pts]);
 
-  const getX = (index) => {
-    if (pts.length === 0) return margin.left;
-    const slotWidth = plotWidth / pts.length;
-    return margin.left + (index + 0.5) * slotWidth;
-  };
-
-  const getYPrice = (val) => {
-    if (maxVal === minVal) return margin.top + priceHeight / 2;
-    return margin.top + priceHeight - ((val - minVal) / (maxVal - minVal)) * priceHeight;
-  };
-
-  const getYVolume = (val) => {
-    if (maxVolume === 0) return margin.top + plotHeight;
-    const volumeStart = margin.top + priceHeight + gap;
-    return volumeStart + volumeHeight - (val / maxVolume) * volumeHeight;
-  };
-
-  const priceGridLevels = useMemo(() => {
-    if (pts.length === 0) return [];
-    const levels = [];
-    const step = (maxVal - minVal) / 4;
-    for (let i = 0; i < 5; i++) {
-      levels.push(minVal + step * i);
+  const volumeBarColorGetter = ({ dataIndex }) => {
+    if (dataIndex === 0) {
+      return theme.palette.success.main;
     }
-    return levels;
-  }, [minVal, maxVal, pts.length]);
-
-  const volumeTicks = useMemo(() => {
-    if (!hasVolume || maxVolume === 0) return [];
-    return [0, maxVolume / 2, maxVolume];
-  }, [hasVolume, maxVolume]);
-
-  const xTicks = useMemo(() => {
-    if (pts.length === 0) return [];
-    const ticksCount = Math.min(pts.length, 5);
-    if (ticksCount <= 1) return [0];
-    const indices = [];
-    for (let i = 0; i < ticksCount; i++) {
-      indices.push(Math.floor((i * (pts.length - 1)) / (ticksCount - 1)));
-    }
-    return indices;
-  }, [pts.length]);
-
-  const yFormatter = getValueFormatter(spec.y_format || 'currency');
-  const slotWidth = pts.length > 0 ? plotWidth / pts.length : 0;
-  const candleWidth = Math.max(1.5, slotWidth * 0.7);
-
-  const handleMouseMove = (e) => {
-    if (!containerRef.current || pts.length === 0) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    if (mouseX < margin.left || mouseX > containerWidth - margin.right) {
-      setHoveredIndex(null);
-      return;
-    }
-
-    const relativeX = mouseX - margin.left;
-    const pct = relativeX / plotWidth;
-    const idx = Math.min(pts.length - 1, Math.max(0, Math.floor(pct * pts.length)));
-
-    setHoveredIndex(idx);
-
-    const tooltipWidth = 190;
-    let tooltipX = mouseX + 15;
-    let tooltipY = mouseY - 40;
-
-    if (tooltipX + tooltipWidth > containerWidth) {
-      tooltipX = mouseX - tooltipWidth - 15;
-    }
-    if (tooltipY < 0) {
-      tooltipY = 10;
-    }
-
-    setTooltipPos({ x: tooltipX, y: tooltipY });
-  };
-
-  const handleMouseLeave = () => {
-    setHoveredIndex(null);
+    return pts[dataIndex].close >= pts[dataIndex - 1].close
+      ? theme.palette.success.main
+      : theme.palette.error.main;
   };
 
   if (pts.length === 0) {
@@ -1022,302 +1045,86 @@ function SpecCandlestickChart({ spec }) {
     );
   }
 
-  const animationSx = getAnimationSx(spec.animation);
-
   return (
-    <Box
-      ref={containerRef}
-      onMouseMove={handleMouseMove}
-      onMouseLeave={handleMouseLeave}
-      sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', ...animationSx }}
-    >
-      {/* Legend overlay */}
-      <Box sx={{ display: 'flex', gap: 2.5, justifyContent: 'center', mb: 1 }}>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: 11, color: '#9ca3af' }}>
-          <span style={{ display: 'inline-block', width: 12, height: 6, backgroundColor: '#10b981', borderRadius: 1 }} />
-          <span>Price</span>
-        </Box>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: 11, color: '#9ca3af' }}>
-          <span style={{ display: 'inline-block', width: 12, height: 1.5, backgroundColor: '#3b82f6' }} />
-          <span>20-day SMA</span>
-        </Box>
-        {hasVolume && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, fontSize: 11, color: '#9ca3af' }}>
-            <span style={{ display: 'inline-block', width: 10, height: 10, backgroundColor: '#9ca3af', opacity: 0.5, borderRadius: 1 }} />
-            <span>Volume</span>
-          </Box>
-        )}
-      </Box>
-
-      <Box sx={{ width: '100%', height, position: 'relative' }}>
-        <svg width={containerWidth} height={height} style={{ display: 'block' }}>
-          {/* Price grid lines */}
-          {priceGridLevels.map((level, index) => {
-            const y = getYPrice(level);
-            return (
-              <React.Fragment key={`grid-${index}`}>
-                <line
-                  x1={margin.left}
-                  y1={y}
-                  x2={containerWidth - margin.right}
-                  y2={y}
-                  stroke="#374151"
-                  strokeDasharray="4 4"
-                />
-                <text
-                  x={margin.left - 8}
-                  y={y + 4}
-                  textAnchor="end"
-                  fill="#9ca3af"
-                  fontSize={11}
-                >
-                  {yFormatter(level)}
-                </text>
-              </React.Fragment>
-            );
-          })}
-
-          {/* Volume ticks on the right Y axis */}
-          {hasVolume && volumeTicks.map((tick, index) => {
-            const y = getYVolume(tick);
-            return (
-              <React.Fragment key={`vol-tick-${index}`}>
-                <line
-                  x1={containerWidth - margin.right}
-                  y1={y}
-                  x2={containerWidth - margin.right + 4}
-                  y2={y}
-                  stroke="#374151"
-                />
-                <text
-                  x={containerWidth - margin.right + 8}
-                  y={y + 4}
-                  textAnchor="start"
-                  fill="#9ca3af"
-                  fontSize={11}
-                >
-                  {formatVolume(tick)}
-                </text>
-              </React.Fragment>
-            );
-          })}
-
-          {/* X axis ticks and labels */}
-          {xTicks.map((idx) => {
-            const pt = pts[idx];
-            if (!pt) return null;
-            const x = getX(idx);
-            return (
-              <React.Fragment key={`xtick-${idx}`}>
-                <line
-                  x1={x}
-                  y1={height - margin.bottom}
-                  x2={x}
-                  y2={height - margin.bottom + 4}
-                  stroke="#374151"
-                />
-                <text
-                  x={x}
-                  y={height - margin.bottom + 18}
-                  textAnchor="middle"
-                  fill="#9ca3af"
-                  fontSize={11}
-                >
-                  {pt.date}
-                </text>
-              </React.Fragment>
-            );
-          })}
-
-          {/* Borders */}
-          <line
-            x1={margin.left}
-            y1={margin.top}
-            x2={margin.left}
-            y2={height - margin.bottom}
-            stroke="#4b5563"
-          />
-          <line
-            x1={containerWidth - margin.right}
-            y1={margin.top}
-            x2={containerWidth - margin.right}
-            y2={height - margin.bottom}
-            stroke="#4b5563"
-          />
-          <line
-            x1={margin.left}
-            y1={height - margin.bottom}
-            x2={containerWidth - margin.right}
-            y2={height - margin.bottom}
-            stroke="#4b5563"
-          />
-
-          {/* Hover highlight guide band */}
-          {hoveredIndex !== null && (
-            <rect
-              x={getX(hoveredIndex) - slotWidth / 2}
-              y={margin.top}
-              width={slotWidth}
-              height={plotHeight}
-              fill="rgba(255, 255, 255, 0.05)"
-              pointerEvents="none"
-            />
-          )}
-
-          {/* Volume Bars */}
-          {hasVolume && pts.map((pt, idx) => {
-            if (pt.volume == null) return null;
-            const x = getX(idx);
-            const y = getYVolume(pt.volume);
-            const barHeight = margin.top + plotHeight - y;
-
-            const prevClose = idx > 0 ? pts[idx - 1].close : pt.open;
-            const color = pt.close >= prevClose ? '#10b981' : '#ef4444';
-
-            return (
-              <rect
-                key={`vol-${idx}`}
-                x={x - candleWidth / 2}
-                y={y}
-                width={candleWidth}
-                height={Math.max(1, barHeight)}
-                fill={color}
-                opacity={0.35}
-              />
-            );
-          })}
-
-          {/* Candlesticks (Wicks and Bodies) */}
-          {pts.map((pt, idx) => {
-            const x = getX(idx);
-            const yOpen = getYPrice(pt.open);
-            const yClose = getYPrice(pt.close);
-            const yHigh = getYPrice(pt.high);
-            const yLow = getYPrice(pt.low);
-
-            const isBullish = pt.close >= pt.open;
-            const color = isBullish ? '#10b981' : '#ef4444';
-            const bodyTop = Math.min(yOpen, yClose);
-            const bodyHeight = Math.max(1.5, Math.abs(yOpen - yClose));
-
-            return (
-              <g key={`candle-${idx}`}>
-                <line
-                  x1={x}
-                  y1={yHigh}
-                  x2={x}
-                  y2={yLow}
-                  stroke={color}
-                  strokeWidth={1.5}
-                />
-                <rect
-                  x={x - candleWidth / 2}
-                  y={bodyTop}
-                  width={candleWidth}
-                  height={bodyHeight}
-                  fill={color}
-                  stroke={color}
-                  strokeWidth={0.5}
-                />
+    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <ChartsDataProviderPremium
+        series={[
+          {
+            id: 'ohlc',
+            type: 'ohlc',
+            data: ohlcData,
+            label: 'Price',
+          },
+          {
+            id: 'moving-average',
+            type: 'line',
+            data: movingAverageData,
+            label: '20-day SMA',
+            color: '#3b82f6',
+          },
+          ...(hasVolume ? [
+            {
+              id: 'volume',
+              type: 'bar',
+              data: volumeData,
+              label: 'Volume',
+              colorGetter: volumeBarColorGetter,
+              yAxisId: 'volume',
+            }
+          ] : []),
+        ]}
+        xAxis={[
+          {
+            data: xData,
+            scaleType: 'band',
+            valueFormatter: (value) =>
+              value instanceof Date
+                ? value.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : value,
+            zoom: {
+              filterMode: 'discard',
+            },
+          },
+        ]}
+        yAxis={[
+          {
+            id: 'price',
+            valueFormatter: formatAsDollar,
+            position: 'right',
+          },
+          ...(hasVolume ? [
+            {
+              id: 'volume',
+              domainLimit: (min, max) => ({ min: 0, max: max.valueOf() * 5 }),
+            }
+          ] : []),
+        ]}
+        height={height}
+        margin={{ top: 20, bottom: 30, left: 20, right: 60 }}
+      >
+        <ChartsWrapper sx={{ width: '100%' }}>
+          <ChartsLayerContainer>
+            <ChartsSvgLayer>
+              <ChartsGrid horizontal vertical />
+            </ChartsSvgLayer>
+            <ChartsWebGLLayer>
+              <CandlestickPlot />
+            </ChartsWebGLLayer>
+            <ChartsSvgLayer>
+              <g clipPath={`url(#${clipPathId})`}>
+                <BarPlot renderer="svg-batch" />
+                <LinePlot />
+                <ChartsAxisHighlight x="line" y="line" />
               </g>
-            );
-          })}
-
-          {/* Moving Average Line */}
-          {(() => {
-            let pathD = '';
-            maData.forEach((val, idx) => {
-              if (val !== null && val !== undefined) {
-                const x = getX(idx);
-                const y = getYPrice(val);
-                if (pathD === '') {
-                  pathD = `M ${x} ${y}`;
-                } else {
-                  pathD += ` L ${x} ${y}`;
-                }
-              }
-            });
-
-            if (!pathD) return null;
-
-            return (
-              <path
-                d={pathD}
-                fill="none"
-                stroke="#3b82f6"
-                strokeWidth={1.5}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            );
-          })()}
-        </svg>
-
-        {/* Tooltip */}
-        {hoveredIndex !== null && tooltipPos && pts[hoveredIndex] && (
-          <Box
-            sx={{
-              position: 'absolute',
-              left: tooltipPos.x,
-              top: tooltipPos.y,
-              pointerEvents: 'none',
-              zIndex: 10,
-              bgcolor: 'rgba(17, 24, 39, 0.95)',
-              border: '1px solid #374151',
-              borderRadius: '6px',
-              p: 1.25,
-              boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3), 0 4px 6px -2px rgba(0,0,0,0.05)',
-              backdropFilter: 'blur(4px)',
-              minWidth: 170,
-            }}
-          >
-            <Typography
-              variant="caption"
-              sx={{ color: '#e5e7eb', display: 'block', fontWeight: 600, mb: 0.5, borderBottom: '1px solid #374151', pb: 0.5 }}
-            >
-              {pts[hoveredIndex].date}
-            </Typography>
-            <Box sx={{ display: 'grid', gridTemplateColumns: 'auto auto', gap: '2px 8px', fontSize: 11 }}>
-              <span style={{ color: '#9ca3af' }}>Open:</span>
-              <span style={{ color: '#f3f4f6', textAlign: 'right', fontWeight: 500 }}>{yFormatter(pts[hoveredIndex].open)}</span>
-
-              <span style={{ color: '#9ca3af' }}>High:</span>
-              <span style={{ color: '#f3f4f6', textAlign: 'right', fontWeight: 500 }}>{yFormatter(pts[hoveredIndex].high)}</span>
-
-              <span style={{ color: '#9ca3af' }}>Low:</span>
-              <span style={{ color: '#f3f4f6', textAlign: 'right', fontWeight: 500 }}>{yFormatter(pts[hoveredIndex].low)}</span>
-
-              <span style={{ color: '#9ca3af' }}>Close:</span>
-              <span style={{ color: '#f3f4f6', textAlign: 'right', fontWeight: 500 }}>{yFormatter(pts[hoveredIndex].close)}</span>
-
-              <span style={{ color: '#9ca3af' }}>Change:</span>
-              <span style={{
-                color: pts[hoveredIndex].close >= pts[hoveredIndex].open ? '#10b981' : '#ef4444',
-                textAlign: 'right',
-                fontWeight: 500
-              }}>
-                {pts[hoveredIndex].close >= pts[hoveredIndex].open ? '+' : ''}
-                {yFormatter(pts[hoveredIndex].close - pts[hoveredIndex].open)}
-                {` (${((pts[hoveredIndex].close - pts[hoveredIndex].open) / pts[hoveredIndex].open * 100).toFixed(2)}%)`}
-              </span>
-
-              {hasVolume && pts[hoveredIndex].volume != null && (
-                <>
-                  <span style={{ color: '#9ca3af' }}>Volume:</span>
-                  <span style={{ color: '#f3f4f6', textAlign: 'right', fontWeight: 500 }}>{formatVolume(pts[hoveredIndex].volume)}</span>
-                </>
-              )}
-
-              {maData[hoveredIndex] != null && (
-                <>
-                  <span style={{ color: '#3b82f6', fontWeight: 500 }}>20-day MA:</span>
-                  <span style={{ color: '#3b82f6', textAlign: 'right', fontWeight: 500 }}>{yFormatter(maData[hoveredIndex])}</span>
-                </>
-              )}
-            </Box>
-          </Box>
-        )}
-      </Box>
+              <ChartsClipPath id={clipPathId} />
+              <ChartsXAxis />
+              <ChartsYAxis axisId="price" />
+              {hasVolume && <ChartsYAxis axisId="volume" sx={{ display: 'none' }} />}
+              <CandlestickTooltip hasVolume={hasVolume} formatVolume={formatVolume} />
+            </ChartsSvgLayer>
+          </ChartsLayerContainer>
+        </ChartsWrapper>
+      </ChartsDataProviderPremium>
     </Box>
   );
 }
