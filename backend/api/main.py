@@ -210,10 +210,10 @@ def health_check() -> dict:
     if has_ashna_key:
         ashna_models = [
             "ashnaai",
-            "ashna/gpt-4",
-            "ashna/gpt-3.5",
-            "ashna/gemini-pro",
-            "ashna/gemini-flash"
+            "ashna-x1",
+            "ashna/gpt-4o",
+            "ashna/gpt-4o-mini",
+            "ashna/gpt-3.5-turbo"
         ]
         for model in reversed(ashna_models):
             if model not in available_models:
