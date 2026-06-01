@@ -333,14 +333,22 @@ def _clean_messages_for_ashna(messages: list[BaseMessage]) -> list[BaseMessage]:
     cleaned = []
     for msg in messages:
         if isinstance(msg, ToolMessage):
-            continue
-        if isinstance(msg, AIMessage):
+            cleaned.append(HumanMessage(
+                content=f"[Tool Output for {msg.name}]: {msg.content}",
+                id=getattr(msg, "id", None)
+            ))
+        elif isinstance(msg, AIMessage):
             content = msg.content
             if not content:
                 if msg.tool_calls:
-                    continue
-                content = "I will process that for you."
-            cleaned.append(AIMessage(content=content))
+                    tool_names = [t.get("name", "unknown") for t in msg.tool_calls]
+                    content = f"I will call the tools: {', '.join(tool_names)} to fetch the data."
+                else:
+                    content = "I will process that for you."
+            cleaned.append(AIMessage(
+                content=content,
+                id=getattr(msg, "id", None)
+            ))
         else:
             cleaned.append(msg)
     return cleaned
