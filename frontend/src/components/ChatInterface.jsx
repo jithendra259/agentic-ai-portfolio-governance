@@ -16,6 +16,7 @@ import InlineChart from './InlineChart';
 
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 const PLOT_TOKEN = '__PLOTSPEC__:';
+const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
 
 // ---------------------------------------------------------------------------
 // Markdown image helper — rewrite /outputs/... to full backend URL
@@ -304,11 +305,21 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface() {
-  const sessionId = 'demo-react-session';
+  const [sessionId] = useState(() => {
+    const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (existing) return existing;
+
+    const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+    const nextSessionId = `portfolio-chat-${randomPart}`;
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    return nextSessionId;
+  });
 
   const [selectedModel, setSelectedModel] = useState('');
   const [availableModels, setAvailableModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
+  const [persistedMessages, setPersistedMessages] = useState([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const selectedModelRef = useRef('');
 
   useEffect(() => {
@@ -344,6 +355,44 @@ export default function ChatInterface() {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    setHistoryLoaded(false);
+
+    fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(sessionId)}/messages?limit=200`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch conversation history');
+        return res.json();
+      })
+      .then((data) => {
+        if (!active) return;
+        const messages = (data?.messages || []).map((item) => ({
+          id: `persisted-${item.id}`,
+          senderId: item.role === 'assistant' ? 'assistant' : 'user',
+          createdAt: item.created_at ? new Date(item.created_at) : new Date(),
+          parts: [
+            {
+              type: 'text',
+              text: item.content || '',
+            },
+          ],
+        }));
+        setPersistedMessages(messages);
+        setHistoryLoaded(true);
+      })
+      .catch((err) => {
+        console.error('Failed to load conversation history:', err);
+        if (active) {
+          setPersistedMessages([]);
+          setHistoryLoaded(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [sessionId]);
 
   const adapter = useMemo(() => ({
     async sendMessage({ message, signal }) {
@@ -400,19 +449,23 @@ export default function ChatInterface() {
     },
   }), [sessionId]);
 
-  const initialMessages = useMemo(() => [
-    {
-      id: 'msg-welcome-1',
-      senderId: 'assistant',
-      createdAt: new Date(),
-      parts: [
-        {
-          type: 'text',
-          text: 'Hello! I am your Portfolio Assistant. How can I help you analyze your portfolio today?'
-        }
-      ]
-    }
-  ], []);
+  const initialMessages = useMemo(() => {
+    if (persistedMessages.length > 0) return persistedMessages;
+
+    return [
+      {
+        id: 'msg-welcome-1',
+        senderId: 'assistant',
+        createdAt: new Date(),
+        parts: [
+          {
+            type: 'text',
+            text: 'Hello! I am your Portfolio Assistant. How can I help you analyze your portfolio today?'
+          }
+        ]
+      }
+    ];
+  }, [persistedMessages]);
 
   return (
     <Box
@@ -424,6 +477,7 @@ export default function ChatInterface() {
       }}
     >
       <ChatBox
+        key={`${sessionId}-${historyLoaded ? 'loaded' : 'loading'}`}
         adapter={adapter}
         initialConversations={[{
           id: sessionId,

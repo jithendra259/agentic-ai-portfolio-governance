@@ -70,7 +70,7 @@ if __name__ == "__main__" and _is_port_open("127.0.0.1", 8000):
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from src.memory.mongodb_memory_layer import MongoMemoryManager
@@ -78,6 +78,7 @@ from src.orchestrator.chatbot_orchestrator import (
     FALLBACK_OLLAMA_MODEL,
     INSTALLED_OLLAMA_MODELS,
     PRIMARY_OLLAMA_MODEL,
+    memory_manager,
     portfolio_assistant,
 )
 
@@ -88,6 +89,7 @@ logger = logging.getLogger(__name__)
 
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 LEGACY_OUTPUTS_DIR = PROJECT_ROOT / "src" / "outputs"
+PLOT_TOKEN = "__PLOTSPEC__:"
 
 
 def _sync_legacy_outputs() -> None:
@@ -149,6 +151,19 @@ class ChatResponse(BaseModel):
     response: str
 
 
+class ChatMessageResponse(BaseModel):
+    id: str
+    role: str
+    content: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
+class ChatHistoryResponse(BaseModel):
+    session_id: str
+    messages: list[ChatMessageResponse]
+
+
 def _message_to_text(message: Any) -> str:
     if message is None:
         return ""
@@ -193,6 +208,18 @@ def _stream_event(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
 
 
+def _persist_chat_message(
+    session_id: str,
+    role: str,
+    content: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        memory_manager.append_chat_message(session_id, role, content, metadata=metadata)
+    except Exception as exc:
+        logger.warning("Failed to persist %s chat message for session %s: %s", role, session_id, exc)
+
+
 @app.get("/health")
 def health_check() -> dict:
     mongo_status = getattr(app.state, "mongo_available", False)
@@ -225,6 +252,7 @@ def health_check() -> dict:
         "data_source": "local-mongodb-historical-only",
         "components": {
             "mongodb": "connected" if mongo_status else "disconnected",
+            "supabase_postgres": "connected" if memory_manager.pg_pool else "not_configured",
             "ollama": "ready" if ollama_status else "model_missing",
             "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
@@ -234,6 +262,15 @@ def health_check() -> dict:
             "available": available_models
         }
     }
+
+
+@app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
+def chat_messages(session_id: str, limit: int = 200) -> ChatHistoryResponse:
+    if not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id cannot be empty")
+
+    rows = memory_manager.list_chat_messages(session_id, limit=limit)
+    return ChatHistoryResponse(session_id=session_id, messages=rows)
 
 
 @app.post("/chat", response_model=ChatResponse)
@@ -246,6 +283,12 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     try:
         logger.info("Processing chat request for session_id=%s", request.session_id)
+        _persist_chat_message(
+            request.session_id,
+            "user",
+            request.user_message,
+            metadata={"model": request.model, "transport": "rest"},
+        )
 
         result = portfolio_assistant.invoke(
             {"messages": [HumanMessage(content=request.user_message)]},
@@ -259,6 +302,12 @@ def chat(request: ChatRequest) -> ChatResponse:
             last_message = messages[-1]
             response_text = getattr(last_message, "content", "") or str(last_message)
 
+        _persist_chat_message(
+            request.session_id,
+            "assistant",
+            response_text,
+            metadata={"model": request.model, "transport": "rest"},
+        )
         return ChatResponse(session_id=request.session_id, response=response_text)
 
     except HTTPException:
@@ -285,6 +334,13 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
+
+    _persist_chat_message(
+        request.session_id,
+        "user",
+        request.user_message,
+        metadata={"model": request.model, "transport": "stream"},
+    )
 
     async def event_generator():
         import uuid
@@ -397,11 +453,23 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 if isinstance(plot_ids, str):
                     plot_ids = [plot_ids]
                 for p_id in plot_ids:
+                    accumulated_response += f"\n{PLOT_TOKEN}{p_id}"
                     yield _stream_event({"type": "data-plot", "plotId": p_id})
             elif any(tool in tool_names_run for tool in ["generate_financial_plot", "plot_historical_prices"]):
                 # Tool ran but produced no spec (e.g. PNG-only types like network/heatmap)
                 pass
 
+            _persist_chat_message(
+                request.session_id,
+                "assistant",
+                accumulated_response,
+                metadata={
+                    "model": request.model,
+                    "transport": "stream",
+                    "tool_names": sorted(tool_names_run),
+                    "plot_ids": plot_ids or [],
+                },
+            )
             yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
 
         except Exception as exc:

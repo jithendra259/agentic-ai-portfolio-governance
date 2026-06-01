@@ -47,26 +47,36 @@ def get_clean_postgres_url(url: str) -> str:
     return url
 
 
+_POOL_CACHE = {}
+
+
 def _test_and_get_pool(postgres_url: str) -> Any:
+    global _POOL_CACHE
     if ConnectionPool is None:
         logger.warning("psycopg_pool is not installed; unable to connect to Postgres.")
         return None
+
+    url_key = postgres_url.strip()
+    if url_key in _POOL_CACHE:
+        logger.info("Reusing cached Supabase Postgres connection pool.")
+        return _POOL_CACHE[url_key]
 
     # Try clean URL without brackets
     url_no_brackets = get_clean_postgres_url(postgres_url)
     try:
         pool = ConnectionPool(
             conninfo=url_no_brackets,
-            min_size=1,
-            max_size=5,
+            min_size=0,
+            max_size=2,
             open=True,
             timeout=5.0,
-            kwargs={"autocommit": True}
+            kwargs={"autocommit": True, "prepare_threshold": None}
         )
         with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
         logger.info("Supabase Postgres connected successfully (brackets stripped).")
+        _POOL_CACHE[url_key] = pool
         return pool
     except Exception as e:
         logger.warning("Failed to connect with stripped brackets: %s. Trying with encoded brackets...", e)
@@ -87,16 +97,17 @@ def _test_and_get_pool(postgres_url: str) -> Any:
                 
                 pool = ConnectionPool(
                     conninfo=url_with_brackets,
-                    min_size=1,
-                    max_size=5,
+                    min_size=0,
+                    max_size=2,
                     open=True,
                     timeout=5.0,
-                    kwargs={"autocommit": True}
+                    kwargs={"autocommit": True, "prepare_threshold": None}
                 )
                 with pool.connection() as conn:
                     with conn.cursor() as cur:
                         cur.execute("SELECT 1;")
                 logger.info("Supabase Postgres connected successfully (brackets preserved & encoded).")
+                _POOL_CACHE[url_key] = pool
                 return pool
     except Exception as e2:
         logger.error("Failed to connect to Supabase Postgres with encoded brackets: %s", e2)
@@ -175,6 +186,20 @@ class MongoMemoryManager:
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                             expires_at TIMESTAMP WITH TIME ZONE NOT NULL
                         );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS chat_messages (
+                            id BIGSERIAL PRIMARY KEY,
+                            session_id VARCHAR(128) NOT NULL,
+                            role VARCHAR(32) NOT NULL,
+                            content TEXT NOT NULL,
+                            metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+                        ON chat_messages (session_id, created_at, id);
                     """)
             logger.info("Postgres cache tables checked/created.")
         except Exception as exc:
@@ -467,3 +492,124 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to retrieve plot %s: %s", plot_id, exc)
             return None
+
+    def append_chat_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist a chat message for UI history hydration."""
+        clean_session_id = str(session_id or "").strip()
+        clean_role = str(role or "").strip().lower()
+        clean_content = str(content or "")
+        if not clean_session_id or clean_role not in {"user", "assistant", "system"} or not clean_content.strip():
+            return
+
+        metadata_payload = json.dumps(metadata or {})
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO chat_messages (session_id, role, content, metadata)
+                            VALUES (%s, %s, %s, %s);
+                            """,
+                            (clean_session_id, clean_role, clean_content, metadata_payload),
+                        )
+                return
+            except Exception as exc:
+                logger.warning("Postgres append_chat_message failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return
+
+        try:
+            chat_col = self._collection("chat_messages")
+            if chat_col is None:
+                return
+            chat_col.insert_one(
+                {
+                    "session_id": clean_session_id,
+                    "role": clean_role,
+                    "content": clean_content,
+                    "metadata": metadata or {},
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
+        except PyMongoError as exc:
+            logger.warning("Failed to append chat message for session %s: %s", clean_session_id, exc)
+
+    def list_chat_messages(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+        """Return persisted chat messages in chronological order."""
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            return []
+
+        safe_limit = max(1, min(int(limit or 200), 500))
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT id, role, content, metadata, created_at
+                            FROM chat_messages
+                            WHERE session_id = %s
+                            ORDER BY created_at ASC, id ASC
+                            LIMIT %s;
+                            """,
+                            (clean_session_id, safe_limit),
+                        )
+                        rows = cur.fetchall()
+
+                messages = []
+                for row in rows:
+                    metadata = row[3]
+                    if isinstance(metadata, str):
+                        try:
+                            metadata = json.loads(metadata)
+                        except json.JSONDecodeError:
+                            metadata = {}
+                    created_at = row[4]
+                    messages.append(
+                        {
+                            "id": str(row[0]),
+                            "role": row[1],
+                            "content": row[2],
+                            "metadata": metadata or {},
+                            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+                        }
+                    )
+                return messages
+            except Exception as exc:
+                logger.warning("Postgres list_chat_messages failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return []
+
+        try:
+            chat_col = self._collection("chat_messages")
+            if chat_col is None:
+                return []
+            cursor = chat_col.find({"session_id": clean_session_id}).sort("created_at", ASCENDING).limit(safe_limit)
+            messages = []
+            for row in cursor:
+                created_at = row.get("created_at")
+                messages.append(
+                    {
+                        "id": str(row.get("_id")),
+                        "role": row.get("role", ""),
+                        "content": row.get("content", ""),
+                        "metadata": row.get("metadata") or {},
+                        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+                    }
+                )
+            return messages
+        except PyMongoError as exc:
+            logger.warning("Failed to list chat messages for session %s: %s", clean_session_id, exc)
+            return []
