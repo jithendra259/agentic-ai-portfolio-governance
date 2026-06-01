@@ -35,3 +35,7 @@ outputs/
 
 # Ignore vscode AI rules
 .github\instructions\codacy.instructions.md
+
+# Ignore local chrome profile
+chrome_dev_profile/
+

@@ -5,43 +5,88 @@ const darkTheme = createTheme({
   palette: {
     mode: 'dark',
     background: {
-      default: '#121212', // Very dark background like the image
-      paper: '#1a1a1e',   // Slightly lighter for surfaces
+      default: '#0D0D0D',    // ChatGPT-style pure black
+      paper: '#1A1A1A',      // Very dark gray for surfaces
     },
-    divider: '#2d2d35', // Subtle borders
+    text: {
+      primary: '#ECECEC',    // Light text
+      secondary: '#B4B4B4',  // Medium gray text
+    },
+    divider: '#404040',      // Dark gray borders
+    action: {
+      hover: 'rgba(255, 255, 255, 0.05)',
+      disabled: '#666666',
+    },
     primary: {
-      main: '#6366f1', // Indigo/purple accent
-      dark: '#4f46e5',
+      main: '#FFFFFF',       // White for primary
+      dark: '#B4B4B4',       // Gray for dark
     },
     secondary: {
-      main: '#10b981', // Emerald green
+      main: '#B4B4B4',       // Gray accents
     },
   },
   typography: {
     fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+    color: '#ECECEC',
   },
   components: {
     MuiChatBox: {
       styleOverrides: {
         root: ({ theme }) => ({
-          border: '1px solid',
-          borderColor: theme.palette.divider,
-          backgroundColor: theme.palette.background.default,
-          borderRadius: 8,
+          backgroundColor: '#0D0D0D',
+          border: `1px solid ${theme.palette.divider}`,
+          borderRadius: 12,
+          color: '#ECECEC',
         }),
         conversationsPane: ({ theme }) => ({
-          backgroundColor: '#18181b', // Darker pane
+          backgroundColor: '#0D0D0D',
           borderRight: `1px solid ${theme.palette.divider}`,
         }),
+        messagesPane: {
+          backgroundColor: '#0D0D0D',
+        },
       },
     },
     MuiChatMessage: {
       styleOverrides: {
         bubble: ({ theme }) => ({
-          borderRadius: 16,
+          borderRadius: 12,
           padding: '12px 16px',
-          color: '#ffffff',
+          color: '#ECECEC',
+          backgroundColor: '#2A2A2A',
+          '&:hover': {
+            backgroundColor: '#353535',
+          },
         }),
+      },
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: {
+          color: '#ECECEC',
+          borderColor: '#404040',
+          '&:hover': {
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            borderColor: '#666666',
+          },
+        },
+      },
+    },
+    MuiInputBase: {
+      styleOverrides: {
+        root: {
+          color: '#ECECEC',
+          backgroundColor: '#1A1A1A',
+          '& .MuiOutlinedInput-notchedOutline': {
+            borderColor: '#404040',
+          },
+          '&:hover .MuiOutlinedInput-notchedOutline': {
+            borderColor: '#666666',
+          },
+          '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+            borderColor: '#FFFFFF',
+          },
+        },
       },
     },
   },

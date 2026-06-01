@@ -28,6 +28,14 @@ class IntentType(str, Enum):
     ADVERSARIAL = "adversarial"
     HISTORICAL_CHART = "historical_chart"
     MALFORMED = "malformed"
+    # Technical Analysis Intents
+    TA_PLOT_RSI = "ta_plot_rsi"
+    TA_PLOT_MACD = "ta_plot_macd"
+    TA_PLOT_BOLLINGER_BANDS = "ta_plot_bollinger_bands"
+    TA_SUPPORT_RESISTANCE = "ta_support_resistance"
+    TA_TREND_ANALYSIS = "ta_trend_analysis"
+    TA_FULL_DASHBOARD = "ta_full_dashboard"
+    TA_TECHNICAL_REPORT = "ta_technical_report"
 
 class RiskTier(str, Enum):
     LOW = "LOW"
@@ -214,6 +222,43 @@ class IntentClassifier:
             r"\b(?:distribution)\b.*\b(?:of returns|of volatility)\b",
         ],
     }
+    
+    # Technical Analysis Patterns
+    TECHNICAL_ANALYSIS_PATTERNS = {
+        IntentType.TA_PLOT_RSI: [
+            r"\b(?:plot|chart|show|get|display)\b.*\b(?:rsi|relative strength index)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\brsi\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:rsi|relative strength index)\b.*(?P<ticker>[A-Z]{1,5})$",
+        ],
+        IntentType.TA_PLOT_MACD: [
+            r"\b(?:plot|chart|show|get|display|show)\b.*\b(?:macd|moving average convergence divergence)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\bmacd\b.*\b(?:for|on|with).*\b(?:signals?|crossover)\b.*\b(?P<ticker>[A-Z]{1,5})\b",
+            r"\bmacd\b.*(?P<ticker>[A-Z]{1,5})$",
+        ],
+        IntentType.TA_PLOT_BOLLINGER_BANDS: [
+            r"\b(?:plot|chart|show|get|display)\b.*\b(?:bollinger bands?|bb)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:bollinger|bb)\b.*\b(?:for|on|with).*\b(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:bollinger bands?|bb)\b.*(?P<ticker>[A-Z]{1,5})$",
+        ],
+        IntentType.TA_SUPPORT_RESISTANCE: [
+            r"\b(?:identify|detect|find|show|get)\b.*\b(?:support|resistance|levels|s&r)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:support and resistance|s&r|key levels)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+        ],
+        IntentType.TA_TREND_ANALYSIS: [
+            r"\b(?:plot|chart|show|get|analyze|detect)\b.*\b(?:trend|trends|golden cross|death cross)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:trend analysis|trend lines?)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:detect|identify)\b.*\b(?:trend reversals?|bullish|bearish)\b.*\b(?P<ticker>[A-Z]{1,5})\b",
+        ],
+        IntentType.TA_FULL_DASHBOARD: [
+            r"\b(?:generate|create|show|get|plot|chart|display)\b.*\b(?:full|complete|comprehensive)\b.*\b(?:technical analysis|ta)\b.*\b(?:dashboard|report)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:technical analysis dashboard|ta dashboard)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+        ],
+        IntentType.TA_TECHNICAL_REPORT: [
+            r"\b(?:generate|create|produce|write)\b.*\b(?:full|complete|comprehensive)\b.*\b(?:technical analysis|technical report)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:technical analysis report|technical report)\b.*\b(?:for|on)\s+(?P<ticker>[A-Z]{1,5})\b",
+            r"\b(?:create|generate)\b.*\b(?:technical report|ta report)\b.*(?P<ticker>[A-Z]{1,5})$",
+        ],
+    }
 
     def __init__(self, verbose: bool = True):
         self.verbose = verbose
@@ -228,6 +273,7 @@ class IntentClassifier:
             self.BACKTEST_PATTERNS,
             self.CONFIG_PATTERNS,
             self.CHART_PATTERNS,
+            self.TECHNICAL_ANALYSIS_PATTERNS,
         ):
             for intent, patterns in intent_dict.items():
                 compiled_patterns[intent] = [re.compile(pattern, re.IGNORECASE) for pattern in patterns]
