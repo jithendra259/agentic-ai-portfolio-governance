@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import os
+import urllib.parse
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -10,18 +11,107 @@ from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import PyMongoError
 
+try:
+    from psycopg_pool import ConnectionPool
+except ImportError:
+    ConnectionPool = None
+
 
 logger = logging.getLogger(__name__)
 
 
+def get_clean_postgres_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        if "://" in url:
+            scheme, rest = url.split("://", 1)
+        else:
+            scheme, rest = "postgresql", url
+            
+        if "@" in rest:
+            credentials, host_db = rest.rsplit("@", 1)
+            if ":" in credentials:
+                user, password = credentials.split(":", 1)
+                if password.startswith("[") and password.endswith("]"):
+                    clean_password = password[1:-1]
+                else:
+                    clean_password = password
+                
+                # Unquote to avoid double encoding if already encoded in env/URL
+                decoded_password = urllib.parse.unquote(clean_password)
+                encoded_password = urllib.parse.quote(decoded_password)
+                return f"{scheme}://{user}:{encoded_password}@{host_db}"
+    except Exception:
+        pass
+    return url
+
+
+def _test_and_get_pool(postgres_url: str) -> Any:
+    if ConnectionPool is None:
+        logger.warning("psycopg_pool is not installed; unable to connect to Postgres.")
+        return None
+
+    # Try clean URL without brackets
+    url_no_brackets = get_clean_postgres_url(postgres_url)
+    try:
+        pool = ConnectionPool(
+            conninfo=url_no_brackets,
+            min_size=1,
+            max_size=5,
+            open=True,
+            timeout=5.0,
+            kwargs={"autocommit": True}
+        )
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+        logger.info("Supabase Postgres connected successfully (brackets stripped).")
+        return pool
+    except Exception as e:
+        logger.warning("Failed to connect with stripped brackets: %s. Trying with encoded brackets...", e)
+        
+    # Try clean URL preserving brackets
+    try:
+        if "://" in postgres_url:
+            scheme, rest = postgres_url.split("://", 1)
+        else:
+            scheme, rest = "postgresql", postgres_url
+        if "@" in rest:
+            credentials, host_db = rest.rsplit("@", 1)
+            if ":" in credentials:
+                user, password = credentials.split(":", 1)
+                decoded_password = urllib.parse.unquote(password)
+                encoded_password = urllib.parse.quote(decoded_password)
+                url_with_brackets = f"{scheme}://{user}:{encoded_password}@{host_db}"
+                
+                pool = ConnectionPool(
+                    conninfo=url_with_brackets,
+                    min_size=1,
+                    max_size=5,
+                    open=True,
+                    timeout=5.0,
+                    kwargs={"autocommit": True}
+                )
+                with pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT 1;")
+                logger.info("Supabase Postgres connected successfully (brackets preserved & encoded).")
+                return pool
+    except Exception as e2:
+        logger.error("Failed to connect to Supabase Postgres with encoded brackets: %s", e2)
+    return None
+
+
 class MongoMemoryManager:
-    """Three-tier memory helper backed by MongoDB collections."""
+    """Three-tier hybrid memory helper backed by MongoDB and Supabase PostgreSQL."""
 
     def __init__(
         self,
         mongo_uri: str | None = None,
         db_name: str = "Stock_data",
         client: MongoClient | None = None,
+        postgres_url: str | None = None,
     ) -> None:
         self.mongo_uri = (mongo_uri or os.getenv("MONGO_URI") or "").strip()
         self.db_name = db_name
@@ -47,6 +137,14 @@ class MongoMemoryManager:
         if self._client is not None:
             self._db = self._client[self.db_name]
 
+        # Postgres/Supabase initialization
+        self.postgres_url = (postgres_url or os.getenv("SUPABASE_POSTGRES_URL") or "").strip()
+        self.pg_pool = None
+        if self.postgres_url:
+            self.pg_pool = _test_and_get_pool(self.postgres_url)
+            if self.pg_pool:
+                self.setup_postgres_tables()
+
     @property
     def is_available(self) -> bool:
         return self._db is not None
@@ -56,8 +154,37 @@ class MongoMemoryManager:
             return None
         return self._db[name]
 
+    def setup_postgres_tables(self) -> None:
+        if not self.pg_pool:
+            return
+        try:
+            with self.pg_pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS plan_cache (
+                            query_hash VARCHAR(64) PRIMARY KEY,
+                            payload TEXT NOT NULL,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS visualizations (
+                            plot_id VARCHAR(128) PRIMARY KEY,
+                            data JSONB NOT NULL,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+                        );
+                    """)
+            logger.info("Postgres cache tables checked/created.")
+        except Exception as exc:
+            logger.error("Failed to set up postgres tables: %s", exc)
+
     def setup_indexes(self) -> None:
         """L2 TTL and L3 query indexes."""
+        if self.pg_pool:
+            self.setup_postgres_tables()
+
         if not self.is_available:
             return
 
@@ -104,6 +231,25 @@ class MongoMemoryManager:
         payload: str,
         ttl_days: int = 7,
     ) -> None:
+        if self.pg_pool:
+            try:
+                now = datetime.now(timezone.utc)
+                expires_at = now + timedelta(days=ttl_days)
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO plan_cache (query_hash, payload, updated_at, expires_at)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (query_hash)
+                            DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at;
+                            """,
+                            (query_hash, payload, now, expires_at),
+                        )
+                return
+            except Exception as exc:
+                logger.warning("Postgres cache_governance_plan failed: %s. Falling back to Mongo...", exc)
+
         if not self.is_available:
             return
 
@@ -131,6 +277,25 @@ class MongoMemoryManager:
             logger.warning("Failed to cache governance plan for hash %s: %s", query_hash, exc)
 
     def retrieve_cached_plan(self, query_hash: str) -> str | None:
+        if self.pg_pool:
+            try:
+                now = datetime.now(timezone.utc)
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        # Clean up expired items
+                        cur.execute("DELETE FROM plan_cache WHERE expires_at < %s;", (now,))
+                        # Retrieve cache
+                        cur.execute(
+                            "SELECT payload FROM plan_cache WHERE query_hash = %s AND expires_at >= %s;",
+                            (query_hash, now),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            return row[0]
+                return None
+            except Exception as exc:
+                logger.warning("Postgres retrieve_cached_plan failed: %s. Falling back to Mongo...", exc)
+
         if not self.is_available:
             return None
 
@@ -217,7 +382,27 @@ class MongoMemoryManager:
             return []
 
     def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 1) -> None:
-        """Store a visualization payload in MongoDB."""
+        """Store a visualization payload in Supabase Postgres or MongoDB."""
+        if self.pg_pool:
+            try:
+                now = datetime.now(timezone.utc)
+                expires_at = now + timedelta(days=ttl_days)
+                serialized_data = json.dumps(plot_data)
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO visualizations (plot_id, data, updated_at, expires_at)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (plot_id)
+                            DO UPDATE SET data = EXCLUDED.data, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at;
+                            """,
+                            (plot_id, serialized_data, now, expires_at),
+                        )
+                return
+            except Exception as exc:
+                logger.warning("Postgres store_plot failed: %s. Falling back to Mongo...", exc)
+
         if not self.is_available:
             return
             
@@ -245,7 +430,29 @@ class MongoMemoryManager:
             logger.warning("Failed to store plot %s: %s", plot_id, exc)
 
     def retrieve_plot(self, plot_id: str) -> dict | None:
-        """Retrieve a visualization payload from MongoDB."""
+        """Retrieve a visualization payload from Supabase Postgres or MongoDB."""
+        if self.pg_pool:
+            try:
+                now = datetime.now(timezone.utc)
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        # Clean up expired visualizations
+                        cur.execute("DELETE FROM visualizations WHERE expires_at < %s;", (now,))
+                        # Retrieve plot
+                        cur.execute(
+                            "SELECT data FROM visualizations WHERE plot_id = %s AND expires_at >= %s;",
+                            (plot_id, now),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            data_val = row[0]
+                            if isinstance(data_val, str):
+                                return json.loads(data_val)
+                            return data_val
+                return None
+            except Exception as exc:
+                logger.warning("Postgres retrieve_plot failed: %s. Falling back to Mongo...", exc)
+
         if not self.is_available:
             return None
             

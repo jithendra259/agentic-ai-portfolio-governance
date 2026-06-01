@@ -19,6 +19,9 @@ try:
 except Exception:  # pragma: no cover - fallback for environments missing mongodb checkpointer package
     MongoDBSaver = None
 
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
+
 # Import MongoDB-backed historical tools only.
 from src.agents.history_tools import get_user_analysis_history, get_detailed_past_weights
 from src.agents.live_data_tools import (
@@ -116,40 +119,60 @@ FALLBACK_OLLAMA_MODEL = _resolve_ollama_model(
 
 def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
     mongo_uri = (os.getenv("MONGO_URI") or "").strip()
+    postgres_url = (os.getenv("SUPABASE_POSTGRES_URL") or "").strip()
 
-    if not mongo_uri:
-        logger.warning("MONGO_URI is not set; falling back to in-memory LangGraph checkpointing.")
-        return MongoMemoryManager(mongo_uri=""), MemorySaver()
+    # 1. Initialize Hybrid/Mongo Memory Manager
+    mongo_client = None
+    if mongo_uri:
+        try:
+            mongo_client = MongoClient(
+                mongo_uri,
+                tls=True,
+                tlsAllowInvalidCertificates=True,
+                serverSelectionTimeoutMS=5000,
+                connectTimeoutMS=5000,
+                socketTimeoutMS=10000,
+                appname="agentic-ai-portfolio-governance-chatbot",
+            )
+            mongo_client.admin.command("ping")
+        except Exception as exc:
+            logger.warning("MongoDB connection failed for memory manager: %s", exc)
+            mongo_client = None
 
-    try:
-        mongo_client = MongoClient(
-            mongo_uri,
-            tls=True,
-            tlsAllowInvalidCertificates=True,
-            serverSelectionTimeoutMS=5000,
-            connectTimeoutMS=5000,
-            socketTimeoutMS=10000,
-            appname="agentic-ai-portfolio-governance-chatbot",
-        )
-        mongo_client.admin.command("ping")
-    except Exception as exc:
-        logger.warning("MongoDB connection failed for checkpointer; using MemorySaver. Error: %s", exc)
-        return MongoMemoryManager(mongo_uri=""), MemorySaver()
-
-    memory_manager = MongoMemoryManager(client=mongo_client)
+    memory_manager = MongoMemoryManager(client=mongo_client, postgres_url=postgres_url)
     memory_manager.setup_indexes()
 
-    if MongoDBSaver is None:
-        logger.warning("MongoDBSaver is unavailable in this environment; using MemorySaver fallback.")
-        return memory_manager, MemorySaver()
+    # 2. Initialize PostgresSaver checkpointer using Supabase connection pool
+    checkpointer = None
+    if postgres_url:
+        try:
+            from src.memory.mongodb_memory_layer import _test_and_get_pool
+            pool = _test_and_get_pool(postgres_url)
+            if pool:
+                checkpointer = PostgresSaver(pool)
+                # Ensure the checkpointer tables exist in Supabase Postgres
+                checkpointer.setup()
+                logger.info("Supabase PostgresSaver checkpointer initialized successfully!")
+        except Exception as exc:
+            logger.warning("Supabase PostgresSaver checkpointer initialization failed: %s. Falling back.", exc)
 
-    try:
-        # Standardize checkpointer to use a dedicated database
-        checkpointer = MongoDBSaver(mongo_client, db_name="checkpointing_db")
-    except (TypeError, Exception):
-        # Supports alternate constructor signatures across LangGraph versions.
-        checkpointer = MongoDBSaver(client=mongo_client, db_name="checkpointing_db")
-    
+    # 3. Fallback to MongoDBSaver or MemorySaver if Postgres checkpointer is unavailable
+    if checkpointer is None:
+        if mongo_client is not None and MongoDBSaver is not None:
+            try:
+                checkpointer = MongoDBSaver(mongo_client, db_name="checkpointing_db")
+                logger.info("Falling back to MongoDBSaver checkpointer.")
+            except Exception:
+                try:
+                    checkpointer = MongoDBSaver(client=mongo_client, db_name="checkpointing_db")
+                    logger.info("Falling back to MongoDBSaver checkpointer.")
+                except Exception:
+                    checkpointer = None
+        
+        if checkpointer is None:
+            logger.info("Using MemorySaver fallback checkpointer.")
+            checkpointer = MemorySaver()
+
     return memory_manager, checkpointer
 
 

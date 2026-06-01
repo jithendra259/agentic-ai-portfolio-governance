@@ -21,6 +21,8 @@ requests
 # Data Sources and Storage
 pymongo==4.6.0
 pypdf>=5.0.0
+langgraph-checkpoint-postgres
+psycopg[binary]
 
 # Configuration
 python-dotenv==1.0.0
