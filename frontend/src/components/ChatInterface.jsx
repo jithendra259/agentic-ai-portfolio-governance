@@ -9,6 +9,7 @@ import { ChatBox, ChatComposerAttachButton } from '@mui/x-chat';
 import { Bot, User, Cpu, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
+import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import InlineChart from './InlineChart';
@@ -83,13 +84,20 @@ const markdownComponents = {
       {children}
     </code>
   ),
+  table: ({ children }) => (
+    <div className="markdown-table-container">
+      <table className="markdown-table">
+        {children}
+      </table>
+    </div>
+  ),
 };
 
 function MarkdownBlock({ text }) {
   return (
     <ReactMarkdown 
       components={markdownComponents}
-      remarkPlugins={[remarkMath]}
+      remarkPlugins={[remarkMath, remarkGfm]}
       rehypePlugins={[rehypeKatex]}
     >
       {text}

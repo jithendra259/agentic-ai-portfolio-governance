@@ -4,3 +4,41 @@ body {
   padding: 0;
   box-sizing: border-box;
 }
+
+/* Table markdown styles for ChatGPT-style look */
+.markdown-table-container {
+  overflow-x: auto;
+  margin: 12px 0;
+  width: 100%;
+}
+
+.markdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  text-align: left;
+  color: #ECECEC;
+  border: 1px solid #404040;
+}
+
+.markdown-table th {
+  background-color: #1A1A1A;
+  padding: 10px 14px;
+  font-weight: 600;
+  border: 1px solid #404040;
+}
+
+.markdown-table td {
+  padding: 10px 14px;
+  border: 1px solid #404040;
+  line-height: 1.5;
+}
+
+.markdown-table tr:nth-child(even) {
+  background-color: #121212;
+}
+
+.markdown-table tr:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
