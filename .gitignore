@@ -39,3 +39,7 @@ outputs/
 # Ignore local chrome profile
 chrome_dev_profile/
 
+# Ignore local git worktrees
+.worktrees
+.worktrees/
+
