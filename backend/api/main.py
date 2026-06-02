@@ -80,6 +80,7 @@ from src.orchestrator.chatbot_orchestrator import (
     PRIMARY_OLLAMA_MODEL,
     memory_manager,
     portfolio_assistant,
+    streaming_portfolio_assistant,
 )
 
 
@@ -360,7 +361,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
         try:
             logger.info("Streaming chat request for session_id=%s", request.session_id)
 
-            async for event in portfolio_assistant.astream_events(
+            async for event in streaming_portfolio_assistant.astream_events(
                 {"messages": [HumanMessage(content=request.user_message)]},
                 config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
                 version="v2",
@@ -474,7 +475,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
         except Exception as exc:
             logger.exception("Backend streaming advisory request failed")
-            yield _stream_event({"type": "text-delta", "id": text_id, "delta": f"\n\nError: {exc}"})
+            error_detail = str(exc) or exc.__class__.__name__
+            yield _stream_event({"type": "text-delta", "id": text_id, "delta": f"\n\nError: {error_detail}"})
             yield _stream_event({"type": "text-end", "id": text_id})
             yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "error"})
 

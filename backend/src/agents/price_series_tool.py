@@ -102,22 +102,24 @@ def get_price_series_for_analysis(
         return {"error": "start_date must be before end_date."}
 
     try:
+        start_str = start_dt.strftime("%Y-%m-%d")
+        end_str = end_dt.strftime("%Y-%m-%d")
         docs = _find_documents_with_retry(
             {"ticker": {"$in": cleaned}},
             {
                 "ticker": 1,
-                "historical_prices.Date": 1,
-                "historical_prices.date": 1,
-                "historical_prices.Open": 1,
-                "historical_prices.open": 1,
-                "historical_prices.High": 1,
-                "historical_prices.high": 1,
-                "historical_prices.Low": 1,
-                "historical_prices.low": 1,
-                "historical_prices.Close": 1,
-                "historical_prices.close": 1,
-                "historical_prices.Volume": 1,
-                "historical_prices.volume": 1,
+                "historical_prices": {
+                    "$filter": {
+                        "input": "$historical_prices",
+                        "as": "hp",
+                        "cond": {
+                            "$and": [
+                                {"$gte": [{"$ifNull": ["$$hp.Date", "$$hp.date"]}, start_str]},
+                                {"$lte": [{"$ifNull": ["$$hp.Date", "$$hp.date"]}, end_str]}
+                            ]
+                        }
+                    }
+                }
             },
         )
     except Exception as exc:

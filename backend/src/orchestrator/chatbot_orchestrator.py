@@ -1288,7 +1288,12 @@ builder.add_conditional_edges(
 )
 builder.add_edge("finalize_governance", END)
 
-# 6. Add Conversational Memory (L1 with MongoDBSaver, fallback to MemorySaver)
+# 6. Add Conversational Memory (L1 with Supabase/MongoDB saver, fallback to MemorySaver)
 portfolio_assistant = builder.compile(checkpointer=checkpointer)
+
+# The installed sync PostgresSaver does not implement async checkpoint reads.
+# Streaming routes use a process-local async-safe checkpointer while the API
+# persists user-visible conversation history separately in Supabase.
+streaming_portfolio_assistant = builder.compile(checkpointer=MemorySaver())
 
 print("Conversational Agentic Supervisor Initialized with Memory!")

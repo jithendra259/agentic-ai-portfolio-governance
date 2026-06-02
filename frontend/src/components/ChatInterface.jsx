@@ -1,12 +1,13 @@
-import React, { useMemo, useState, useEffect, useRef, forwardRef } from 'react';
+import { useMemo, useState, useEffect, useRef, forwardRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import Box from '@mui/material/Box';
-import Typography from '@mui/material/Typography';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 import FormControl from '@mui/material/FormControl';
+import IconButton from '@mui/material/IconButton';
+import Tooltip from '@mui/material/Tooltip';
 import { ChatBox, ChatComposerAttachButton } from '@mui/x-chat';
-import { Bot, User, Cpu, ChevronDown } from 'lucide-react';
+import { Bot, User, ChevronDown, SquarePen } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
@@ -17,6 +18,25 @@ import InlineChart from './InlineChart';
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
+const SESSION_LIST_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
+
+function createSessionId() {
+  const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
+  return `portfolio-chat-${randomPart}`;
+}
+
+function readStoredSessionIds() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SESSION_LIST_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredSessionIds(ids) {
+  window.localStorage.setItem(SESSION_LIST_STORAGE_KEY, JSON.stringify([...new Set(ids)]));
+}
 
 // ---------------------------------------------------------------------------
 // Markdown image helper — rewrite /outputs/... to full backend URL
@@ -123,6 +143,7 @@ const botUser = {
   displayName: 'Portfolio AI',
   avatarUrl: createReactAvatarUrl(Bot, '#404040', '#ECECEC'),
   isOnline: true,
+  role: 'assistant',
 };
 
 const youUser = {
@@ -130,7 +151,98 @@ const youUser = {
   displayName: 'You',
   avatarUrl: createReactAvatarUrl(User, '#2A2A2A', '#ECECEC'),
   isOnline: true,
+  role: 'user',
 };
+
+function makeConversation(sessionId, messages = []) {
+  const lastMessage = messages[messages.length - 1];
+  const lastText = getMessagePreview(lastMessage);
+
+  return {
+    id: sessionId,
+    title: 'Portfolio Assistant',
+    subtitle: lastText || 'Ask about portfolio governance, charts, and risk',
+    participants: [youUser, botUser],
+    readState: 'read',
+    unreadCount: 0,
+    lastMessageAt: lastMessage?.createdAt || new Date().toISOString(),
+  };
+}
+
+function makeStoredConversations(activeSessionId) {
+  const storedIds = readStoredSessionIds();
+  const sessionIds = [activeSessionId, ...storedIds].filter(Boolean);
+
+  return [...new Set(sessionIds)].map((storedSessionId) => {
+    if (storedSessionId === activeSessionId) {
+      return makeConversation(storedSessionId);
+    }
+
+    return {
+      ...makeConversation(storedSessionId),
+      subtitle: 'Previous conversation',
+    };
+  });
+}
+
+function upsertConversation(conversations, conversation) {
+  const withoutCurrent = conversations.filter((item) => item.id !== conversation.id);
+  return [conversation, ...withoutCurrent].sort(
+    (a, b) => new Date(b.lastMessageAt || 0) - new Date(a.lastMessageAt || 0),
+  );
+}
+
+function makeWelcomeMessage(sessionId) {
+  return {
+    id: 'msg-welcome-1',
+    conversationId: sessionId,
+    role: 'assistant',
+    status: 'sent',
+    createdAt: new Date().toISOString(),
+    author: botUser,
+    parts: [
+      {
+        type: 'text',
+        text: 'Hello! I am your Portfolio Assistant. How can I help you analyze your portfolio today?',
+        state: 'done',
+      },
+    ],
+  };
+}
+
+function toChatMessage(item, sessionId) {
+  const role = item.role === 'assistant' ? 'assistant' : 'user';
+
+  return {
+    id: `persisted-${item.id}`,
+    conversationId: sessionId,
+    role,
+    status: 'sent',
+    createdAt: item.created_at || new Date().toISOString(),
+    author: role === 'assistant' ? botUser : youUser,
+    metadata: item.metadata || {},
+    parts: [
+      {
+        type: 'text',
+        text: item.content || '',
+        state: 'done',
+      },
+    ],
+  };
+}
+
+function getMessagePreview(message) {
+  const text = message?.parts
+    ?.filter((part) => part.type === 'text')
+    .map((part) => part.text || '')
+    .join(' ')
+    .replace(new RegExp(`${PLOT_TOKEN}[A-Za-z0-9\\-]+`, 'g'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!text) return '';
+  return text.length > 64 ? `${text.slice(0, 61)}...` : text;
+}
 
 // ---------------------------------------------------------------------------
 // NDJSON stream parser
@@ -146,7 +258,11 @@ async function parseNDJSONStream(response, signal) {
       const { done, value } = await reader.read();
       if (done) {
         if (buffer.trim()) {
-          try { controller.enqueue(JSON.parse(buffer)); } catch { }
+          try {
+            controller.enqueue(JSON.parse(buffer));
+          } catch {
+            console.error('Failed to parse trailing NDJSON chunk:', buffer);
+          }
         }
         controller.close();
         return;
@@ -157,7 +273,9 @@ async function parseNDJSONStream(response, signal) {
       for (const line of lines) {
         const trimmed = line.trim();
         if (trimmed) {
-          try { controller.enqueue(JSON.parse(trimmed)); } catch (e) {
+          try {
+            controller.enqueue(JSON.parse(trimmed));
+          } catch {
             console.error('Failed to parse NDJSON chunk:', trimmed);
           }
         }
@@ -301,26 +419,67 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
   );
 });
 
+const NewChatButton = forwardRef(({ onNewChat, ...props }, ref) => (
+  <Tooltip title="New chat">
+    <IconButton
+      ref={ref}
+      aria-label="New chat"
+      onClick={onNewChat}
+      size="small"
+      {...props}
+      sx={{
+        width: 36,
+        height: 36,
+        color: '#ECECEC',
+        borderRadius: '8px',
+        '&:hover': {
+          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        },
+        ...props.sx,
+      }}
+    >
+      <SquarePen size={18} />
+    </IconButton>
+  </Tooltip>
+));
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface() {
-  const [sessionId] = useState(() => {
+  const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    if (existing) return existing;
+    if (existing) {
+      writeStoredSessionIds([existing, ...readStoredSessionIds()]);
+      return existing;
+    }
 
-    const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
-    const nextSessionId = `portfolio-chat-${randomPart}`;
+    const nextSessionId = createSessionId();
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    writeStoredSessionIds([nextSessionId]);
     return nextSessionId;
   });
 
   const [selectedModel, setSelectedModel] = useState('');
   const [availableModels, setAvailableModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
-  const [persistedMessages, setPersistedMessages] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(sessionId);
+  const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
+  const [conversations, setConversations] = useState(() => makeStoredConversations(sessionId));
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const selectedModelRef = useRef('');
+
+  const loadSessionMessages = (targetSessionId) => {
+    return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch conversation history');
+        return res.json();
+      })
+      .then((data) => {
+        const loadedMessages = (data?.messages || []).map((item) => toChatMessage(item, targetSessionId));
+        return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
+      });
+  };
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -358,33 +517,20 @@ export default function ChatInterface() {
 
   useEffect(() => {
     let active = true;
-    setHistoryLoaded(false);
 
-    fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(sessionId)}/messages?limit=200`)
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch conversation history');
-        return res.json();
-      })
-      .then((data) => {
+    loadSessionMessages(sessionId)
+      .then((nextMessages) => {
         if (!active) return;
-        const messages = (data?.messages || []).map((item) => ({
-          id: `persisted-${item.id}`,
-          senderId: item.role === 'assistant' ? 'assistant' : 'user',
-          createdAt: item.created_at ? new Date(item.created_at) : new Date(),
-          parts: [
-            {
-              type: 'text',
-              text: item.content || '',
-            },
-          ],
-        }));
-        setPersistedMessages(messages);
+        setMessages(nextMessages);
+        setConversations((prev) => upsertConversation(prev, makeConversation(sessionId, nextMessages)));
         setHistoryLoaded(true);
       })
       .catch((err) => {
         console.error('Failed to load conversation history:', err);
         if (active) {
-          setPersistedMessages([]);
+          const fallbackMessages = [makeWelcomeMessage(sessionId)];
+          setMessages(fallbackMessages);
+          setConversations((prev) => upsertConversation(prev, makeConversation(sessionId, fallbackMessages)));
           setHistoryLoaded(true);
         }
       });
@@ -414,17 +560,13 @@ export default function ChatInterface() {
 
       const ndjsonStream = await parseNDJSONStream(response, signal);
 
-      // pendingTextId tracks which text part is currently open so we can
-      // inject chart tokens into the same message after the main text ends.
-      let pendingTextId = null;
-
       const transformStream = new TransformStream({
         transform(chunk, controller) {
-          if (chunk.type === 'text-start') {
-            pendingTextId = chunk.id;
+          if (chunk.type === 'start') {
+            controller.enqueue({ ...chunk, author: botUser });
+          } else if (chunk.type === 'text-start') {
             controller.enqueue(chunk);
           } else if (chunk.type === 'text-end') {
-            pendingTextId = null;
             controller.enqueue(chunk);
           } else if (chunk.type === 'data-plot') {
             const plotId = chunk.plotId;
@@ -449,23 +591,47 @@ export default function ChatInterface() {
     },
   }), [sessionId]);
 
-  const initialMessages = useMemo(() => {
-    if (persistedMessages.length > 0) return persistedMessages;
+  const handleMessagesChange = (nextMessages) => {
+    const alignedMessages = nextMessages.map((message) => {
+      const role = message.role || (message.senderId === 'assistant' ? 'assistant' : 'user');
+      return {
+        ...message,
+        conversationId: message.conversationId || activeConversationId,
+        role,
+        author: message.author || (role === 'assistant' ? botUser : youUser),
+        createdAt:
+          typeof message.createdAt === 'string'
+            ? message.createdAt
+            : (message.createdAt ? new Date(message.createdAt).toISOString() : new Date().toISOString()),
+      };
+    });
 
-    return [
-      {
-        id: 'msg-welcome-1',
-        senderId: 'assistant',
-        createdAt: new Date(),
-        parts: [
-          {
-            type: 'text',
-            text: 'Hello! I am your Portfolio Assistant. How can I help you analyze your portfolio today?'
-          }
-        ]
-      }
-    ];
-  }, [persistedMessages]);
+    setMessages(alignedMessages);
+    setConversations((prev) => upsertConversation(prev, makeConversation(activeConversationId, alignedMessages)));
+  };
+
+  const handleNewChat = () => {
+    const nextSessionId = createSessionId();
+    const nextMessages = [makeWelcomeMessage(nextSessionId)];
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    writeStoredSessionIds([nextSessionId, ...readStoredSessionIds()]);
+
+    setSessionId(nextSessionId);
+    setActiveConversationId(nextSessionId);
+    setMessages(nextMessages);
+    setConversations((prev) => upsertConversation(prev, makeConversation(nextSessionId, nextMessages)));
+    setHistoryLoaded(true);
+  };
+
+  const handleActiveConversationChange = (nextId) => {
+    if (!nextId || nextId === activeConversationId) return;
+
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextId);
+    writeStoredSessionIds([nextId, ...readStoredSessionIds()]);
+    setSessionId(nextId);
+    setActiveConversationId(nextId);
+  };
 
   return (
     <Box
@@ -479,17 +645,19 @@ export default function ChatInterface() {
       <ChatBox
         key={`${sessionId}-${historyLoaded ? 'loaded' : 'loading'}`}
         adapter={adapter}
-        initialConversations={[{
-          id: sessionId,
-          title: 'Portfolio Assistant',
-          participants: [youUser, botUser],
-        }]}
-        initialActiveConversationId={sessionId}
-        initialMessages={initialMessages}
+        activeConversationId={activeConversationId}
+        conversations={conversations}
+        messages={messages}
+        onActiveConversationChange={handleActiveConversationChange}
+        onMessagesChange={handleMessagesChange}
         slots={{
           composerAttachButton: CustomAttachButtonWithModelSelector,
+          conversationHeaderActions: NewChatButton,
         }}
         slotProps={{
+          conversationHeaderActions: {
+            onNewChat: handleNewChat,
+          },
           messageContent: {
             partProps: {
               text: { renderText: renderMarkdown },
