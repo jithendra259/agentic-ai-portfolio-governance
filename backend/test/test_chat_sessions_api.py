@@ -64,6 +64,18 @@ class ChatSessionsApiTests(unittest.TestCase):
             },
         )
 
+    def test_plot_line_fixture_returns_mui_line_spec(self):
+        client = TestClient(app)
+        response = client.get("/api/plots/test-line")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["plot_type"], "line")
+        self.assertEqual(payload["x_type"], "time")
+        self.assertEqual(payload["series"][0]["data"][0], {"x": "2024-01-02", "y": 184.89})
+        self.assertEqual(len(payload["series"]), 2)
+        self.assertEqual(payload["series"][1]["name"], "MSFT")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ import { Box, Typography } from '@mui/material';
 import InlineChart from './InlineChart';
 
 const PLOT_FIXTURES = [
+  { id: 'test-line', label: 'Line' },
   { id: 'test-pie', label: 'Pie' },
   { id: 'test-bar', label: 'Bar' },
   { id: 'test-scatter', label: 'Scatter' },

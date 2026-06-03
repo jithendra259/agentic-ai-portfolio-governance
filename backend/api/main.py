@@ -503,6 +503,49 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
 @app.get("/api/plots/{plot_id}")
 def get_plot_data(plot_id: str):
+    if plot_id == "test-line":
+        return {
+            "plot_type": "line",
+            "title": "AAPL vs MSFT Price Trend (Interactive)",
+            "x_label": "Date",
+            "x_type": "time",
+            "y_label": "Close Price (USD)",
+            "y_format": "currency",
+            "grid": {"horizontal": True},
+            "curve": "monotoneX",
+            "highlightScope": {"highlight": "series", "fade": "global"},
+            "experimentalFeatures": {"enablePositionBasedPointerInteraction": True},
+            "series": [
+                {
+                    "name": "AAPL",
+                    "label": "AAPL",
+                    "color": "#3b82f6",
+                    "showMark": True,
+                    "data": [
+                        {"x": "2024-01-02", "y": 184.89},
+                        {"x": "2024-02-01", "y": 186.86},
+                        {"x": "2024-03-01", "y": 179.66},
+                        {"x": "2024-04-01", "y": 170.03},
+                        {"x": "2024-05-01", "y": 169.30},
+                        {"x": "2024-06-03", "y": 194.03},
+                    ],
+                },
+                {
+                    "name": "MSFT",
+                    "label": "MSFT",
+                    "color": "#10b981",
+                    "showMark": True,
+                    "data": [
+                        {"x": "2024-01-02", "y": 370.87},
+                        {"x": "2024-02-01", "y": 403.78},
+                        {"x": "2024-03-01", "y": 415.50},
+                        {"x": "2024-04-01", "y": 424.57},
+                        {"x": "2024-05-01", "y": 394.94},
+                        {"x": "2024-06-03", "y": 413.52},
+                    ],
+                },
+            ],
+        }
     if plot_id == "test-candlestick":
         return {
             "plot_type": "candlestick",
