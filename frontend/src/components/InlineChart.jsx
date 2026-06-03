@@ -4,26 +4,10 @@ import { BarChart } from '@mui/x-charts/BarChart';
 import { PieChart } from '@mui/x-charts/PieChart';
 import { ScatterChart } from '@mui/x-charts/ScatterChart';
 import { SparkLineChart } from '@mui/x-charts/SparkLineChart';
-import { SankeyChart } from '@mui/x-charts-pro/SankeyChart';
 import { Box, Typography, Paper } from '@mui/material';
 import { useDrawingArea, useXScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
 import { useTheme, alpha } from '@mui/material/styles';
-
-// Premium Candlestick Chart imports
-import { ChartsClipPath } from '@mui/x-charts-premium/ChartsClipPath';
-import { Unstable_CandlestickPlot as CandlestickPlot } from '@mui/x-charts-premium/CandlestickChart';
-import { LinePlot } from '@mui/x-charts-premium/LineChart';
-import { BarPlot } from '@mui/x-charts-premium/BarChart';
-import { ChartsXAxis } from '@mui/x-charts-premium/ChartsXAxis';
-import { ChartsYAxis } from '@mui/x-charts-premium/ChartsYAxis';
-import { useAxesTooltip } from '@mui/x-charts-premium/ChartsTooltip';
-import { ChartsDataProviderPremium } from '@mui/x-charts-premium/ChartsDataProviderPremium';
-import { ChartsWrapper } from '@mui/x-charts-premium/ChartsWrapper';
-import { ChartsAxisHighlight } from '@mui/x-charts-premium/ChartsAxisHighlight';
-import { ChartsGrid } from '@mui/x-charts-premium/ChartsGrid';
-import { ChartsWebGLLayer } from '@mui/x-charts-premium/ChartsWebGLLayer';
-import { ChartsLayerContainer } from '@mui/x-charts-premium/ChartsLayerContainer';
-import { ChartsSvgLayer } from '@mui/x-charts-premium/ChartsSvgLayer';
+import { BACKEND_BASE } from '../config/api';
 
 // Must match PALETTE in generate_dynamic_plot.py
 const PALETTE = [
@@ -41,6 +25,43 @@ const CHART_HEIGHT = 320;
 
 const AXIS_STYLE = { fill: '#9ca3af', fontSize: 11 };
 const GRID_STYLE = { stroke: '#374151', strokeDasharray: '4 4' };
+
+function toFiniteNumber(value, fallback = 0) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function getResponsiveChartHeight(spec, fallback = CHART_HEIGHT) {
+  const requested = toFiniteNumber(spec?.height, fallback);
+  return Math.max(180, Math.min(requested, 720));
+}
+
+function getPieShare(value, total) {
+  if (!total) return 0;
+  return (value / total) * 100;
+}
+
+function useResponsiveChartWidth(fallback = 360) {
+  const ref = React.useRef(null);
+  const [width, setWidth] = React.useState(fallback);
+
+  React.useEffect(() => {
+    if (!ref.current) return;
+    const updateWidth = (value) => {
+      setWidth(Math.max(280, Math.floor(value || fallback)));
+    };
+    updateWidth(ref.current.getBoundingClientRect().width);
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries?.[0]) {
+        updateWidth(entries[0].contentRect.width);
+      }
+    });
+    resizeObserver.observe(ref.current);
+    return () => resizeObserver.disconnect();
+  }, [fallback]);
+
+  return [ref, width];
+}
 
 function getValueFormatter(format) {
   if (format === 'percent') {
@@ -323,10 +344,12 @@ function SpecLineChart({ spec }) {
   const gridConfig = spec.grid || { horizontal: true };
 
   const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
+  const [chartRef, chartWidth] = useResponsiveChartWidth();
 
   return (
-    <Box sx={{ width: '100%', height: CHART_HEIGHT, ...animationSx }}>
+    <Box ref={chartRef} sx={{ width: '100%', height: CHART_HEIGHT, minWidth: 0, ...animationSx }}>
       <LineChart
+        width={chartWidth}
         dataset={dataset}
         series={series}
         xAxis={[{
@@ -354,7 +377,11 @@ function SpecLineChart({ spec }) {
           legend: {
             position: { vertical: 'top', horizontal: 'middle' },
             padding: 0,
-            labelStyle: { fill: '#e5e7eb', fontSize: 12 },
+            sx: {
+              color: '#e5e7eb',
+              fontSize: 12,
+              mt: 0,
+            },
           }
         }}
         sx={{
@@ -374,8 +401,11 @@ function SpecLineChart({ spec }) {
 }
 
 function SpecBarChart({ spec }) {
-  const { dataset, series, xAxisConfig, yAxisConfig } = useMemo(() => {
-    if (!spec?.series?.length) return { dataset: [], series: [], xAxisConfig: [], yAxisConfig: [] };
+  const { dataset, series, xAxisConfig, yAxisConfig, chartHeight, margin, categories } = useMemo(() => {
+    if (!spec?.series?.length) {
+      return { dataset: [], series: [], xAxisConfig: [], yAxisConfig: [], chartHeight: CHART_HEIGHT, margin: {}, categories: [] };
+    }
+    const isHorizontal = spec.layout === 'horizontal';
 
     // Collect all unique categories across all series
     const catSet = new Set();
@@ -387,11 +417,14 @@ function SpecBarChart({ spec }) {
     categories.forEach(c => { byCategory[c] = { label: c }; });
     spec.series.forEach(s => {
       s.data?.forEach(pt => {
-        if (byCategory[pt.x]) byCategory[pt.x][s.name] = pt.y;
+        if (byCategory[pt.x]) byCategory[pt.x][s.name] = toFiniteNumber(pt.y);
       });
     });
 
     const dataset = categories.map(c => byCategory[c]);
+    const longestCategory = categories.reduce((max, label) => Math.max(max, String(label).length), 0);
+    const categoryAxisWidth = Math.max(72, Math.min(180, longestCategory * 7 + 28));
+    const chartHeight = Math.max(CHART_HEIGHT, categories.length * (isHorizontal ? 34 : 22) + 96);
 
     // ── Build series config with all MUI X bar chart features ──
     const series = spec.series.map((s, i) => {
@@ -425,12 +458,50 @@ function SpecBarChart({ spec }) {
 
     // ── X-axis configuration ──
     let xAxisConfig;
-    if (spec.xAxis && Array.isArray(spec.xAxis)) {
+    let yAxisConfig;
+    if (isHorizontal) {
+      xAxisConfig = spec.xAxis && Array.isArray(spec.xAxis)
+        ? spec.xAxis.map(ax => ({
+            ...ax,
+            tickLabelStyle: AXIS_STYLE,
+            valueFormatter: ax.valueFormatter || getValueFormatter(ax.value_format || spec.y_format),
+            domainLimit: ax.domainLimit || 'nice',
+          }))
+        : [{
+            tickLabelStyle: AXIS_STYLE,
+            label: spec.y_label || 'Value',
+            valueFormatter: getValueFormatter(spec.y_format),
+            domainLimit: 'nice',
+          }];
+
+      yAxisConfig = spec.yAxis && Array.isArray(spec.yAxis)
+        ? spec.yAxis.map(ax => ({
+            ...ax,
+            data: ax.data || categories,
+            dataKey: ax.dataKey || 'label',
+            scaleType: ax.scaleType || 'band',
+            tickLabelStyle: AXIS_STYLE,
+            width: ax.width || categoryAxisWidth,
+            valueFormatter: ax.valueFormatter || ((value) => String(value ?? '')),
+          }))
+        : [{
+            dataKey: 'label',
+            data: categories,
+            scaleType: 'band',
+            tickLabelStyle: AXIS_STYLE,
+            width: categoryAxisWidth,
+            label: spec.x_label || 'Category',
+            valueFormatter: (value) => String(value ?? ''),
+          }];
+    } else if (spec.xAxis && Array.isArray(spec.xAxis)) {
       xAxisConfig = spec.xAxis.map(ax => {
         const xAx = {
           ...ax,
+          data: ax.data || categories,
+          dataKey: ax.dataKey || 'label',
           scaleType: ax.scaleType || 'band',
           tickLabelStyle: { ...AXIS_STYLE, angle: -30, textAnchor: 'end' },
+          valueFormatter: ax.valueFormatter || ((value) => String(value ?? '')),
         };
         if (spec.categoryGapRatio != null) xAx.categoryGapRatio = spec.categoryGapRatio;
         if (spec.barGapRatio != null) xAx.barGapRatio = spec.barGapRatio;
@@ -439,9 +510,11 @@ function SpecBarChart({ spec }) {
     } else {
       const xAx = {
         dataKey: 'label',
+        data: categories,
         scaleType: 'band',
         tickLabelStyle: { ...AXIS_STYLE, angle: -30, textAnchor: 'end' },
         label: spec.x_label || '',
+        valueFormatter: (value) => String(value ?? ''),
       };
       if (spec.categoryGapRatio != null) xAx.categoryGapRatio = spec.categoryGapRatio;
       if (spec.barGapRatio != null) xAx.barGapRatio = spec.barGapRatio;
@@ -449,15 +522,14 @@ function SpecBarChart({ spec }) {
     }
 
     // ── Y-axis configuration ──
-    let yAxisConfig;
-    if (spec.yAxis && Array.isArray(spec.yAxis)) {
+    if (!isHorizontal && spec.yAxis && Array.isArray(spec.yAxis)) {
       yAxisConfig = spec.yAxis.map(ax => ({
         ...ax,
         tickLabelStyle: AXIS_STYLE,
         valueFormatter: getValueFormatter(ax.value_format || spec.y_format),
         domainLimit: ax.domainLimit || 'nice',
       }));
-    } else {
+    } else if (!isHorizontal) {
       yAxisConfig = [{
         tickLabelStyle: AXIS_STYLE,
         label: spec.y_label || '',
@@ -466,7 +538,11 @@ function SpecBarChart({ spec }) {
       }];
     }
 
-    return { dataset, series, xAxisConfig, yAxisConfig };
+    const margin = isHorizontal
+      ? { top: 24, right: 28, left: categoryAxisWidth + 12, bottom: 44 }
+      : { top: 24, right: 24, left: 60, bottom: 64 };
+
+    return { dataset, series, xAxisConfig, yAxisConfig, chartHeight, margin, categories };
   }, [spec]);
 
   if (!dataset.length) return null;
@@ -481,26 +557,55 @@ function SpecBarChart({ spec }) {
     }
     return undefined;
   }, [spec.animation]);
+  const [chartRef, chartWidth] = useResponsiveChartWidth();
 
   return (
-    <BarChart
-      dataset={dataset}
-      xAxis={xAxisConfig}
-      yAxis={yAxisConfig}
-      series={series}
-      height={CHART_HEIGHT}
-      margin={{ top: 16, right: 24, left: 60, bottom: 56 }}
-      grid={gridConfig}
-      borderRadius={spec.borderRadius ?? 4}
-      {...(slotsConfig ? { slots: slotsConfig } : {})}
-      {...(spec.layout ? { layout: spec.layout } : {})}
-      {...(spec.skipAnimation ? { skipAnimation: true } : {})}
-      sx={{
-        '& .MuiChartsGrid-line': GRID_STYLE,
-        ...animationSx,
-      }}
-      slotProps={{ legend: { labelStyle: { fill: '#e5e7eb', fontSize: 12 } } }}
-    />
+    <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
+      <BarChart
+        width={chartWidth}
+        dataset={dataset}
+        xAxis={xAxisConfig}
+        yAxis={yAxisConfig}
+        series={series}
+        height={chartHeight}
+        margin={margin}
+        grid={gridConfig}
+        borderRadius={spec.borderRadius ?? 4}
+        {...(slotsConfig ? { slots: slotsConfig } : {})}
+        {...(spec.layout ? { layout: spec.layout } : {})}
+        {...(spec.skipAnimation ? { skipAnimation: true } : {})}
+        sx={{
+          '& .MuiChartsAxis-tickLabel': AXIS_STYLE,
+          '& .MuiChartsGrid-line': GRID_STYLE,
+          '& .MuiChartsLegend-root': {
+            color: '#e5e7eb',
+            fontSize: 12,
+          },
+          ...animationSx,
+        }}
+        slotProps={{ legend: { sx: { color: '#e5e7eb', fontSize: 12 } } }}
+      />
+      {spec.layout !== 'horizontal' && categories.length > 0 && (
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${categories.length}, minmax(0, 1fr))`,
+            pl: `${margin.left}px`,
+            pr: `${margin.right}px`,
+            mt: -5,
+            color: '#9ca3af',
+            fontSize: 11,
+            lineHeight: 1.2,
+          }}
+        >
+          {categories.map((category) => (
+            <Box key={category} sx={{ textAlign: 'center', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {category}
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
   );
 }
 
@@ -565,9 +670,7 @@ function SpecPieChart({ spec }) {
           if (s.valueFormatter === 'raw') {
             return v.toString();
           }
-          // Fallback default format
-          const multiplier = isFractional ? 100 : 1;
-          return `${(v * multiplier).toFixed(1)}%`;
+          return `${getPieShare(v, total).toFixed(1)}%`;
         };
 
         // Legend label: use pt.label if supplied, else build from id/x and value
@@ -635,8 +738,7 @@ function SpecPieChart({ spec }) {
         if (s.valueFormatter === 'raw') {
           return val.toString();
         }
-        const multiplier = isFractional ? 100 : 1;
-        return `${(val * multiplier).toFixed(1)}%`;
+        return `${getPieShare(val, total).toFixed(1)}%`;
       };
 
       // Highlight options
@@ -652,41 +754,87 @@ function SpecPieChart({ spec }) {
     });
   }, [spec]);
 
+  const [chartRef, chartWidth] = useResponsiveChartWidth();
+  const compact = chartWidth < 460;
+  const chartHeight = compact ? 300 : CHART_HEIGHT;
+  const responsiveSeries = useMemo(() => (
+    compact
+      ? mappedSeries.map((series) => ({
+          ...series,
+          innerRadius: Math.min(series.innerRadius ?? 0, 48),
+          outerRadius: Math.min(series.outerRadius ?? 110, 86),
+        }))
+      : mappedSeries
+  ), [compact, mappedSeries]);
+
   if (!mappedSeries.length) return null;
 
   const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
 
   const chartProps = {};
   if (spec.skipAnimation) chartProps.skipAnimation = true;
-  if (spec.hideLegend) chartProps.hideLegend = true;
+  chartProps.hideLegend = true;
   if (spec.colors && Array.isArray(spec.colors)) chartProps.colors = spec.colors;
+  const legendItems = spec.hideLegend ? [] : responsiveSeries.flatMap((series) => series.data || []);
 
   return (
-    <PieChart
-      series={mappedSeries}
-      height={CHART_HEIGHT}
-      margin={{ top: 16, right: 16, bottom: 16, left: 16 }}
-      sx={{
-        '& .MuiPieArcLabel-root': {
-          fontSize: '11px',
-          fill: '#ffffff',
-          fontWeight: 'bold',
-        },
-        ...animationSx,
-      }}
-      slotProps={{
-        legend: {
-          labelStyle: { fill: '#e5e7eb', fontSize: 11 },
-          itemMarkWidth: 10,
-          itemMarkHeight: 10,
-          markGap: 6,
-          itemGap: 10,
-        },
-      }}
-      {...chartProps}
-    >
-      {spec.centerLabel && <PieCenterLabel>{spec.centerLabel}</PieCenterLabel>}
-    </PieChart>
+    <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
+      <PieChart
+        width={chartWidth}
+        series={responsiveSeries}
+        height={chartHeight}
+        margin={{ top: 16, right: 16, bottom: 16, left: 16 }}
+        sx={{
+          '& .MuiPieArcLabel-root': {
+            fontSize: compact ? '10px' : '11px',
+            fill: '#ffffff',
+            fontWeight: 'bold',
+          },
+          ...animationSx,
+        }}
+        slotProps={{
+          legend: {
+            sx: {
+              color: '#e5e7eb',
+              fontSize: 11,
+              gap: 1.25,
+              '& .MuiChartsLegend-mark': {
+                width: 10,
+                height: 10,
+              },
+              '& .MuiChartsLegend-series': {
+                gap: 0.75,
+              },
+            },
+          },
+        }}
+        {...chartProps}
+      >
+        {spec.centerLabel && <PieCenterLabel>{spec.centerLabel}</PieCenterLabel>}
+      </PieChart>
+      {legendItems.length > 0 && (
+        <Box
+          sx={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            justifyContent: 'center',
+            gap: 1.25,
+            mt: -1,
+            px: 1,
+            color: '#e5e7eb',
+            fontSize: 11,
+            lineHeight: 1.2,
+          }}
+        >
+          {legendItems.map((item) => (
+            <Box key={item.id} sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.75, minWidth: 0 }}>
+              <Box component="span" sx={{ width: 10, height: 10, borderRadius: '50%', bgcolor: item.color, flex: '0 0 auto' }} />
+              <Box component="span" sx={{ whiteSpace: 'nowrap' }}>{item.label || item.id}</Box>
+            </Box>
+          ))}
+        </Box>
+      )}
+    </Box>
   );
 }
 
@@ -698,10 +846,10 @@ function SpecScatterChart({ spec }) {
     if (!spec?.series || !Array.isArray(spec.series)) return [];
     return spec.series.map((s, i) => {
       const dataPoints = (s.data || []).map((pt, j) => ({
-        x: pt.x,
-        y: pt.y,
+        x: toFiniteNumber(pt.x),
+        y: toFiniteNumber(pt.y),
         id: pt.id !== undefined ? pt.id : `pt-${j}`,
-        ...(pt.z !== undefined ? { z: pt.z } : {}),
+        ...(pt.z !== undefined ? { z: toFiniteNumber(pt.z) } : {}),
       }));
       const entry = {
         type: 'scatter',
@@ -765,27 +913,36 @@ function SpecScatterChart({ spec }) {
   if (spec.skipAnimation) chartProps.skipAnimation = true;
   if (spec.hideLegend) chartProps.hideLegend = true;
   if (spec.colors && Array.isArray(spec.colors)) chartProps.colors = spec.colors;
-  if (spec.hitAreaRadius !== undefined) chartProps.hitAreaRadius = spec.hitAreaRadius;
+  chartProps.hitAreaRadius = spec.hitAreaRadius !== undefined ? spec.hitAreaRadius : 20;
 
   const gridConfig = spec.grid || { horizontal: true, vertical: true };
   const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
+  const [chartRef, chartWidth] = useResponsiveChartWidth();
 
   return (
-    <ScatterChart
-      series={series}
-      xAxis={xAxisConfig}
-      yAxis={yAxisConfig}
-      {...(zAxisConfig ? { zAxis: zAxisConfig } : {})}
-      height={CHART_HEIGHT}
-      margin={{ top: 16, right: 24, left: 60, bottom: 56 }}
-      grid={gridConfig}
-      sx={{
-        '& .MuiChartsGrid-line': GRID_STYLE,
-        ...animationSx,
-      }}
-      slotProps={{ legend: { labelStyle: { fill: '#e5e7eb', fontSize: 12 } } }}
-      {...chartProps}
-    />
+    <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
+      <ScatterChart
+        width={chartWidth}
+        series={series}
+        xAxis={xAxisConfig}
+        yAxis={yAxisConfig}
+        {...(zAxisConfig ? { zAxis: zAxisConfig } : {})}
+        height={CHART_HEIGHT}
+        margin={{ top: 16, right: 24, left: 60, bottom: 56 }}
+        grid={gridConfig}
+        sx={{
+          '& .MuiChartsAxis-tickLabel': AXIS_STYLE,
+          '& .MuiChartsGrid-line': GRID_STYLE,
+          '& .MuiChartsLegend-root': {
+            color: '#e5e7eb',
+            fontSize: 12,
+          },
+          ...animationSx,
+        }}
+        slotProps={{ legend: { sx: { color: '#e5e7eb', fontSize: 12 } } }}
+        {...chartProps}
+      />
+    </Box>
   );
 }
 
@@ -804,7 +961,11 @@ function SpecSparkLineChart({ spec }) {
   
   if (spec.baseline !== undefined) chartProps.baseline = spec.baseline;
   
-  const height = spec.height !== undefined ? spec.height : 60;
+  const height = getResponsiveChartHeight(spec, 64);
+  const sparkData = useMemo(
+    () => (spec.data || []).map(value => toFiniteNumber(value)).filter(value => Number.isFinite(value)),
+    [spec.data]
+  );
   
   // Custom xAxis scaleType & data if passed
   const xAxisConfig = useMemo(() => {
@@ -827,9 +988,9 @@ function SpecSparkLineChart({ spec }) {
   const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
 
   return (
-    <Box sx={{ width: '100%', display: 'flex', justifyContent: 'center', p: 0.5, ...animationSx }}>
+    <Box sx={{ width: '100%', minWidth: 220, display: 'flex', justifyContent: 'center', p: 0.5, ...animationSx }}>
       <SparkLineChart
-        data={spec.data || []}
+        data={sparkData}
         height={height}
         {...(xAxisConfig ? { xAxis: xAxisConfig } : {})}
         {...(yAxisConfig ? { yAxis: yAxisConfig } : {})}
@@ -843,54 +1004,233 @@ function SpecSparkLineChart({ spec }) {
 // Sankey chart
 // ─────────────────────────────────────────────────────────────────────────────
 function SpecSankeyChart({ spec }) {
-  const height = spec.height !== undefined ? spec.height : 350;
+  const height = getResponsiveChartHeight(spec, 350);
+  const containerRef = React.useRef(null);
+  const [containerWidth, setContainerWidth] = React.useState(360);
+  const [activeId, setActiveId] = React.useState(null);
+  const formatValue = useMemo(() => getValueFormatter(spec.valueFormatter || 'none'), [spec.valueFormatter]);
 
-  const valueFormatter = React.useCallback(
-    (value, context) => {
-      const formatter = getValueFormatter(spec.valueFormatter || 'none');
-      const formatted = formatter(value);
-      if (context?.type === 'link') {
-        return formatted;
+  React.useEffect(() => {
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries?.[0]) {
+        setContainerWidth(Math.max(320, entries[0].contentRect.width || 640));
       }
-      return `${formatted} total`;
-    },
-    [spec.valueFormatter]
-  );
+    });
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
 
-  const series = useMemo(() => {
+  const layout = useMemo(() => {
+    const nodeWidth = spec.nodeOptions?.width ?? 12;
+    const nodePadding = spec.nodeOptions?.padding ?? 18;
+    const margin = { top: 34, right: 28, bottom: 28, left: 28 };
+    const innerWidth = Math.max(260, containerWidth - margin.left - margin.right);
+    const innerHeight = Math.max(180, height - margin.top - margin.bottom);
+    const nodesById = new Map();
+
+    (spec.nodes || []).forEach((node, index) => {
+      const id = node.id ?? node.label ?? `node-${index}`;
+      nodesById.set(id, {
+        id,
+        label: node.label || String(id),
+        color: node.color || PALETTE[index % PALETTE.length],
+      });
+    });
+
+    const links = (spec.links || [])
+      .map((link, index) => ({
+        id: `${link.source}-${link.target}-${index}`,
+        source: link.source,
+        target: link.target,
+        value: Math.max(0, toFiniteNumber(link.value)),
+      }))
+      .filter((link) => link.source != null && link.target != null && link.value > 0);
+
+    links.forEach((link) => {
+      if (!nodesById.has(link.source)) {
+        nodesById.set(link.source, {
+          id: link.source,
+          label: String(link.source),
+          color: PALETTE[nodesById.size % PALETTE.length],
+        });
+      }
+      if (!nodesById.has(link.target)) {
+        nodesById.set(link.target, {
+          id: link.target,
+          label: String(link.target),
+          color: PALETTE[nodesById.size % PALETTE.length],
+        });
+      }
+    });
+
+    const nodes = Array.from(nodesById.values());
+    const incoming = new Map(nodes.map((node) => [node.id, 0]));
+    const outgoing = new Map(nodes.map((node) => [node.id, 0]));
+    links.forEach((link) => {
+      outgoing.set(link.source, (outgoing.get(link.source) || 0) + link.value);
+      incoming.set(link.target, (incoming.get(link.target) || 0) + link.value);
+    });
+
+    const depths = new Map(nodes.map((node) => [node.id, incoming.get(node.id) ? 1 : 0]));
+    for (let i = 0; i < nodes.length; i += 1) {
+      links.forEach((link) => {
+        depths.set(link.target, Math.max(depths.get(link.target) || 0, (depths.get(link.source) || 0) + 1));
+      });
+    }
+    const maxDepth = Math.max(1, ...depths.values());
+
+    const groups = new Map();
+    nodes.forEach((node) => {
+      const depth = depths.get(node.id) || 0;
+      if (!groups.has(depth)) groups.set(depth, []);
+      groups.get(depth).push(node);
+    });
+
+    const valueByNode = new Map(nodes.map((node) => [
+      node.id,
+      Math.max(incoming.get(node.id) || 0, outgoing.get(node.id) || 0, 1),
+    ]));
+    const maxGroupTotal = Math.max(
+      1,
+      ...Array.from(groups.values()).map((group) =>
+        group.reduce((sum, node) => sum + valueByNode.get(node.id), 0)
+      )
+    );
+    const maxGroupCount = Math.max(1, ...Array.from(groups.values()).map((group) => group.length));
+    const valueScale = Math.max(
+      0.0001,
+      (innerHeight - nodePadding * Math.max(0, maxGroupCount - 1)) / maxGroupTotal
+    );
+
+    const positionedNodes = new Map();
+    groups.forEach((group, depth) => {
+      const groupHeight =
+        group.reduce((sum, node) => sum + valueByNode.get(node.id) * valueScale, 0) +
+        nodePadding * Math.max(0, group.length - 1);
+      let y = margin.top + Math.max(0, (innerHeight - groupHeight) / 2);
+      group.forEach((node) => {
+        const nodeHeight = Math.max(16, valueByNode.get(node.id) * valueScale);
+        const x = margin.left + (innerWidth - nodeWidth) * (depth / maxDepth);
+        positionedNodes.set(node.id, {
+          ...node,
+          value: valueByNode.get(node.id),
+          x0: x,
+          x1: x + nodeWidth,
+          y0: y,
+          y1: y + nodeHeight,
+          depth,
+        });
+        y += nodeHeight + nodePadding;
+      });
+    });
+
+    const sourceOffsets = new Map(nodes.map((node) => [node.id, 0]));
+    const targetOffsets = new Map(nodes.map((node) => [node.id, 0]));
+    const positionedLinks = links.map((link) => {
+      const source = positionedNodes.get(link.source);
+      const target = positionedNodes.get(link.target);
+      const width = Math.max(2, link.value * valueScale);
+      const sourceY = source.y0 + (sourceOffsets.get(link.source) || 0) + width / 2;
+      const targetY = target.y0 + (targetOffsets.get(link.target) || 0) + width / 2;
+      sourceOffsets.set(link.source, (sourceOffsets.get(link.source) || 0) + width);
+      targetOffsets.set(link.target, (targetOffsets.get(link.target) || 0) + width);
+      const midX = (source.x1 + target.x0) / 2;
+      return {
+        ...link,
+        source,
+        target,
+        width,
+        color: target.color,
+        d: `M ${source.x1} ${sourceY} C ${midX} ${sourceY}, ${midX} ${targetY}, ${target.x0} ${targetY}`,
+      };
+    });
+
     return {
-      data: {
-        nodes: spec.nodes || [],
-        links: spec.links || [],
-      },
-      nodeOptions: {
-        highlight: 'links',
-        fade: 'global',
-        sort: 'fixed',
-        width: 12,
-        padding: 18,
-        ...spec.nodeOptions,
-      },
-      linkOptions: {
-        highlight: 'nodes',
-        fade: 'global',
-        color: 'target-gradient',
-        opacity: 0.5,
-        ...spec.linkOptions,
-      },
-      valueFormatter,
+      width: containerWidth,
+      height,
+      nodeWidth,
+      nodes: Array.from(positionedNodes.values()),
+      links: positionedLinks,
     };
-  }, [spec.nodes, spec.links, spec.nodeOptions, spec.linkOptions, valueFormatter]);
+  }, [containerWidth, height, spec.links, spec.nodeOptions, spec.nodes]);
 
-  const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
+  if (!layout.nodes.length || !layout.links.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No Sankey data available.</Typography>
+      </Box>
+    );
+  }
 
   return (
-    <Box sx={{ width: '100%', height, minHeight: height, p: 0.5, ...animationSx }}>
-      <SankeyChart
-        series={series}
-        height={height}
-        sx={animationSx}
-      />
+    <Box ref={containerRef} sx={{ width: '100%', height, minHeight: height, p: 0.5, position: 'relative' }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${layout.width} ${layout.height}`} role="img" aria-label={spec.title || 'Sankey chart'}>
+        <g fill="none">
+          {layout.links.map((link) => {
+            const muted = activeId && activeId !== link.id && activeId !== link.source.id && activeId !== link.target.id;
+            return (
+              <path
+                key={link.id}
+                d={link.d}
+                stroke={link.color}
+                strokeWidth={link.width}
+                strokeOpacity={muted ? 0.18 : 0.56}
+                strokeLinecap="butt"
+                onMouseEnter={() => setActiveId(link.id)}
+                onMouseLeave={() => setActiveId(null)}
+              >
+                <title>{`${link.source.label} to ${link.target.label}: ${formatValue(link.value)}`}</title>
+              </path>
+            );
+          })}
+        </g>
+        <g>
+          {layout.nodes.map((node) => {
+            const muted = activeId && activeId !== node.id && !String(activeId).startsWith(`${node.id}-`);
+            const isLeft = node.depth === 0;
+            const labelX = isLeft ? node.x1 + 10 : node.x0 - 10;
+            return (
+              <g
+                key={node.id}
+                onMouseEnter={() => setActiveId(node.id)}
+                onMouseLeave={() => setActiveId(null)}
+                opacity={muted ? 0.55 : 1}
+              >
+                <rect
+                  x={node.x0}
+                  y={node.y0}
+                  width={layout.nodeWidth}
+                  height={node.y1 - node.y0}
+                  rx="2"
+                  fill={node.color}
+                />
+                <text
+                  x={labelX}
+                  y={(node.y0 + node.y1) / 2 - 5}
+                  textAnchor={isLeft ? 'start' : 'end'}
+                  dominantBaseline="middle"
+                  fill="#f8fafc"
+                  fontSize="12"
+                  fontWeight="700"
+                >
+                  {node.label}
+                </text>
+                <text
+                  x={labelX}
+                  y={(node.y0 + node.y1) / 2 + 11}
+                  textAnchor={isLeft ? 'start' : 'end'}
+                  dominantBaseline="middle"
+                  fill="#cbd5e1"
+                  fontSize="11"
+                >
+                  {formatValue(node.value)}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      </svg>
     </Box>
   );
 }
@@ -898,86 +1238,12 @@ function SpecSankeyChart({ spec }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Candlestick chart
 // ─────────────────────────────────────────────────────────────────────────────
-function CandlestickTooltip({ hasVolume, formatVolume }) {
-  const drawingArea = useDrawingArea();
-  const axesTooltipData = useAxesTooltip({
-    directions: ['x'],
-  });
-
-  const tooltipData = axesTooltipData?.[0];
-
-  if (!tooltipData) {
-    return null;
-  }
-
-  const ohlcItem = tooltipData.seriesItems.find(
-    (item) => item.seriesId === 'ohlc'
-  );
-  const movingAverageItem = tooltipData.seriesItems.find(
-    (item) => item.seriesId === 'moving-average'
-  );
-  const volumeItem = tooltipData.seriesItems.find(
-    (item) => item.seriesId === 'volume'
-  );
-
-  const formatVal = (v) => v == null ? '' : v.toFixed(2);
-
-  const ohlcValue = ohlcItem?.value;
-  const maValue = movingAverageItem?.value;
-  const volValue = volumeItem?.value;
-
-  return (
-    <foreignObject
-      x={drawingArea.left}
-      y={drawingArea.top}
-      width={drawingArea.width}
-      height={drawingArea.height}
-      style={{ pointerEvents: 'none' }}
-    >
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '4px',
-        fontSize: '11px',
-        padding: '6px 8px',
-        color: '#e5e7eb',
-        background: 'rgba(17, 24, 39, 0.85)',
-        backdropFilter: 'blur(4px)',
-        border: '1px solid #374151',
-        borderRadius: '4px',
-        width: 'fit-content',
-        margin: '8px',
-        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)'
-      }}>
-        {ohlcValue && (
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <span><strong style={{ color: '#9ca3af' }}>O:</strong> ${formatVal(ohlcValue.open)}</span>
-            <span><strong style={{ color: '#9ca3af' }}>H:</strong> ${formatVal(ohlcValue.high)}</span>
-            <span><strong style={{ color: '#9ca3af' }}>L:</strong> ${formatVal(ohlcValue.low)}</span>
-            <span><strong style={{ color: '#9ca3af' }}>C:</strong> ${formatVal(ohlcValue.close)}</span>
-            {hasVolume && volValue != null && (
-              <span><strong style={{ color: '#9ca3af' }}>V:</strong> {formatVolume(volValue)}</span>
-            )}
-          </div>
-        )}
-        {maValue != null && (
-          <div>
-            <span style={{ color: '#3b82f6', fontWeight: 600 }}>20-day MA:</span> ${formatVal(maValue)}
-          </div>
-        )}
-      </div>
-    </foreignObject>
-  );
-}
-
 function SpecCandlestickChart({ spec }) {
-  const height = spec.height !== undefined ? spec.height : CHART_HEIGHT;
-  const series = spec.series;
-  const pts = series?.[0]?.data || [];
-
-  const theme = useTheme();
-  const clipId = React.useId();
-  const clipPathId = `clip-path-${clipId.replace(/:/g, '')}`;
+  const height = getResponsiveChartHeight(spec, CHART_HEIGHT);
+  const pts = spec.series?.[0]?.data || [];
+  const containerRef = React.useRef(null);
+  const [containerWidth, setContainerWidth] = React.useState(360);
+  const [hoveredIndex, setHoveredIndex] = React.useState(null);
 
   const formatVolume = (val) => {
     if (val == null) return '';
@@ -989,53 +1255,101 @@ function SpecCandlestickChart({ spec }) {
 
   const formatAsDollar = (value) => {
     if (value == null) return '';
-    return `$${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+    return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 0 : 2 })}`;
   };
 
-  const { maxVolume, hasVolume } = useMemo(() => {
-    let maxVol = 0;
-    let hasVol = false;
-    pts.forEach(pt => {
-      if (pt.volume != null && pt.volume > 0) {
-        hasVol = true;
-        if (pt.volume > maxVol) maxVol = pt.volume;
+  React.useEffect(() => {
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries?.[0]) {
+        setContainerWidth(Math.max(320, entries[0].contentRect.width || 640));
       }
     });
-    return { maxVolume: maxVol, hasVolume: hasVol };
-  }, [pts]);
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
 
-  const xData = useMemo(() => pts.map((entry) => new Date(entry.date)), [pts]);
+  const chart = useMemo(() => {
+    const data = pts.map((entry, index) => ({
+      index,
+      date: entry.date,
+      dateObj: entry.date ? new Date(entry.date) : null,
+      open: toFiniteNumber(entry.open),
+      high: toFiniteNumber(entry.high),
+      low: toFiniteNumber(entry.low),
+      close: toFiniteNumber(entry.close),
+      volume: Math.max(0, toFiniteNumber(entry.volume)),
+    }));
 
-  const ohlcData = useMemo(() => pts.map((entry) => [
-    entry.open,
-    entry.high,
-    entry.low,
-    entry.close,
-  ]), [pts]);
+    const margin = { top: 22, right: 64, bottom: 42, left: 34 };
+    const innerWidth = Math.max(260, containerWidth - margin.left - margin.right);
+    const innerHeight = Math.max(200, height - margin.top - margin.bottom);
+    const volumeHeight = data.some((entry) => entry.volume > 0) ? Math.max(46, innerHeight * 0.22) : 0;
+    const volumeGap = volumeHeight ? 12 : 0;
+    const priceHeight = innerHeight - volumeHeight - volumeGap;
+    const plotBottom = margin.top + priceHeight;
 
-  const volumeData = useMemo(() => pts.map((entry) => entry.volume || 0), [pts]);
+    const minLow = Math.min(...data.map((entry) => entry.low));
+    const maxHigh = Math.max(...data.map((entry) => entry.high));
+    const pricePadding = Math.max((maxHigh - minLow) * 0.1, 1);
+    const minPrice = minLow - pricePadding;
+    const maxPrice = maxHigh + pricePadding;
+    const priceRange = Math.max(maxPrice - minPrice, 1);
+    const maxVolume = Math.max(1, ...data.map((entry) => entry.volume));
+    const step = innerWidth / Math.max(1, data.length);
+    const candleWidth = Math.max(5, Math.min(16, step * 0.58));
 
-  const movingAverageData = useMemo(() => {
+    const xFor = (index) => margin.left + step * (index + 0.5);
+    const priceY = (value) => margin.top + ((maxPrice - value) / priceRange) * priceHeight;
+    const volumeY = (value) => plotBottom + volumeGap + volumeHeight - (value / maxVolume) * volumeHeight;
+
+    const priceTicks = Array.from({ length: 5 }, (_, index) => {
+      const value = minPrice + (priceRange * index) / 4;
+      return { value, y: priceY(value) };
+    }).reverse();
+
     const windowSize = 20;
-    return pts.map((_, i) => {
-      if (i < windowSize - 1) {
-        return null;
-      }
-      const sum = pts
-        .slice(i - windowSize + 1, i + 1)
-        .reduce((acc, entry) => acc + entry.close, 0);
-      return sum / windowSize;
+    const movingAverage = data.map((_, index) => {
+      if (index < windowSize - 1) return null;
+      const window = data.slice(index - windowSize + 1, index + 1);
+      return window.reduce((sum, entry) => sum + entry.close, 0) / window.length;
     });
-  }, [pts]);
+    const movingAveragePath = movingAverage
+      .map((value, index) => value == null ? null : `${index === windowSize - 1 ? 'M' : 'L'} ${xFor(index)} ${priceY(value)}`)
+      .filter(Boolean)
+      .join(' ');
 
-  const volumeBarColorGetter = ({ dataIndex }) => {
-    if (dataIndex === 0) {
-      return theme.palette.success.main;
-    }
-    return pts[dataIndex].close >= pts[dataIndex - 1].close
-      ? theme.palette.success.main
-      : theme.palette.error.main;
-  };
+    const tickEvery = Math.max(1, Math.ceil(data.length / 7));
+    const dateTicks = data
+      .filter((_, index) => index === 0 || index === data.length - 1 || index % tickEvery === 0)
+      .map((entry) => ({
+        x: xFor(entry.index),
+        label: entry.dateObj instanceof Date && !Number.isNaN(entry.dateObj.getTime())
+          ? entry.dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : entry.date,
+      }));
+
+    return {
+      width: containerWidth,
+      height,
+      data,
+      margin,
+      innerWidth,
+      priceHeight,
+      volumeHeight,
+      volumeGap,
+      plotBottom,
+      candleWidth,
+      xFor,
+      priceY,
+      volumeY,
+      priceTicks,
+      dateTicks,
+      movingAverage,
+      movingAveragePath,
+      hasVolume: volumeHeight > 0,
+    };
+  }, [containerWidth, height, pts]);
 
   if (pts.length === 0) {
     return (
@@ -1045,86 +1359,151 @@ function SpecCandlestickChart({ spec }) {
     );
   }
 
+  const hovered = hoveredIndex == null ? null : chart.data[hoveredIndex];
+  const tooltipLeft = hovered ? Math.min(Math.max(chart.xFor(hovered.index) + 12, 12), chart.width - 190) : 0;
+
   return (
-    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
-      <ChartsDataProviderPremium
-        series={[
-          {
-            id: 'ohlc',
-            type: 'ohlc',
-            data: ohlcData,
-            label: 'Price',
-          },
-          {
-            id: 'moving-average',
-            type: 'line',
-            data: movingAverageData,
-            label: '20-day SMA',
-            color: '#3b82f6',
-          },
-          ...(hasVolume ? [
-            {
-              id: 'volume',
-              type: 'bar',
-              data: volumeData,
-              label: 'Volume',
-              colorGetter: volumeBarColorGetter,
-              yAxisId: 'volume',
-            }
-          ] : []),
-        ]}
-        xAxis={[
-          {
-            data: xData,
-            scaleType: 'band',
-            valueFormatter: (value) =>
-              value instanceof Date
-                ? value.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                : value,
-            zoom: {
-              filterMode: 'discard',
-            },
-          },
-        ]}
-        yAxis={[
-          {
-            id: 'price',
-            valueFormatter: formatAsDollar,
-            position: 'right',
-          },
-          ...(hasVolume ? [
-            {
-              id: 'volume',
-              domainLimit: (min, max) => ({ min: 0, max: max.valueOf() * 5 }),
-            }
-          ] : []),
-        ]}
-        height={height}
-        margin={{ top: 20, bottom: 30, left: 20, right: 60 }}
-      >
-        <ChartsWrapper sx={{ width: '100%' }}>
-          <ChartsLayerContainer>
-            <ChartsSvgLayer>
-              <ChartsGrid horizontal vertical />
-            </ChartsSvgLayer>
-            <ChartsWebGLLayer>
-              <CandlestickPlot />
-            </ChartsWebGLLayer>
-            <ChartsSvgLayer>
-              <g clipPath={`url(#${clipPathId})`}>
-                <BarPlot renderer="svg-batch" />
-                <LinePlot />
-                <ChartsAxisHighlight x="line" y="line" />
+    <Box ref={containerRef} sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={spec.title || 'Candlestick chart'}>
+        <rect x="0" y="0" width={chart.width} height={chart.height} fill="transparent" />
+        <g>
+          {chart.priceTicks.map((tick) => (
+            <g key={tick.value}>
+              <line
+                x1={chart.margin.left}
+                x2={chart.margin.left + chart.innerWidth}
+                y1={tick.y}
+                y2={tick.y}
+                stroke="#374151"
+                strokeDasharray="4 4"
+              />
+              <text x={chart.margin.left + chart.innerWidth + 8} y={tick.y + 4} fill="#cbd5e1" fontSize="11" fontWeight="700">
+                {formatAsDollar(tick.value)}
+              </text>
+            </g>
+          ))}
+          {chart.dateTicks.map((tick) => (
+            <g key={`${tick.x}-${tick.label}`}>
+              <line
+                x1={tick.x}
+                x2={tick.x}
+                y1={chart.margin.top}
+                y2={chart.hasVolume ? chart.plotBottom + chart.volumeGap + chart.volumeHeight : chart.plotBottom}
+                stroke="#334155"
+                strokeOpacity="0.55"
+              />
+              <text x={tick.x} y={height - 14} fill="#cbd5e1" fontSize="11" textAnchor="middle">
+                {tick.label}
+              </text>
+            </g>
+          ))}
+        </g>
+        {chart.hasVolume && (
+          <g>
+            <line
+              x1={chart.margin.left}
+              x2={chart.margin.left + chart.innerWidth}
+              y1={chart.plotBottom + chart.volumeGap + chart.volumeHeight}
+              y2={chart.plotBottom + chart.volumeGap + chart.volumeHeight}
+              stroke="#475569"
+            />
+            {chart.data.map((entry) => {
+              const rising = entry.index === 0 || entry.close >= chart.data[entry.index - 1].close;
+              const x = chart.xFor(entry.index) - chart.candleWidth / 2;
+              const y = chart.volumeY(entry.volume);
+              const h = chart.plotBottom + chart.volumeGap + chart.volumeHeight - y;
+              return (
+                <rect
+                  key={`volume-${entry.index}`}
+                  x={x}
+                  y={y}
+                  width={chart.candleWidth}
+                  height={Math.max(1, h)}
+                  fill={rising ? '#22c55e' : '#ef4444'}
+                  opacity="0.78"
+                />
+              );
+            })}
+          </g>
+        )}
+        <g>
+          {chart.movingAveragePath && (
+            <path d={chart.movingAveragePath} fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" />
+          )}
+          {chart.data.map((entry) => {
+            const rising = entry.close >= entry.open;
+            const color = rising ? '#22c55e' : '#ef4444';
+            const x = chart.xFor(entry.index);
+            const openY = chart.priceY(entry.open);
+            const closeY = chart.priceY(entry.close);
+            const highY = chart.priceY(entry.high);
+            const lowY = chart.priceY(entry.low);
+            const bodyY = Math.min(openY, closeY);
+            const bodyHeight = Math.max(2, Math.abs(closeY - openY));
+            return (
+              <g
+                key={`candle-${entry.index}`}
+                onMouseEnter={() => setHoveredIndex(entry.index)}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
+                <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth="1.5" />
+                <rect
+                  x={x - chart.candleWidth / 2}
+                  y={bodyY}
+                  width={chart.candleWidth}
+                  height={bodyHeight}
+                  rx="1"
+                  fill={color}
+                />
+                <rect
+                  x={x - chart.candleWidth / 2 - 3}
+                  y={chart.margin.top}
+                  width={chart.candleWidth + 6}
+                  height={chart.priceHeight + chart.volumeGap + chart.volumeHeight}
+                  fill="transparent"
+                >
+                  <title>{`${entry.date}: O ${formatAsDollar(entry.open)} H ${formatAsDollar(entry.high)} L ${formatAsDollar(entry.low)} C ${formatAsDollar(entry.close)} V ${formatVolume(entry.volume)}`}</title>
+                </rect>
               </g>
-              <ChartsClipPath id={clipPathId} />
-              <ChartsXAxis />
-              <ChartsYAxis axisId="price" />
-              {hasVolume && <ChartsYAxis axisId="volume" sx={{ display: 'none' }} />}
-              <CandlestickTooltip hasVolume={hasVolume} formatVolume={formatVolume} />
-            </ChartsSvgLayer>
-          </ChartsLayerContainer>
-        </ChartsWrapper>
-      </ChartsDataProviderPremium>
+            );
+          })}
+        </g>
+        <g>
+          <line x1={chart.margin.left} x2={chart.margin.left + chart.innerWidth} y1={chart.plotBottom} y2={chart.plotBottom} stroke="#94a3b8" />
+          <line x1={chart.margin.left + chart.innerWidth} x2={chart.margin.left + chart.innerWidth} y1={chart.margin.top} y2={chart.plotBottom} stroke="#94a3b8" />
+          {chart.movingAveragePath && (
+            <g>
+              <line x1={chart.margin.left + chart.innerWidth - 110} x2={chart.margin.left + chart.innerWidth - 82} y1={chart.margin.top + 10} y2={chart.margin.top + 10} stroke="#3b82f6" strokeWidth="2" />
+              <text x={chart.margin.left + chart.innerWidth - 76} y={chart.margin.top + 14} fill="#cbd5e1" fontSize="11">20-day SMA</text>
+            </g>
+          )}
+        </g>
+      </svg>
+      {hovered && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 12,
+            left: tooltipLeft,
+            pointerEvents: 'none',
+            background: 'rgba(15, 23, 42, 0.92)',
+            border: '1px solid #334155',
+            borderRadius: 1,
+            color: '#e5e7eb',
+            px: 1,
+            py: 0.75,
+            fontSize: 11,
+            boxShadow: '0 10px 24px rgba(0,0,0,0.25)',
+            zIndex: 2,
+          }}
+        >
+          <Box sx={{ fontWeight: 700, mb: 0.25 }}>{hovered.date}</Box>
+          <Box>O {formatAsDollar(hovered.open)} H {formatAsDollar(hovered.high)}</Box>
+          <Box>L {formatAsDollar(hovered.low)} C {formatAsDollar(hovered.close)}</Box>
+          {chart.hasVolume && <Box>V {formatVolume(hovered.volume)}</Box>}
+          {chart.movingAverage[hovered.index] != null && <Box sx={{ color: '#93c5fd' }}>SMA {formatAsDollar(chart.movingAverage[hovered.index])}</Box>}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -1446,14 +1825,16 @@ function SpecNetworkChart({ spec }) {
 export default function InlineChart({ plotId }) {
   const [spec, setSpec] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState('');
 
   React.useEffect(() => {
     if (!plotId) return;
     
     let isMounted = true;
     setLoading(true);
+    setError('');
     
-    fetch(`http://127.0.0.1:8000/api/plots/${plotId}`)
+    fetch(`${BACKEND_BASE}/api/plots/${plotId}`)
       .then(res => {
         if (!res.ok) throw new Error('Plot fetch failed');
         return res.json();
@@ -1466,7 +1847,10 @@ export default function InlineChart({ plotId }) {
       })
       .catch(err => {
         console.error("Failed to load plot:", err);
-        if (isMounted) setLoading(false);
+        if (isMounted) {
+          setError(err.message || 'Visualization unavailable');
+          setLoading(false);
+        }
       });
       
     return () => { isMounted = false; };
@@ -1480,7 +1864,19 @@ export default function InlineChart({ plotId }) {
     );
   }
 
+  if (error) {
+    return (
+      <Paper elevation={0} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #374151' }}>
+        <Typography variant="body2" sx={{ color: '#fca5a5' }}>
+          Visualization unavailable: {error}
+        </Typography>
+      </Paper>
+    );
+  }
+
   if (!spec || !spec.plot_type) return null;
+
+  const displayTitle = (spec.title || '').replace(/\s*\(Interactive Pro\)\s*$/i, ' (Interactive)');
 
   let ChartComponent;
   switch (spec.plot_type) {
@@ -1506,7 +1902,9 @@ export default function InlineChart({ plotId }) {
         bgcolor: '#111827',
         borderRadius: 2,
         border: '1px solid #1f2937',
-        overflow: 'hidden',
+        overflowX: 'auto',
+        overflowY: 'hidden',
+        maxWidth: '100%',
       }}
     >
       <Typography
@@ -1514,7 +1912,7 @@ export default function InlineChart({ plotId }) {
         align="center"
         sx={{ color: '#e5e7eb', mb: 0.5, fontWeight: 600, letterSpacing: 0.3 }}
       >
-        {spec.title}
+        {displayTitle}
       </Typography>
       <ChartComponent spec={spec} />
     </Paper>

@@ -599,7 +599,7 @@ def get_plot_data(plot_id: str):
     elif plot_id == "test-sankey":
         return {
             "plot_type": "sankey",
-            "title": "Governance Fund Flow (Interactive Pro)",
+            "title": "Governance Fund Flow (Interactive)",
             "valueFormatter": "currency",
             "nodes": [
                 {"id": "A", "label": "Dividends Received", "color": "#3b82f6"},

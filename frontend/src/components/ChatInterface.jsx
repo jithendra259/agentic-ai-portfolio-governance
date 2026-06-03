@@ -15,8 +15,9 @@ import remarkGfm from 'remark-gfm';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import InlineChart from './InlineChart';
+import PlotFixtureGallery from './PlotFixtureGallery';
+import { BACKEND_BASE } from '../config/api';
 
-const BACKEND_BASE = 'http://127.0.0.1:8000';
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
 
@@ -418,6 +419,7 @@ const NewChatButton = forwardRef(({ onNewChat, ...props }, ref) => (
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface() {
+  const showPlotFixtureGallery = new URLSearchParams(window.location.search).has('plotTest');
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (existing) {
@@ -632,6 +634,10 @@ export default function ChatInterface() {
     setSessionId(nextId);
     setActiveConversationId(nextId);
   }, [activeConversationId]);
+
+  if (showPlotFixtureGallery) {
+    return <PlotFixtureGallery />;
+  }
 
   return (
     <Box className="chat-app-shell">
