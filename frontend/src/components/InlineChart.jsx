@@ -1835,8 +1835,18 @@ export default function InlineChart({ plotId }) {
     setError('');
     
     fetch(`${BACKEND_BASE}/api/plots/${plotId}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Plot fetch failed');
+      .then(async res => {
+        if (!res.ok) {
+          let detail = '';
+          try {
+            const payload = await res.json();
+            detail = payload?.detail || '';
+          } catch {
+            detail = await res.text().catch(() => '');
+          }
+          const message = detail || (res.status === 404 ? 'Plot not found or expired' : 'Plot fetch failed');
+          throw new Error(message);
+        }
         return res.json();
       })
       .then(data => {

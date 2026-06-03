@@ -1427,12 +1427,19 @@ def plot_historical_prices(
         from src.memory.mongodb_memory_layer import MongoMemoryManager
         
         plot_id = str(uuid.uuid4())
+        stored = False
         
         try:
             mongo = MongoMemoryManager()
-            mongo.store_plot(plot_id, spec, ttl_days=1)
+            stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
         except Exception as e:
             logger.error("Failed to store plot in MongoDB: %s", e)
+
+        if not stored:
+            return (
+                "Unable to generate the historical price plot because visualization "
+                "storage is unavailable. Please check the Supabase/MongoDB connection."
+            )
 
         session_id = (
             config.get("configurable", {}).get("thread_id", "default")
@@ -2458,12 +2465,19 @@ def plot_us_economic_indicators(config: RunnableConfig = None) -> str:
     from src.memory.mongodb_memory_layer import MongoMemoryManager
     
     plot_id = str(uuid.uuid4())
+    stored = False
     
     try:
         mongo = MongoMemoryManager()
-        mongo.store_plot(plot_id, spec, ttl_days=1)
+        stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
     except Exception as e:
         logger.error("Failed to store plot in MongoDB: %s", e)
+
+    if not stored:
+        return (
+            "Unable to generate chart: visualization storage is unavailable. "
+            "Please check the Supabase/MongoDB connection."
+        )
 
     session_id = (
         config.get("configurable", {}).get("thread_id", "default")

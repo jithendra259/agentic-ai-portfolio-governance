@@ -38,6 +38,28 @@ class PlotRenderingTests(unittest.TestCase):
         self.assertEqual(spec["title"], "Test Plot")
         self.assertEqual(spec["series"][0]["name"], "AAPL")
 
+    def test_generate_financial_plot_does_not_register_when_storage_fails(self, mock_mongo_class):
+        from src.agents.plot_store import GLOBAL_PLOT_IDS
+
+        mock_mongo = mock_mongo_class.return_value
+        mock_mongo.store_plot.return_value = False
+
+        result = generate_financial_plot.func(
+            data={
+                "price_history": {
+                    "AAPL": [
+                        {"date": "2020-01-01", "close": 100},
+                        {"date": "2020-01-02", "close": 101},
+                    ]
+                }
+            },
+            plot_type="line",
+            title="Storage Failure Plot",
+        )
+
+        self.assertIn("Unable to generate plot", result)
+        self.assertEqual(GLOBAL_PLOT_IDS, {})
+
     @patch('src.agents.price_series_tool.load_cached_analysis_dataset')
     def test_generate_financial_plot_from_cache_returns(self, mock_load_cached, mock_mongo_class):
         mock_mongo = mock_mongo_class.return_value

@@ -1088,12 +1088,19 @@ def generate_financial_plot(
             from src.memory.mongodb_memory_layer import MongoMemoryManager
             
             plot_id = str(uuid.uuid4())
+            stored = False
             try:
                 mongo = MongoMemoryManager()
-                mongo.store_plot(plot_id, spec, ttl_days=1)
+                stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to store plot in MongoDB: {e}")
+
+            if not stored:
+                return (
+                    "Unable to generate plot: visualization storage is unavailable, "
+                    "so no interactive chart was attached."
+                )
 
             session_id = (
                 config.get("configurable", {}).get("thread_id", "default")

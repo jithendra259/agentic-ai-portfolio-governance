@@ -406,7 +406,7 @@ class MongoMemoryManager:
             logger.warning("Failed to retrieve similar regimes: %s", exc)
             return []
 
-    def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 1) -> None:
+    def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 90) -> bool:
         """Store a visualization payload in Supabase Postgres or MongoDB."""
         if self.pg_pool:
             try:
@@ -424,17 +424,17 @@ class MongoMemoryManager:
                             """,
                             (plot_id, serialized_data, now, expires_at),
                         )
-                return
+                return True
             except Exception as exc:
                 logger.warning("Postgres store_plot failed: %s. Falling back to Mongo...", exc)
 
         if not self.is_available:
-            return
+            return False
             
         try:
             plots_col = self._collection("visualizations")
             if plots_col is None:
-                return
+                return False
                 
             now = datetime.now(timezone.utc)
             expires_at = now + timedelta(days=ttl_days)
@@ -451,8 +451,10 @@ class MongoMemoryManager:
                 },
                 upsert=True,
             )
+            return True
         except PyMongoError as exc:
             logger.warning("Failed to store plot %s: %s", plot_id, exc)
+            return False
 
     def retrieve_plot(self, plot_id: str) -> dict | None:
         """Retrieve a visualization payload from Supabase Postgres or MongoDB."""
