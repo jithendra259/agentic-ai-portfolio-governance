@@ -543,6 +543,14 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to append chat message for session %s: %s", clean_session_id, exc)
 
+    def _format_chat_session_title(self, title: Any) -> str:
+        normalized = " ".join(str(title or "").split())
+        if not normalized:
+            return "New chat"
+        if len(normalized) <= 64:
+            return normalized
+        return f"{normalized[:61].rstrip()}..."
+
     def list_chat_messages(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
         """Return persisted chat messages in chronological order."""
         clean_session_id = str(session_id or "").strip()
@@ -612,4 +620,115 @@ class MongoMemoryManager:
             return messages
         except PyMongoError as exc:
             logger.warning("Failed to list chat messages for session %s: %s", clean_session_id, exc)
+            return []
+
+    def list_chat_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return persisted chat sessions sorted by most recent activity."""
+        safe_limit = max(1, min(int(limit or 50), 100))
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            WITH ranked_messages AS (
+                                SELECT
+                                    session_id,
+                                    role,
+                                    content,
+                                    created_at,
+                                    ROW_NUMBER() OVER (
+                                        PARTITION BY session_id
+                                        ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
+                                    ) AS title_rank
+                                FROM chat_messages
+                            )
+                            SELECT
+                                session_id,
+                                MAX(CASE WHEN title_rank = 1 AND role = 'user' THEN content ELSE NULL END) AS title,
+                                COUNT(*) AS message_count,
+                                MIN(created_at) AS created_at,
+                                MAX(created_at) AS updated_at
+                            FROM ranked_messages
+                            GROUP BY session_id
+                            ORDER BY updated_at DESC
+                            LIMIT %s;
+                            """,
+                            (safe_limit,),
+                        )
+                        rows = cur.fetchall()
+
+                return [
+                    {
+                        "session_id": str(row[0]),
+                        "title": self._format_chat_session_title(row[1]),
+                        "message_count": int(row[2] or 0),
+                        "created_at": row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3] or ""),
+                        "updated_at": row[4].isoformat() if hasattr(row[4], "isoformat") else str(row[4] or ""),
+                    }
+                    for row in rows
+                ]
+            except Exception as exc:
+                logger.warning("Postgres list_chat_sessions failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return []
+
+        try:
+            chat_col = self._collection("chat_messages")
+            if chat_col is None:
+                return []
+            pipeline = [
+                {"$sort": {"session_id": 1, "created_at": 1, "_id": 1}},
+                {
+                    "$group": {
+                        "_id": "$session_id",
+                        "messages": {"$push": {"role": "$role", "content": "$content"}},
+                        "message_count": {"$sum": 1},
+                        "created_at": {"$min": "$created_at"},
+                        "updated_at": {"$max": "$created_at"},
+                    }
+                },
+                {
+                    "$project": {
+                        "first_user": {
+                            "$first": {
+                                "$map": {
+                                    "input": {
+                                        "$filter": {
+                                            "input": "$messages",
+                                            "as": "message",
+                                            "cond": {"$eq": ["$$message.role", "user"]},
+                                        }
+                                    },
+                                    "as": "user_message",
+                                    "in": "$$user_message.content",
+                                }
+                            }
+                        },
+                        "message_count": 1,
+                        "created_at": 1,
+                        "updated_at": 1,
+                    }
+                },
+                {"$sort": {"updated_at": -1}},
+                {"$limit": safe_limit},
+            ]
+            sessions = []
+            for row in chat_col.aggregate(pipeline):
+                created_at = row.get("created_at")
+                updated_at = row.get("updated_at")
+                sessions.append(
+                    {
+                        "session_id": str(row.get("_id")),
+                        "title": self._format_chat_session_title(row.get("first_user")),
+                        "message_count": int(row.get("message_count") or 0),
+                        "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+                        "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else str(updated_at or ""),
+                    }
+                )
+            return sessions
+        except PyMongoError as exc:
+            logger.warning("Failed to list chat sessions: %s", exc)
             return []

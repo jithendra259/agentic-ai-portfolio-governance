@@ -101,6 +101,53 @@ class SupabaseChatMemoryTests(unittest.TestCase):
             ],
         )
 
+    def test_list_chat_sessions_returns_recent_session_summaries(self):
+        first_created = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)
+        second_created = datetime(2026, 6, 2, 10, 30, tzinfo=timezone.utc)
+        cursor = FakeCursor(
+            rows=[
+                ("session-2", "Compare AAPL and MSFT performance over a long horizon", 4, second_created, second_created),
+                ("session-1", "Plot TSLA", 2, first_created, first_created),
+            ]
+        )
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        sessions = manager.list_chat_sessions(limit=20)
+
+        sql, params = cursor.statements[-1]
+        self.assertIn("GROUP BY session_id", sql)
+        self.assertEqual(params[0], 20)
+        self.assertEqual(
+            sessions,
+            [
+                {
+                    "session_id": "session-2",
+                    "title": "Compare AAPL and MSFT performance over a long horizon",
+                    "message_count": 4,
+                    "created_at": "2026-06-02T10:30:00+00:00",
+                    "updated_at": "2026-06-02T10:30:00+00:00",
+                },
+                {
+                    "session_id": "session-1",
+                    "title": "Plot TSLA",
+                    "message_count": 2,
+                    "created_at": "2026-06-01T09:00:00+00:00",
+                    "updated_at": "2026-06-01T09:00:00+00:00",
+                },
+            ],
+        )
+
+    def test_list_chat_sessions_uses_new_chat_for_missing_user_title(self):
+        created_at = datetime(2026, 6, 2, tzinfo=timezone.utc)
+        cursor = FakeCursor(rows=[("session-empty", None, 1, created_at, created_at)])
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        sessions = manager.list_chat_sessions()
+
+        self.assertEqual(sessions[0]["title"], "New chat")
+
 
 if __name__ == "__main__":
     unittest.main()

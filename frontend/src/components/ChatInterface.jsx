@@ -1,6 +1,7 @@
-import { useMemo, useState, useEffect, useRef, forwardRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback, forwardRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import Box from '@mui/material/Box';
+import Typography from '@mui/material/Typography';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 import FormControl from '@mui/material/FormControl';
@@ -18,24 +19,17 @@ import InlineChart from './InlineChart';
 const BACKEND_BASE = 'http://127.0.0.1:8000';
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
-const SESSION_LIST_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
 
 function createSessionId() {
   const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
   return `portfolio-chat-${randomPart}`;
 }
 
-function readStoredSessionIds() {
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(SESSION_LIST_STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeStoredSessionIds(ids) {
-  window.localStorage.setItem(SESSION_LIST_STORAGE_KEY, JSON.stringify([...new Set(ids)]));
+function formatSessionDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 // ---------------------------------------------------------------------------
@@ -154,35 +148,19 @@ const youUser = {
   role: 'user',
 };
 
-function makeConversation(sessionId, messages = []) {
+function makeConversation(sessionId, messages = [], summary = null) {
   const lastMessage = messages[messages.length - 1];
   const lastText = getMessagePreview(lastMessage);
 
   return {
     id: sessionId,
-    title: 'Portfolio Assistant',
-    subtitle: lastText || 'Ask about portfolio governance, charts, and risk',
+    title: summary?.title || 'Portfolio Assistant',
+    subtitle: lastText || (summary ? `${summary.message_count} messages` : 'Ask about portfolio governance, charts, and risk'),
     participants: [youUser, botUser],
     readState: 'read',
     unreadCount: 0,
-    lastMessageAt: lastMessage?.createdAt || new Date().toISOString(),
+    lastMessageAt: lastMessage?.createdAt || summary?.updated_at || new Date().toISOString(),
   };
-}
-
-function makeStoredConversations(activeSessionId) {
-  const storedIds = readStoredSessionIds();
-  const sessionIds = [activeSessionId, ...storedIds].filter(Boolean);
-
-  return [...new Set(sessionIds)].map((storedSessionId) => {
-    if (storedSessionId === activeSessionId) {
-      return makeConversation(storedSessionId);
-    }
-
-    return {
-      ...makeConversation(storedSessionId),
-      subtitle: 'Previous conversation',
-    };
-  });
 }
 
 function upsertConversation(conversations, conversation) {
@@ -450,13 +428,11 @@ export default function ChatInterface() {
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (existing) {
-      writeStoredSessionIds([existing, ...readStoredSessionIds()]);
       return existing;
     }
 
     const nextSessionId = createSessionId();
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
-    writeStoredSessionIds([nextSessionId]);
     return nextSessionId;
   });
 
@@ -465,11 +441,13 @@ export default function ChatInterface() {
   const [loadingModels, setLoadingModels] = useState(true);
   const [activeConversationId, setActiveConversationId] = useState(sessionId);
   const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
-  const [conversations, setConversations] = useState(() => makeStoredConversations(sessionId));
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [chatSessions, setChatSessions] = useState([]);
+  const [sessionsLoaded, setSessionsLoaded] = useState(false);
+  const [sessionsError, setSessionsError] = useState('');
   const selectedModelRef = useRef('');
 
-  const loadSessionMessages = (targetSessionId) => {
+  const loadSessionMessages = useCallback((targetSessionId) => {
     return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`)
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch conversation history');
@@ -479,11 +457,34 @@ export default function ChatInterface() {
         const loadedMessages = (data?.messages || []).map((item) => toChatMessage(item, targetSessionId));
         return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
       });
-  };
+  }, []);
+
+  const refreshSessions = useCallback(() => {
+    setSessionsError('');
+    return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch chat sessions');
+        return res.json();
+      })
+      .then((data) => {
+        setChatSessions(data?.sessions || []);
+        setSessionsLoaded(true);
+      })
+      .catch((err) => {
+        console.error('Failed to load chat sessions:', err);
+        setChatSessions([]);
+        setSessionsError('Could not load older chats');
+        setSessionsLoaded(true);
+      });
+  }, []);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
 
   useEffect(() => {
     let active = true;
@@ -517,12 +518,13 @@ export default function ChatInterface() {
 
   useEffect(() => {
     let active = true;
+    setHistoryLoaded(false);
+    setActiveConversationId(sessionId);
 
     loadSessionMessages(sessionId)
       .then((nextMessages) => {
         if (!active) return;
         setMessages(nextMessages);
-        setConversations((prev) => upsertConversation(prev, makeConversation(sessionId, nextMessages)));
         setHistoryLoaded(true);
       })
       .catch((err) => {
@@ -530,7 +532,6 @@ export default function ChatInterface() {
         if (active) {
           const fallbackMessages = [makeWelcomeMessage(sessionId)];
           setMessages(fallbackMessages);
-          setConversations((prev) => upsertConversation(prev, makeConversation(sessionId, fallbackMessages)));
           setHistoryLoaded(true);
         }
       });
@@ -538,7 +539,17 @@ export default function ChatInterface() {
     return () => {
       active = false;
     };
-  }, [sessionId]);
+  }, [loadSessionMessages, sessionId]);
+
+  const activeSession = chatSessions.find((item) => item.session_id === sessionId);
+  const activeTitle = activeSession?.title || 'Portfolio Assistant';
+
+  const conversations = useMemo(() => {
+    const sessionConversations = chatSessions.map((summary) => (
+      makeConversation(summary.session_id, summary.session_id === sessionId ? messages : [], summary)
+    ));
+    return upsertConversation(sessionConversations, makeConversation(sessionId, messages, activeSession));
+  }, [activeSession, chatSessions, messages, sessionId]);
 
   const adapter = useMemo(() => ({
     async sendMessage({ message, signal }) {
@@ -587,9 +598,15 @@ export default function ChatInterface() {
         },
       });
 
-      return ndjsonStream.pipeThrough(transformStream);
+      const refreshAfterStream = new TransformStream({
+        flush() {
+          refreshSessions();
+        },
+      });
+
+      return ndjsonStream.pipeThrough(transformStream).pipeThrough(refreshAfterStream);
     },
-  }), [sessionId]);
+  }), [refreshSessions, sessionId]);
 
   const handleMessagesChange = (nextMessages) => {
     const alignedMessages = nextMessages.map((message) => {
@@ -607,103 +624,146 @@ export default function ChatInterface() {
     });
 
     setMessages(alignedMessages);
-    setConversations((prev) => upsertConversation(prev, makeConversation(activeConversationId, alignedMessages)));
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = useCallback(() => {
     const nextSessionId = createSessionId();
     const nextMessages = [makeWelcomeMessage(nextSessionId)];
 
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
-    writeStoredSessionIds([nextSessionId, ...readStoredSessionIds()]);
 
     setSessionId(nextSessionId);
     setActiveConversationId(nextSessionId);
     setMessages(nextMessages);
-    setConversations((prev) => upsertConversation(prev, makeConversation(nextSessionId, nextMessages)));
     setHistoryLoaded(true);
-  };
+  }, []);
 
-  const handleActiveConversationChange = (nextId) => {
+  const handleActiveConversationChange = useCallback((nextId) => {
     if (!nextId || nextId === activeConversationId) return;
 
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextId);
-    writeStoredSessionIds([nextId, ...readStoredSessionIds()]);
     setSessionId(nextId);
     setActiveConversationId(nextId);
-  };
+  }, [activeConversationId]);
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: 'column',
-        height: '100vh',
-        width: '100vw',
-      }}
-    >
-      <ChatBox
-        key={`${sessionId}-${historyLoaded ? 'loaded' : 'loading'}`}
-        adapter={adapter}
-        activeConversationId={activeConversationId}
-        conversations={conversations}
-        messages={messages}
-        onActiveConversationChange={handleActiveConversationChange}
-        onMessagesChange={handleMessagesChange}
-        slots={{
-          composerAttachButton: CustomAttachButtonWithModelSelector,
-          conversationHeaderActions: NewChatButton,
-        }}
-        slotProps={{
-          conversationHeaderActions: {
-            onNewChat: handleNewChat,
-          },
-          messageContent: {
-            partProps: {
-              text: { renderText: renderMarkdown },
-            },
-          },
-          composerInput: {
-            sx: {
-              color: '#ECECEC',
-              backgroundColor: '#1A1A1A',
-              '& .MuiOutlinedInput-root': {
-                color: '#ECECEC',
-                '& fieldset': {
-                  borderColor: '#404040',
-                },
-                '&:hover fieldset': {
-                  borderColor: '#666666',
-                },
-                '&.Mui-focused fieldset': {
-                  borderColor: '#FFFFFF',
+    <Box className="chat-app-shell">
+      <Box className="chat-sidebar">
+        <Box className="chat-brand">
+          <Box className="chat-brand-icon"><Bot size={22} /></Box>
+          <Box>
+            <Typography className="chat-brand-title">Portfolio Assistant</Typography>
+            <Typography className="chat-brand-subtitle">Supabase memory</Typography>
+          </Box>
+        </Box>
+        <Box className="chat-sidebar-actions">
+          <button className="chat-action-button primary" type="button" onClick={handleNewChat}>
+            New Chat
+          </button>
+          <button className="chat-action-button" type="button" onClick={refreshSessions}>
+            Refresh
+          </button>
+        </Box>
+        <Box className="chat-history-list">
+          {!sessionsLoaded ? (
+            <Typography className="chat-history-empty">Loading chats...</Typography>
+          ) : sessionsError ? (
+            <Typography className="chat-history-empty">{sessionsError}</Typography>
+          ) : chatSessions.length === 0 ? (
+            <Typography className="chat-history-empty">No older chats yet</Typography>
+          ) : (
+            chatSessions.map((item) => (
+              <button
+                key={item.session_id}
+                className={`chat-history-item ${item.session_id === sessionId ? 'active' : ''}`}
+                type="button"
+                onClick={() => handleActiveConversationChange(item.session_id)}
+                title={item.title}
+              >
+                <span className="chat-history-title">{item.title}</span>
+                <span className="chat-history-meta">
+                  {item.message_count} messages &middot; {formatSessionDate(item.updated_at)}
+                </span>
+              </button>
+            ))
+          )}
+        </Box>
+      </Box>
+      <Box className="chat-main">
+        <Box className="chat-topbar">
+          <Box>
+            <Typography className="chat-topbar-title">{activeTitle}</Typography>
+            <Typography className="chat-topbar-subtitle">
+              {historyLoaded ? 'Memory loaded' : 'Loading memory...'}
+            </Typography>
+          </Box>
+        </Box>
+        <Box className="chatbox-wrap">
+          <ChatBox
+            key={`${sessionId}-${historyLoaded ? 'loaded' : 'loading'}`}
+            adapter={adapter}
+            activeConversationId={activeConversationId}
+            conversations={conversations}
+            messages={messages}
+            onActiveConversationChange={handleActiveConversationChange}
+            onMessagesChange={handleMessagesChange}
+            slots={{
+              composerAttachButton: CustomAttachButtonWithModelSelector,
+              conversationHeaderActions: NewChatButton,
+            }}
+            slotProps={{
+              conversationHeaderActions: {
+                onNewChat: handleNewChat,
+              },
+              messageContent: {
+                partProps: {
+                  text: { renderText: renderMarkdown },
                 },
               },
-            }
-          },
-          composerAttachButton: {
-            selectedModel,
-            setSelectedModel,
-            availableModels,
-            loadingModels,
-          }
-        }}
-        suggestions={[
-          'Plot AAPL and MSFT prices from 2020 to 2024',
-          'Show me the optimal portfolio allocation',
-          'Analyse systemic risk for my portfolio',
-          'What is the governance score for TSLA?',
-        ]}
-        suggestionsAutoSubmit={false}
-        sx={{
-          flex: 1,
-          height: '100%',
-          border: '1px solid #404040',
-          borderRadius: 2,
-          backgroundColor: '#0D0D0D',
-          color: '#ECECEC',
-        }}
-      />
+              composerInput: {
+                sx: {
+                  color: '#ECECEC',
+                  backgroundColor: '#1A1A1A',
+                  '& .MuiOutlinedInput-root': {
+                    color: '#ECECEC',
+                    '& fieldset': {
+                      borderColor: '#404040',
+                    },
+                    '&:hover fieldset': {
+                      borderColor: '#666666',
+                    },
+                    '&.Mui-focused fieldset': {
+                      borderColor: '#FFFFFF',
+                    },
+                  },
+                }
+              },
+              composerAttachButton: {
+                selectedModel,
+                setSelectedModel,
+                availableModels,
+                loadingModels,
+              }
+            }}
+            suggestions={[
+              'Plot AAPL and MSFT prices from 2020 to 2024',
+              'Show me the optimal portfolio allocation',
+              'Analyse systemic risk for my portfolio',
+              'What is the governance score for TSLA?',
+            ]}
+            suggestionsAutoSubmit={false}
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              height: '100%',
+              border: 'none',
+              borderRadius: 0,
+              backgroundColor: '#0D0D0D',
+              color: '#ECECEC',
+            }}
+          />
+        </Box>
+      </Box>
     </Box>
   );
 }

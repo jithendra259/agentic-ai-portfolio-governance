@@ -165,6 +165,18 @@ class ChatHistoryResponse(BaseModel):
     messages: list[ChatMessageResponse]
 
 
+class ChatSessionResponse(BaseModel):
+    session_id: str
+    title: str
+    message_count: int
+    created_at: str
+    updated_at: str
+
+
+class ChatSessionsResponse(BaseModel):
+    sessions: list[ChatSessionResponse]
+
+
 def _message_to_text(message: Any) -> str:
     if message is None:
         return ""
@@ -263,6 +275,13 @@ def health_check() -> dict:
             "available": available_models
         }
     }
+
+
+@app.get("/chat/sessions", response_model=ChatSessionsResponse)
+def chat_sessions(limit: int = 50) -> ChatSessionsResponse:
+    safe_limit = max(1, min(int(limit or 50), 100))
+    sessions = memory_manager.list_chat_sessions(limit=safe_limit)
+    return ChatSessionsResponse(sessions=sessions)
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
