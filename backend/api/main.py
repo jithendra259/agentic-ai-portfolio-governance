@@ -662,25 +662,33 @@ def get_plot_data(plot_id: str):
             "title": "Risk vs Expected Return (Interactive)",
             "x_label": "Volatility (Risk %)",
             "y_label": "Expected Return (%)",
+            "grid": {"horizontal": True, "vertical": True},
+            "hitAreaRadius": 20,
+            "highlightScope": {"highlight": "series", "fade": "global"},
+            "xAxis": [{"min": 0, "label": "Volatility (Risk %)", "height": 36}],
+            "yAxis": [{"min": 0, "label": "Expected Return (%)", "width": 60}],
+            "zAxis": [{"min": 0, "max": 10}],
             "series": [
                 {
                     "name": "Equities",
+                    "label": "Equities",
                     "color": "#3b82f6",
                     "markerSize": 8,
                     "data": [
-                        {"x": 12, "y": 8, "id": "AAPL"},
-                        {"x": 15, "y": 10, "id": "TSLA"},
-                        {"x": 10, "y": 6, "id": "MSFT"}
-                    ]
+                        {"x": 12, "y": 8, "z": 7, "id": "AAPL"},
+                        {"x": 15, "y": 10, "z": 9, "id": "TSLA"},
+                        {"x": 10, "y": 6, "z": 6, "id": "MSFT"}
+                    ],
                 },
                 {
                     "name": "Bonds",
+                    "label": "Bonds",
                     "color": "#10b981",
-                    "markerSize": 8,
+                    "markerSize": 6,
                     "data": [
-                        {"x": 4, "y": 2, "id": "UST10Y"},
-                        {"x": 5, "y": 3, "id": "CORP"}
-                    ]
+                        {"x": 4, "y": 2, "z": 3, "id": "UST10Y"},
+                        {"x": 5, "y": 3, "z": 4, "id": "CORP"}
+                    ],
                 }
             ]
         }

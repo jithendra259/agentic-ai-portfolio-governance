@@ -76,6 +76,21 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(len(payload["series"]), 2)
         self.assertEqual(payload["series"][1]["name"], "MSFT")
 
+    def test_plot_scatter_fixture_returns_mui_scatter_spec(self):
+        client = TestClient(app)
+        response = client.get("/api/plots/test-scatter")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["plot_type"], "scatter")
+        self.assertEqual(payload["hitAreaRadius"], 20)
+        self.assertEqual(payload["grid"], {"horizontal": True, "vertical": True})
+        self.assertEqual(payload["xAxis"][0]["min"], 0)
+        self.assertEqual(payload["yAxis"][0]["width"], 60)
+        self.assertEqual(payload["zAxis"][0]["max"], 10)
+        self.assertEqual(payload["series"][0]["data"][0], {"x": 12, "y": 8, "z": 7, "id": "AAPL"})
+        self.assertEqual(payload["series"][1]["markerSize"], 6)
+
 
 if __name__ == "__main__":
     unittest.main()
