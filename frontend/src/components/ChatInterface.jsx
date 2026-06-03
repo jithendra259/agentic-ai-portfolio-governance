@@ -25,13 +25,6 @@ function createSessionId() {
   return `portfolio-chat-${randomPart}`;
 }
 
-function formatSessionDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
 // ---------------------------------------------------------------------------
 // Markdown image helper — rewrite /outputs/... to full backend URL
 // ---------------------------------------------------------------------------
@@ -443,8 +436,6 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [chatSessions, setChatSessions] = useState([]);
-  const [sessionsLoaded, setSessionsLoaded] = useState(false);
-  const [sessionsError, setSessionsError] = useState('');
   const selectedModelRef = useRef('');
 
   const loadSessionMessages = useCallback((targetSessionId) => {
@@ -460,7 +451,6 @@ export default function ChatInterface() {
   }, []);
 
   const refreshSessions = useCallback(() => {
-    setSessionsError('');
     return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`)
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch chat sessions');
@@ -468,13 +458,10 @@ export default function ChatInterface() {
       })
       .then((data) => {
         setChatSessions(data?.sessions || []);
-        setSessionsLoaded(true);
       })
       .catch((err) => {
         console.error('Failed to load chat sessions:', err);
         setChatSessions([]);
-        setSessionsError('Could not load older chats');
-        setSessionsLoaded(true);
       });
   }, []);
 
@@ -648,47 +635,6 @@ export default function ChatInterface() {
 
   return (
     <Box className="chat-app-shell">
-      <Box className="chat-sidebar">
-        <Box className="chat-brand">
-          <Box className="chat-brand-icon"><Bot size={22} /></Box>
-          <Box>
-            <Typography className="chat-brand-title">Portfolio Assistant</Typography>
-            <Typography className="chat-brand-subtitle">Supabase memory</Typography>
-          </Box>
-        </Box>
-        <Box className="chat-sidebar-actions">
-          <button className="chat-action-button primary" type="button" onClick={handleNewChat}>
-            New Chat
-          </button>
-          <button className="chat-action-button" type="button" onClick={refreshSessions}>
-            Refresh
-          </button>
-        </Box>
-        <Box className="chat-history-list">
-          {!sessionsLoaded ? (
-            <Typography className="chat-history-empty">Loading chats...</Typography>
-          ) : sessionsError ? (
-            <Typography className="chat-history-empty">{sessionsError}</Typography>
-          ) : chatSessions.length === 0 ? (
-            <Typography className="chat-history-empty">No older chats yet</Typography>
-          ) : (
-            chatSessions.map((item) => (
-              <button
-                key={item.session_id}
-                className={`chat-history-item ${item.session_id === sessionId ? 'active' : ''}`}
-                type="button"
-                onClick={() => handleActiveConversationChange(item.session_id)}
-                title={item.title}
-              >
-                <span className="chat-history-title">{item.title}</span>
-                <span className="chat-history-meta">
-                  {item.message_count} messages &middot; {formatSessionDate(item.updated_at)}
-                </span>
-              </button>
-            ))
-          )}
-        </Box>
-      </Box>
       <Box className="chat-main">
         <Box className="chat-topbar">
           <Box>
