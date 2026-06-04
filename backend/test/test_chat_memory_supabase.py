@@ -60,6 +60,8 @@ class SupabaseChatMemoryTests(unittest.TestCase):
         sql = "\n".join(statement for statement, _params in cursor.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS chat_messages", sql)
         self.assertIn("idx_chat_messages_session_created", sql)
+        self.assertIn("idx_chat_messages_session_recent", sql)
+        self.assertIn("idx_chat_messages_session_role_created", sql)
 
     def test_append_chat_message_writes_user_message_to_supabase(self):
         cursor = FakeCursor()
@@ -100,6 +102,10 @@ class SupabaseChatMemoryTests(unittest.TestCase):
                 }
             ],
         )
+        sql, params = cursor.statements[-1]
+        self.assertIn("ORDER BY created_at DESC, id DESC", sql)
+        self.assertIn("ORDER BY created_at ASC, id ASC", sql)
+        self.assertEqual(params, ("session-1", 200))
 
     def test_list_chat_sessions_returns_recent_session_summaries(self):
         first_created = datetime(2026, 6, 1, 9, 0, tzinfo=timezone.utc)

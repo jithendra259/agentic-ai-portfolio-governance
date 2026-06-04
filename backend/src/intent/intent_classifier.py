@@ -290,7 +290,8 @@ class IntentClassifier:
         # SECURITY GATES (STRICT)
         if self._contains_any(normalized_query, self.ADVERSARIAL_PATTERNS):
             return self._no_match("Security gate: adversarial prompt detected.", IntentType.ADVERSARIAL)
-        if self._contains_any(normalized_query, self.INVALID_EXECUTION_PATTERNS):
+        execution_check_query = self._strip_safety_language_constraints(normalized_query)
+        if self._contains_any(execution_check_query, self.INVALID_EXECUTION_PATTERNS):
             return self._no_match("Security gate: trade execution request detected.", IntentType.INVALID_EXECUTION)
 
         # 1. FAST CATCH: Standalone Tickers (e.g., "NVDA")
@@ -349,6 +350,22 @@ class IntentClassifier:
 
     def _contains_any(self, query: str, patterns: list[str]) -> bool:
         return any(re.search(pattern, query, re.IGNORECASE) for pattern in patterns)
+
+    def _strip_safety_language_constraints(self, query: str) -> str:
+        """
+        Keep the trading execution gate strict while allowing prompts that ask
+        the assistant to avoid forbidden trading vocabulary in its response.
+        """
+        safety_clause_patterns = [
+            r"\bdo\s+not\s+use\s+[^.?!]*(?:language|wording|terms?)",
+            r"\bdon't\s+use\s+[^.?!]*(?:language|wording|terms?)",
+            r"\bavoid\s+[^.?!]*(?:language|wording|terms?)",
+            r"\bno\s+[^.?!]*(?:language|wording|terms?)",
+        ]
+        cleaned = query
+        for pattern in safety_clause_patterns:
+            cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+        return re.sub(r"\s+", " ", cleaned).strip()
 
     def _pattern_match(self, query: str) -> Optional[IntentMatch]:
         best_match: Optional[IntentMatch] = None

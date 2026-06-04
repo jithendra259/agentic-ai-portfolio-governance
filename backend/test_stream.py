@@ -3,7 +3,7 @@ import json
 import sys
 
 def test_chat():
-    url = "http://127.0.0.1:8000/chat/stream"
+    url = "http://127.0.0.1:8005/chat/stream"
     payload = {
         "session_id": "test-session-123",
         "user_message": "Plot AAPL and MSFT prices from 2020 to 2024"

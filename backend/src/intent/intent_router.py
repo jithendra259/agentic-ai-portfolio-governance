@@ -6,6 +6,7 @@ from collections.abc import Callable
 from typing import Any, Optional
 
 from src.intent.intent_classifier import IntentClassifier, IntentType
+from src.intent.routing_rules import build_router_plan
 from src.rag.rag_tools import (
     compare_common_institutional_holders,
     retrieve_graph_rag_context,
@@ -132,6 +133,16 @@ class IntentRouter:
             }
 
         return self._rejected(intent_match, "Unknown intent.")
+
+    def build_execution_plan(self, user_message: str, previous_analysis: Optional[dict] = None) -> dict:
+        """
+        Build a compact hierarchical routing plan without executing tools.
+
+        This planner is intentionally deterministic and cheap: rules extract the
+        user intent, entities, module needs, analytics endpoint, plot mode, and
+        token-saving skips before the conversational LLM sees the request.
+        """
+        return build_router_plan(user_message, previous_analysis=previous_analysis)
 
     def _invoke(self, handler_name: str, payload: Optional[dict] = None) -> Any:
         handler = self.handlers[handler_name]

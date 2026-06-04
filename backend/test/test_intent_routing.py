@@ -420,6 +420,147 @@ class IntentRouterTests(unittest.TestCase):
         self.assertEqual(result["intent"], IntentType.MALFORMED.value)
         self.assertEqual(result["status"], "conversational_fallback")
 
+    def test_plan_routes_diversification_question(self):
+        plan = self.router.build_execution_plan("Is my portfolio diversified?")
+        self.assertEqual(plan["main_intent"], "portfolio_analysis")
+        self.assertEqual(plan["sub_intent"], "diversification")
+        self.assertTrue(plan["execution"]["needs_math_agent"])
+        self.assertTrue(plan["execution"]["needs_plot_selector"])
+        self.assertEqual(plan["routing"]["endpoint"], "/api/analytics/diversification")
+
+    def test_plan_routes_advisory_allocation_to_optimizer_and_validator(self):
+        plan = self.router.build_execution_plan("Give advisory allocation")
+        self.assertEqual(plan["sub_intent"], "advisory_allocation")
+        self.assertTrue(plan["execution"]["needs_optimizer"])
+        self.assertTrue(plan["execution"]["needs_validator"])
+        self.assertTrue(plan["safety"]["forbidden_terms_check"])
+
+    def test_plan_routes_cvar_drawdown_to_risk_governance(self):
+        plan = self.router.build_execution_plan("Show CVaR and drawdown for AAPL MSFT from 2020 to 2025")
+        self.assertEqual(plan["sub_intent"], "risk_governance")
+        self.assertEqual(plan["entities"]["tickers"], ["AAPL", "MSFT"])
+        self.assertEqual(plan["entities"]["start_date"], "2020-01-01")
+        self.assertEqual(plan["entities"]["end_date"], "2025-12-31")
+        self.assertIn("cvar", plan["entities"]["metrics"])
+        self.assertIn("drawdown", plan["entities"]["metrics"])
+
+    def test_plan_routes_critical_question_to_instability_regime(self):
+        plan = self.router.build_execution_plan("Why is it critical?")
+        self.assertEqual(plan["sub_intent"], "instability_regime")
+        self.assertEqual(plan["routing"]["default_tab"], "Instability Monitor")
+
+    def test_regime_only_prompt_does_not_call_optimizer_or_allocation_modules(self):
+        plan = self.router.build_execution_plan(
+            "Only answer regime question for U1. Do not generate allocation. Do not show optimal weights."
+        )
+
+        self.assertEqual(plan["sub_intent"], "instability_regime")
+        self.assertFalse(plan["execution"]["needs_optimizer"])
+        self.assertFalse(plan["execution"]["needs_allocation"])
+        self.assertFalse(plan["execution"]["needs_graph_network"])
+        self.assertIn("optimizer", plan["safety"]["modules_skipped"])
+        self.assertIn("allocation_engine", plan["safety"]["modules_skipped"])
+        self.assertEqual(
+            plan["routing"]["allowed_plots"],
+            [
+                "plot_19_composite_instability_index_plot",
+                "plot_20_regime_classification_timeline",
+                "plot_21_market_stress_index_plot",
+                "plot_22_volatility_spike_component_plot",
+                "plot_23_correlation_spike_component_plot",
+                "plot_24_maximum_drawdown_component_plot",
+                "plot_25_instability_component_contribution_plot",
+                "plot_26_crisis_window_activation_plot",
+                "plot_27_regime_frequency_plot",
+                "plot_28_threshold_sensitivity_plot",
+            ],
+        )
+
+    def test_u1_context_preserves_all_tickers_across_regime_follow_up(self):
+        previous = {
+            "analysis_id": "U1-ANALYSIS",
+            "entities": {
+                "universe": "U1",
+                "tickers": [f"T{i:02d}" for i in range(1, 21)],
+                "current_weights": {f"T{i:02d}": 0.05 for i in range(1, 21)},
+                "start_date": "2020-01-01",
+                "end_date": "2024-12-31",
+            },
+        }
+
+        plan = self.router.build_execution_plan("Only answer regime question. Do not generate allocation.", previous)
+
+        self.assertTrue(plan["cache"]["reuse_previous_analysis"])
+        self.assertEqual(plan["cache"]["analysis_id"], "U1-ANALYSIS")
+        self.assertEqual(plan["entities"]["universe"], "U1")
+        self.assertEqual(len(plan["entities"]["tickers"]), 20)
+
+    def test_plan_routes_graph_centrality_to_graph_contagion(self):
+        plan = self.router.build_execution_plan("Explain graph centrality")
+        self.assertEqual(plan["sub_intent"], "graph_contagion")
+        self.assertEqual(plan["routing"]["endpoint"], "/api/analytics/contagion")
+
+    def test_plan_routes_methodology_to_rag_only(self):
+        plan = self.router.build_execution_plan("What is HHI?")
+        self.assertEqual(plan["main_intent"], "methodology_explanation")
+        self.assertTrue(plan["execution"]["needs_rag"])
+        self.assertFalse(plan["execution"]["needs_math_agent"])
+        self.assertFalse(plan["execution"]["needs_optimizer"])
+        self.assertIn("full_knowledge_base", plan["safety"]["modules_skipped"])
+
+    def test_plan_routes_full_plot_coverage_only_when_explicit(self):
+        plan = self.router.build_execution_plan("Show all plots")
+        self.assertEqual(plan["sub_intent"], "full_plot_coverage")
+        self.assertEqual(plan["routing"]["plot_mode"], "full_analytics")
+        self.assertGreaterEqual(plan["routing"]["max_plots"], 88)
+
+    def test_plan_routes_smart_plot_selection(self):
+        plan = self.router.build_execution_plan("Only show important plots")
+        self.assertEqual(plan["sub_intent"], "smart_plot_selection")
+        self.assertEqual(plan["routing"]["plot_mode"], "smart_view")
+        self.assertLessEqual(plan["routing"]["max_plots"], 8)
+
+    def test_safety_wording_does_not_trip_trade_execution_gate(self):
+        result = self.router.handle(
+            "Pick the most relevant plots. Use Smart View only. Do not use buy/sell/trading language."
+        )
+        plan = self.router.build_execution_plan(
+            "Pick the most relevant plots. Use Smart View only. Do not use buy/sell/trading language."
+        )
+
+        self.assertNotEqual(result["intent"], IntentType.INVALID_EXECUTION.value)
+        self.assertEqual(plan["sub_intent"], "smart_plot_selection")
+
+    def test_plan_routes_response_validation_to_validator_only(self):
+        plan = self.router.build_execution_plan("Validate your last response")
+        self.assertEqual(plan["main_intent"], "response_validation")
+        self.assertEqual(plan["sub_intent"], "response_validation")
+        self.assertTrue(plan["execution"]["needs_validator"])
+        self.assertFalse(plan["execution"]["needs_math_agent"])
+        self.assertFalse(plan["execution"]["needs_rag"])
+
+    def test_plan_low_confidence_asks_clarification(self):
+        plan = self.router.build_execution_plan("do it better")
+        self.assertLess(plan["confidence"], 0.5)
+        self.assertTrue(plan["clarification"]["needed"])
+        self.assertIn("diversification", plan["clarification"]["question"].lower())
+
+    def test_plan_reuses_cached_analysis_for_follow_up(self):
+        previous = {
+            "analysis_id": "ANL-123",
+            "entities": {
+                "tickers": ["AAPL", "MSFT"],
+                "current_weights": {"AAPL": 0.5, "MSFT": 0.5},
+                "start_date": "2020-01-01",
+                "end_date": "2025-12-31",
+                "benchmark": "SPY",
+            },
+        }
+        plan = self.router.build_execution_plan("Now explain the risk contribution", previous_analysis=previous)
+        self.assertTrue(plan["cache"]["reuse_previous_analysis"])
+        self.assertEqual(plan["cache"]["analysis_id"], "ANL-123")
+        self.assertEqual(plan["entities"]["tickers"], ["AAPL", "MSFT"])
+
 
 if __name__ == "__main__":
     unittest.main()

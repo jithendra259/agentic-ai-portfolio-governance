@@ -14,10 +14,26 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from src.agents.plot_store import GLOBAL_PLOT_IDS
+from src.decision.advisory_labels import normalize_advisory_language
 
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "outputs"
-SUPPORTED_PLOTS = {"heatmap", "pie", "line", "bar", "network", "scatter", "sparkline", "sankey", "candlestick"}
+SUPPORTED_PLOTS = {
+    "heatmap",
+    "pie",
+    "line",
+    "bar",
+    "network",
+    "scatter",
+    "sparkline",
+    "sankey",
+    "candlestick",
+    "funnel",
+    "radar",
+    "gauge",
+    "radial_bar",
+    "radial_line",
+}
 
 # ---------------------------------------------------------------------------
 # Palette used by the frontend InlineChart component (must match COLORS in
@@ -87,6 +103,7 @@ def _save_current_plot(title: str, plot_type: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _extract_matrix(data: dict) -> pd.DataFrame:
+    data = _normalize_heatmap_payload(data)
     matrix = (
         data.get("matrix")
         or data.get("correlation_matrix")
@@ -100,6 +117,50 @@ def _extract_matrix(data: dict) -> pd.DataFrame:
     if df.empty:
         raise ValueError("Heatmap matrix is empty.")
     return df.astype(float)
+
+
+def _normalize_heatmap_payload(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return data
+    if data.get("matrix") is not None:
+        normalized = dict(data)
+        normalized.setdefault("metadata", {})
+        normalized["metadata"].setdefault("heatmap_type", data.get("heatmap_type", "generic"))
+        return normalized
+
+    heatmap_sources = (
+        ("correlation_heatmap", "correlation", "correlation"),
+        ("covariance_heatmap", "covariance", "covariance"),
+        ("missing_data", "missing", None),
+    )
+    for key, heatmap_type, value_field in heatmap_sources:
+        rows = data.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        matrix: dict[str, dict[str, float]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            x_key = row.get("tickerX") or row.get("ticker") or row.get("x")
+            y_key = row.get("tickerY") or row.get("date") or row.get("y")
+            if x_key is None or y_key is None:
+                continue
+            value_key = value_field
+            if value_key is None:
+                value_key = next((candidate for candidate in row if candidate not in {"ticker", "tickerX", "tickerY", "date", "x", "y"}), None)
+            if value_key is None:
+                continue
+            try:
+                value = float(row[value_key])
+            except (TypeError, ValueError):
+                continue
+            matrix.setdefault(str(x_key), {})[str(y_key)] = value
+        if matrix:
+            normalized = dict(data)
+            normalized["matrix"] = matrix
+            normalized["metadata"] = {**data.get("metadata", {}), "heatmap_type": heatmap_type}
+            return normalized
+    return data
 
 
 def _extract_network_payload(data: dict) -> tuple[list[dict], dict[str, float]]:
@@ -907,6 +968,7 @@ def _build_network_spec(data: dict, title: str) -> dict:
 
 
 def _build_heatmap_spec(data: dict, title: str) -> dict:
+    data = _normalize_heatmap_payload(data)
     try:
         df = _extract_matrix(data)
     except Exception:
@@ -926,6 +988,8 @@ def _build_heatmap_spec(data: dict, title: str) -> dict:
     spec = {
         "plot_type": "heatmap",
         "title": title,
+        "matrix": data.get("matrix"),
+        "metadata": data.get("metadata", {"heatmap_type": "generic"}),
         "xAxis": [{"data": [str(c) for c in x_categories]}],
         "yAxis": [{"data": [str(r) for r in y_categories]}],
         "series": [{"data": series_data}]
@@ -937,6 +1001,158 @@ def _build_heatmap_spec(data: dict, title: str) -> dict:
         spec["height"] = max(400, len(y_categories) * 40 + 100)
         
     return spec
+
+
+def _build_funnel_spec(data: dict, title: str) -> dict:
+    raw = data.get("series") or data.get("data") or data.get("stages") or data
+    if isinstance(raw, dict):
+        raw_items = [{"id": key, "label": key, "value": value} for key, value in raw.items()]
+    elif isinstance(raw, list) and raw and isinstance(raw[0], dict) and "data" in raw[0]:
+        raw_items = raw[0].get("data", [])
+    else:
+        raw_items = raw if isinstance(raw, list) else []
+
+    items = []
+    for index, item in enumerate(raw_items):
+        if isinstance(item, dict):
+            value = item.get("value", item.get("y"))
+            label = item.get("label", item.get("id", item.get("x", f"Stage {index + 1}")))
+            color = item.get("color", PALETTE[index % len(PALETTE)])
+        else:
+            value = item
+            label = f"Stage {index + 1}"
+            color = PALETTE[index % len(PALETTE)]
+        try:
+            items.append({
+                "id": str(label),
+                "label": str(label),
+                "value": float(value),
+                "color": color,
+            })
+        except (TypeError, ValueError):
+            continue
+
+    if not items:
+        raise ValueError("Funnel chart data must include stages with numeric values.")
+
+    spec = {
+        "plot_type": "funnel",
+        "title": title,
+        "series": [{
+            "label": data.get("label", "Funnel"),
+            "data": items,
+            "layout": data.get("layout", "vertical"),
+            "curve": data.get("curve", "linear"),
+            "borderRadius": data.get("borderRadius", 6),
+            "variant": data.get("variant", "filled"),
+        }],
+        "height": data.get("height", 360),
+    }
+    if "hideLegend" in data:
+        spec["hideLegend"] = bool(data["hideLegend"])
+    return spec
+
+
+def _build_radar_spec(data: dict, title: str) -> dict:
+    metrics = data.get("metrics") or data.get("radar", {}).get("metrics") or data.get("categories")
+    raw_series = data.get("series") or []
+    if not metrics and raw_series:
+        first = raw_series[0]
+        if isinstance(first, dict) and isinstance(first.get("data"), dict):
+            metrics = list(first["data"].keys())
+    if not metrics:
+        raise ValueError("Radar chart data must include metrics/categories.")
+
+    normalized_series = []
+    for index, series in enumerate(raw_series):
+        if not isinstance(series, dict):
+            continue
+        raw_values = series.get("data", [])
+        if isinstance(raw_values, dict):
+            values = [float(raw_values.get(metric, 0.0)) for metric in metrics]
+        else:
+            values = [float(value) for value in raw_values[:len(metrics)]]
+        normalized_series.append({
+            "label": series.get("label", series.get("name", f"Series {index + 1}")),
+            "data": values,
+            "color": series.get("color", PALETTE[index % len(PALETTE)]),
+            "fillArea": bool(series.get("fillArea", True)),
+        })
+
+    if not normalized_series:
+        raise ValueError("Radar chart data must include at least one numeric series.")
+
+    return {
+        "plot_type": "radar",
+        "title": title,
+        "radar": {"metrics": [str(metric) for metric in metrics]},
+        "series": normalized_series,
+        "height": data.get("height", 360),
+        "hideLegend": bool(data.get("hideLegend", False)),
+    }
+
+
+def _build_gauge_spec(data: dict, title: str) -> dict:
+    value = data.get("value", data.get("score"))
+    if value is None:
+        raise ValueError("Gauge chart data must include a numeric value or score.")
+    value = float(value)
+    value_min = float(data.get("valueMin", data.get("min", 0)))
+    value_max = float(data.get("valueMax", data.get("max", 100)))
+    return {
+        "plot_type": "gauge",
+        "title": title,
+        "value": value,
+        "valueMin": value_min,
+        "valueMax": value_max,
+        "startAngle": data.get("startAngle", -110),
+        "endAngle": data.get("endAngle", 110),
+        "height": data.get("height", 260),
+        "text": data.get("text"),
+    }
+
+
+def _build_radial_series_spec(data: dict, title: str, plot_type: str) -> dict:
+    categories = data.get("categories") or data.get("rotationAxis", [{}])[0].get("data")
+    raw_series = data.get("series") or []
+    if not categories and raw_series:
+        first = raw_series[0]
+        if isinstance(first, dict) and isinstance(first.get("data"), dict):
+            categories = list(first["data"].keys())
+    if not categories:
+        raise ValueError(f"{plot_type} chart data must include categories.")
+
+    normalized_series = []
+    for index, series in enumerate(raw_series):
+        if not isinstance(series, dict):
+            continue
+        raw_values = series.get("data", [])
+        if isinstance(raw_values, dict):
+            values = [float(raw_values.get(category, 0.0)) for category in categories]
+        else:
+            values = [float(value) for value in raw_values[:len(categories)]]
+        entry = {
+            "label": series.get("label", series.get("name", f"Series {index + 1}")),
+            "data": values,
+            "color": series.get("color", PALETTE[index % len(PALETTE)]),
+        }
+        for key in ("stack", "stackOffset", "curve", "closePath", "area", "layout"):
+            if key in series:
+                entry[key] = series[key]
+        normalized_series.append(entry)
+
+    if not normalized_series:
+        raise ValueError(f"{plot_type} chart data must include at least one numeric series.")
+
+    return {
+        "plot_type": plot_type,
+        "title": title,
+        "categories": [str(category) for category in categories],
+        "series": normalized_series,
+        "height": data.get("height", 360),
+        "hideLegend": bool(data.get("hideLegend", False)),
+        "grid": data.get("grid", {"radius": True, "rotation": True}),
+    }
 
 # ---------------------------------------------------------------------------
 # Main tool — MUI-native for line/bar/pie/heatmap; PNG fallback for network
@@ -1053,7 +1269,7 @@ def generate_financial_plot(
                             payload["y_label"] = "Price"
 
         normalized = str(plot_type or "").strip().lower()
-        plot_title = str(title or "Financial Plot").strip()
+        plot_title = normalize_advisory_language(str(title or "Financial Plot").strip())
 
         if normalized not in SUPPORTED_PLOTS:
             return (
@@ -1080,6 +1296,16 @@ def generate_financial_plot(
             spec = _build_network_spec(payload, plot_title)
         elif normalized == "heatmap":
             spec = _build_heatmap_spec(payload, plot_title)
+        elif normalized == "funnel":
+            spec = _build_funnel_spec(payload, plot_title)
+        elif normalized == "radar":
+            spec = _build_radar_spec(payload, plot_title)
+        elif normalized == "gauge":
+            spec = _build_gauge_spec(payload, plot_title)
+        elif normalized == "radial_bar":
+            spec = _build_radial_series_spec(payload, plot_title, "radial_bar")
+        elif normalized == "radial_line":
+            spec = _build_radial_series_spec(payload, plot_title, "radial_line")
         else:
             spec = None  # falls through to PNG path below
 
@@ -1091,7 +1317,7 @@ def generate_financial_plot(
             stored = False
             try:
                 mongo = MongoMemoryManager()
-                stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
+                stored = bool(mongo.store_plot(plot_id, spec, ttl_days=365))
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).error(f"Failed to store plot in MongoDB: {e}")

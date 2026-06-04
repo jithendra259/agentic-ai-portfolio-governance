@@ -74,7 +74,23 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.memory.context_resolver import (
+    ContextResolver,
+    build_direct_context_response,
+    build_missing_input_response,
+    build_pending_execution_response,
+)
+from src.memory.audit_log import GLOBAL_AUDIT_LOGGER
+from src.memory.memory_store import InProcessSessionMemoryStore
+from src.memory.missing_data_resolver import MissingDataResolver
+from src.memory.response_contract import build_response_contract, contract_summary
+from src.agents.plot_store import GLOBAL_PLOT_DATA
+from src.decision.apg_bench_response import build_apg_bench_response
+from src.decision.plot_prompt_response import build_plot_prompt_response
+from src.decision.regime_response import build_regime_only_response
+
 from src.orchestrator.chatbot_orchestrator import (
+    CONFIGURED_DEFAULT_LLM_MODEL,
     FALLBACK_OLLAMA_MODEL,
     INSTALLED_OLLAMA_MODELS,
     PRIMARY_OLLAMA_MODEL,
@@ -82,6 +98,10 @@ from src.orchestrator.chatbot_orchestrator import (
     portfolio_assistant,
     streaming_portfolio_assistant,
 )
+
+session_memory_store = InProcessSessionMemoryStore()
+context_resolver = ContextResolver()
+missing_data_resolver = MissingDataResolver()
 
 
 
@@ -119,12 +139,18 @@ async def lifespan(app: FastAPI):
     yield
 
 
+from api.analytics_router import router as analytics_router
+from api.governance_router import router as governance_router
+
 app = FastAPI(
     title="Agentic Portfolio Governance API",
     description="Advisory-only backend for historical portfolio governance using local MongoDB data.",
     version="1.0.0",
     lifespan=lifespan,
 )
+app.include_router(analytics_router)
+app.include_router(governance_router)
+
 
 # CORS Support for robust local development
 from fastapi.middleware.cors import CORSMiddleware
@@ -177,6 +203,11 @@ class ChatSessionsResponse(BaseModel):
     sessions: list[ChatSessionResponse]
 
 
+class DeleteChatSessionResponse(BaseModel):
+    session_id: str
+    deleted_count: int
+
+
 def _message_to_text(message: Any) -> str:
     if message is None:
         return ""
@@ -221,16 +252,123 @@ def _stream_event(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload) + "\n").encode("utf-8")
 
 
+async def _stream_text_delta(text_id: str, text: str, chunk_size: int = 18):
+    """Yield text-delta events in small chunks so deterministic responses feel streamed."""
+    import asyncio
+
+    content = str(text or "")
+    if not content:
+        return
+
+    for index in range(0, len(content), chunk_size):
+        yield _stream_event({"type": "text-delta", "id": text_id, "delta": content[index:index + chunk_size]})
+        await asyncio.sleep(0.01)
+
+
+async def _run_blocking_io(func, *args, **kwargs):
+    """Run synchronous Mongo/Supabase work without blocking the async stream loop."""
+    import anyio
+
+    return await anyio.to_thread.run_sync(lambda: func(*args, **kwargs))
+
+
+def _attach_inline_plot_tokens(session_id: str, response_text: str, resolved: dict[str, Any]) -> str:
+    if PLOT_TOKEN in str(response_text or ""):
+        return response_text
+
+    fallback = resolved.get("fallback_result", {}) if isinstance(resolved, dict) else {}
+    payload = fallback.get("plot_payload") if isinstance(fallback.get("plot_payload"), dict) else None
+    validation = resolved.get("validation_result") or fallback.get("validation_result") or {}
+    if fallback.get("status") != "success" or not payload or not validation.get("can_render", True):
+        return response_text
+
+    import uuid
+
+    inline_plot_id = f"detplot-{uuid.uuid4().hex}"
+    plot_spec = _plot_spec_from_payload(payload)
+    if not memory_manager.store_plot(inline_plot_id, plot_spec, ttl_days=7):
+        logger.warning("Failed to store deterministic inline plot for session %s", session_id)
+        return response_text
+    return f"{response_text}\n\n{PLOT_TOKEN}{inline_plot_id}"
+
+
+def _plot_spec_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    spec = dict(payload)
+    spec["plot_type"] = payload.get("plot_type") or payload.get("chart_type") or "bar"
+    spec["plot_id"] = payload.get("plot_short_id") or payload.get("plot_id")
+    spec["title"] = payload.get("title") or "Ticker Concentration Plot"
+    spec["series"] = payload.get("series") or [
+        {
+            "key": payload.get("x_axis") or "allocation_percent",
+            "label": "Current allocation",
+        }
+    ]
+    spec["layout"] = payload.get("layout") or ("horizontal" if payload.get("bar_mode") == "horizontal" else "vertical")
+    spec["sort"] = payload.get("sort") or "descending"
+    spec["height"] = payload.get("height") or max(360, min(860, len(payload.get("data", [])) * 36 + 116))
+    return spec
+
+
 def _persist_chat_message(
     session_id: str,
     role: str,
     content: str,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    session_memory_store.append_message(session_id, role, content, metadata=metadata)
     try:
         memory_manager.append_chat_message(session_id, role, content, metadata=metadata)
     except Exception as exc:
         logger.warning("Failed to persist %s chat message for session %s: %s", role, session_id, exc)
+
+
+def _resolve_chat_memory(session_id: str, message: str) -> dict[str, Any]:
+    persisted_messages = memory_manager.list_chat_messages(session_id, limit=25)
+    if persisted_messages:
+        session_memory_store.hydrate_messages(session_id, persisted_messages)
+    last_25 = session_memory_store.get_last_messages(session_id, limit=25)
+    state = session_memory_store.get_state(session_id)
+    resolved = context_resolver.resolve(message, state, chat_history_last_25=last_25)
+    resolved = missing_data_resolver.resolve(resolved)
+    session_memory_store.save_state(session_id, resolved["session_state"])
+    _audit_resolved_memory(session_id, message, resolved)
+    return resolved
+
+
+def _persist_memory_response(session_id: str, response_text: str, resolved: dict[str, Any], metadata: dict[str, Any]) -> None:
+    state = dict(resolved.get("session_state") or {})
+    state["last_response_summary"] = response_text[:500]
+    session_memory_store.save_state(session_id, state)
+    contract = build_response_contract(response_text, resolved, result=response_text[:500])
+    enriched_metadata = {
+        **(metadata or {}),
+        "response_contract_summary": contract_summary(contract),
+        "response_contract": {k: v for k, v in contract.items() if k != "debug_user_message"},
+    }
+    _persist_chat_message(session_id, "assistant", response_text, metadata=enriched_metadata)
+
+
+def _audit_resolved_memory(session_id: str, message: str, resolved: dict[str, Any]) -> None:
+    fallback = resolved.get("fallback_result", {})
+    payload = fallback.get("plot_payload") if isinstance(fallback.get("plot_payload"), dict) else {}
+    validation = resolved.get("validation_result") or fallback.get("validation_result") or {}
+    if not payload and fallback.get("status") == "not_applicable":
+        return
+    status = "success" if fallback.get("status") == "success" and validation.get("can_render", True) else "blocked"
+    reason = validation.get("reason") or fallback.get("reason")
+    GLOBAL_AUDIT_LOGGER.log(
+        {
+            "session_id": session_id,
+            "user_message": message,
+            "intent": resolved.get("intent_lock", {}).get("intent") or resolved.get("session_state", {}).get("last_sub_intent"),
+            "resolved_universe": resolved.get("session_state", {}).get("active_universe"),
+            "tool_called": "missing_data_resolver",
+            "plot_id": payload.get("plot_id") or resolved.get("session_state", {}).get("last_plot_id"),
+            "data_source": payload.get("data_source") or fallback.get("data_source"),
+            "status": status,
+            "failure_reason": None if status == "success" else reason,
+        }
+    )
 
 
 @app.get("/health")
@@ -244,6 +382,11 @@ def health_check() -> dict:
     ollama_status = (
         PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS 
         or (PRIMARY_OLLAMA_MODEL.startswith("ashna") and has_ashna_key)
+    )
+    default_llm_status = bool(
+        CONFIGURED_DEFAULT_LLM_MODEL
+        and CONFIGURED_DEFAULT_LLM_MODEL.startswith("ashna")
+        and has_ashna_key
     )
     
     available_models = list(INSTALLED_OLLAMA_MODELS)
@@ -260,18 +403,20 @@ def health_check() -> dict:
                 available_models.insert(0, model)
     
     return {
-        "status": "ok" if mongo_status and ollama_status else "degraded",
+        "status": "ok" if mongo_status and (ollama_status or default_llm_status) else "degraded",
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
         "components": {
             "mongodb": "connected" if mongo_status else "disconnected",
             "supabase_postgres": "connected" if memory_manager.pg_pool else "not_configured",
             "ollama": "ready" if ollama_status else "model_missing",
+            "default_llm": "ready" if default_llm_status else "not_configured",
             "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
         "models": {
             "primary": PRIMARY_OLLAMA_MODEL,
             "fallback": FALLBACK_OLLAMA_MODEL,
+            "default": CONFIGURED_DEFAULT_LLM_MODEL,
             "available": available_models
         }
     }
@@ -293,6 +438,24 @@ def chat_messages(session_id: str, limit: int = 200) -> ChatHistoryResponse:
     return ChatHistoryResponse(session_id=session_id, messages=rows)
 
 
+@app.delete("/chat/{session_id}", response_model=DeleteChatSessionResponse)
+def delete_chat_session(session_id: str) -> DeleteChatSessionResponse:
+    clean_session_id = str(session_id or "").strip()
+    if not clean_session_id:
+        raise HTTPException(status_code=400, detail="session_id cannot be empty")
+
+    deleted_count = 0
+    if hasattr(memory_manager, "delete_chat_session"):
+        deleted_count = int(memory_manager.delete_chat_session(clean_session_id) or 0)
+    session_memory_store.delete_session(clean_session_id)
+    return DeleteChatSessionResponse(session_id=clean_session_id, deleted_count=deleted_count)
+
+
+@app.get("/audit/recent")
+def recent_audit_records(limit: int = 100) -> dict[str, Any]:
+    return {"records": GLOBAL_AUDIT_LOGGER.recent(limit=limit)}
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest) -> ChatResponse:
     if not request.session_id.strip():
@@ -309,6 +472,89 @@ def chat(request: ChatRequest) -> ChatResponse:
             request.user_message,
             metadata={"model": request.model, "transport": "rest"},
         )
+        resolved_memory = _resolve_chat_memory(request.session_id, request.user_message)
+
+        pending_execution_response = build_pending_execution_response(resolved_memory)
+        if pending_execution_response is not None:
+            pending_execution_response = _attach_inline_plot_tokens(
+                request.session_id,
+                pending_execution_response,
+                resolved_memory,
+            )
+            _persist_memory_response(
+                request.session_id,
+                pending_execution_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "pending_action"},
+            )
+            return ChatResponse(session_id=request.session_id, response=pending_execution_response)
+
+        direct_context_response = build_direct_context_response(resolved_memory)
+        if direct_context_response is not None:
+            direct_context_response = _attach_inline_plot_tokens(
+                request.session_id,
+                direct_context_response,
+                resolved_memory,
+            )
+            _persist_memory_response(
+                request.session_id,
+                direct_context_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "direct_context"},
+            )
+            return ChatResponse(session_id=request.session_id, response=direct_context_response)
+
+        missing_input_response = build_missing_input_response(resolved_memory)
+        if missing_input_response is not None:
+            _persist_memory_response(
+                request.session_id,
+                missing_input_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "memory_missing_input"},
+            )
+            return ChatResponse(session_id=request.session_id, response=missing_input_response)
+
+        benchmark_response = build_apg_bench_response(request.user_message)
+        if benchmark_response is not None:
+            _persist_memory_response(
+                request.session_id,
+                benchmark_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "apg_bench"},
+            )
+            return ChatResponse(session_id=request.session_id, response=benchmark_response)
+
+        plot_response = build_plot_prompt_response(request.user_message)
+        if plot_response is not None:
+            _persist_memory_response(
+                request.session_id,
+                plot_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "plot_prompt"},
+            )
+            return ChatResponse(session_id=request.session_id, response=plot_response)
+
+        regime_response = build_regime_only_response(
+            request.user_message,
+            previous_analysis={
+                "analysis_id": resolved_memory.get("session_state", {}).get("active_analysis_id"),
+                "entities": {
+                    "universe": resolved_memory.get("session_state", {}).get("active_universe"),
+                    "tickers": resolved_memory.get("session_state", {}).get("active_tickers", []),
+                    "current_weights": resolved_memory.get("session_state", {}).get("active_weights", {}).get("weights", {}),
+                    "start_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("start"),
+                    "end_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("end"),
+                },
+            },
+        )
+        if regime_response is not None:
+            _persist_memory_response(
+                request.session_id,
+                regime_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "regime_only"},
+            )
+            return ChatResponse(session_id=request.session_id, response=regime_response)
 
         result = portfolio_assistant.invoke(
             {"messages": [HumanMessage(content=request.user_message)]},
@@ -322,10 +568,10 @@ def chat(request: ChatRequest) -> ChatResponse:
             last_message = messages[-1]
             response_text = getattr(last_message, "content", "") or str(last_message)
 
-        _persist_chat_message(
+        _persist_memory_response(
             request.session_id,
-            "assistant",
             response_text,
+            resolved_memory,
             metadata={"model": request.model, "transport": "rest"},
         )
         return ChatResponse(session_id=request.session_id, response=response_text)
@@ -355,13 +601,6 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
 
-    _persist_chat_message(
-        request.session_id,
-        "user",
-        request.user_message,
-        metadata={"model": request.model, "transport": "stream"},
-    )
-
     async def event_generator():
         import uuid
         msg_id = str(uuid.uuid4())
@@ -379,6 +618,183 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
 
         try:
             logger.info("Streaming chat request for session_id=%s", request.session_id)
+            yield _stream_event({
+                "type": "status",
+                "stage": "data_access",
+                "label": "Saving message and opening Mongo/Supabase context",
+            })
+            await _run_blocking_io(
+                _persist_chat_message,
+                request.session_id,
+                "user",
+                request.user_message,
+                metadata={"model": request.model, "transport": "stream"},
+            )
+            yield _stream_event({
+                "type": "status",
+                "stage": "context",
+                "label": "Loading recent memory and portfolio context",
+            })
+            resolved_memory = await _run_blocking_io(
+                _resolve_chat_memory,
+                request.session_id,
+                request.user_message,
+            )
+            yield _stream_event({
+                "type": "status",
+                "stage": "generation",
+                "label": "Streaming response",
+            })
+
+            pending_execution_response = build_pending_execution_response(resolved_memory)
+            if pending_execution_response is not None:
+                pending_execution_response = await _run_blocking_io(
+                    _attach_inline_plot_tokens,
+                    request.session_id,
+                    pending_execution_response,
+                    resolved_memory,
+                )
+                accumulated_response = pending_execution_response
+                async for chunk in _stream_text_delta(text_id, pending_execution_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "pending_action",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            direct_context_response = build_direct_context_response(resolved_memory)
+            if direct_context_response is not None:
+                direct_context_response = await _run_blocking_io(
+                    _attach_inline_plot_tokens,
+                    request.session_id,
+                    direct_context_response,
+                    resolved_memory,
+                )
+                accumulated_response = direct_context_response
+                async for chunk in _stream_text_delta(text_id, direct_context_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "direct_context",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            missing_input_response = build_missing_input_response(resolved_memory)
+            if missing_input_response is not None:
+                accumulated_response = missing_input_response
+                async for chunk in _stream_text_delta(text_id, missing_input_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "memory_missing_input",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            benchmark_response = build_apg_bench_response(request.user_message)
+            if benchmark_response is not None:
+                accumulated_response = benchmark_response
+                async for chunk in _stream_text_delta(text_id, benchmark_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "apg_bench",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            plot_response = build_plot_prompt_response(request.user_message)
+            if plot_response is not None:
+                accumulated_response = plot_response
+                async for chunk in _stream_text_delta(text_id, plot_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "plot_prompt",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            regime_response = build_regime_only_response(
+                request.user_message,
+                previous_analysis={
+                    "analysis_id": resolved_memory.get("session_state", {}).get("active_analysis_id"),
+                    "entities": {
+                        "universe": resolved_memory.get("session_state", {}).get("active_universe"),
+                        "tickers": resolved_memory.get("session_state", {}).get("active_tickers", []),
+                        "current_weights": resolved_memory.get("session_state", {}).get("active_weights", {}).get("weights", {}),
+                        "start_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("start"),
+                        "end_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("end"),
+                    },
+                },
+            )
+            if regime_response is not None:
+                accumulated_response = regime_response
+                async for chunk in _stream_text_delta(text_id, regime_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "regime_only",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
 
             async for event in streaming_portfolio_assistant.astream_events(
                 {"messages": [HumanMessage(content=request.user_message)]},
@@ -453,7 +869,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         final_text = _message_to_text(messages[-1])
                         if final_text:
                             accumulated_response = final_text
-                            yield _stream_event({"type": "text-delta", "id": text_id, "delta": final_text})
+                            async for chunk in _stream_text_delta(text_id, final_text):
+                                yield chunk
                             suppressed_stream_tokens = False
                             final_sent = True
 
@@ -461,7 +878,8 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 # Already yielded deltas, no need to yield final accumulated text again
                 pass
             elif not accumulated_response and not final_sent:
-                yield _stream_event({"type": "text-delta", "id": text_id, "delta": "Unable to generate a response for this request."})
+                async for chunk in _stream_text_delta(text_id, "Unable to generate a response for this request."):
+                    yield chunk
 
             yield _stream_event({"type": "text-end", "id": text_id})
 
@@ -479,10 +897,11 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 # Tool ran but produced no spec (e.g. PNG-only types like network/heatmap)
                 pass
 
-            _persist_chat_message(
+            await _run_blocking_io(
+                _persist_memory_response,
                 request.session_id,
-                "assistant",
                 accumulated_response,
+                resolved_memory,
                 metadata={
                     "model": request.model,
                     "transport": "stream",
@@ -639,6 +1058,32 @@ def get_plot_data(plot_id: str):
                 }
             ]
         }
+    elif plot_id == "test-smart-bar":
+        tickers = [
+            "AAPL", "MSFT", "NVDA", "AMZN", "JPM", "GOOGL", "META", "AVGO", "LLY", "V",
+            "XOM", "UNH", "MA", "COST", "HD", "PG", "NFLX", "CRM", "ADBE", "BAC",
+        ]
+        return {
+            "plot_type": "bar",
+            "plot_id": "ticker_concentration_plot",
+            "chart_type": "bar",
+            "bar_mode": "horizontal",
+            "title": "Ticker Concentration",
+            "description": "APG-style horizontal bar chart fixture.",
+            "universe": "U1",
+            "analysis_id": "fixture-smart-bar-u1",
+            "x_axis": "allocation_percent",
+            "y_axis": "ticker",
+            "unit": "percent",
+            "sort": "descending",
+            "series": [{"key": "allocation_percent", "label": "Current allocation"}],
+            "data": [
+                {"ticker": ticker, "allocation_percent": round(14.5 - index * 0.48, 2)}
+                for index, ticker in enumerate(tickers)
+            ],
+            "thresholds": [{"name": "Max ticker cap", "value": 20}],
+            "interpretation": "Shows whether individual ticker exposures exceed advisory concentration thresholds.",
+        }
     elif plot_id == "test-sankey":
         return {
             "plot_type": "sankey",
@@ -655,6 +1100,83 @@ def get_plot_data(plot_id: str):
                 {"source": "A", "target": "C", "value": 15000},
                 {"source": "A", "target": "D", "value": 35000}
             ]
+        }
+    elif plot_id == "test-heatmap":
+        return {
+            "plot_type": "heatmap",
+            "title": "Return Correlation Heatmap (Premium)",
+            "xAxis": [{"data": ["AAPL", "MSFT", "NVDA", "JPM"]}],
+            "yAxis": [{"data": ["AAPL", "MSFT", "NVDA", "JPM"]}],
+            "series": [{
+                "data": [
+                    [0, 0, 1.0], [1, 0, 0.72], [2, 0, 0.64], [3, 0, 0.28],
+                    [0, 1, 0.72], [1, 1, 1.0], [2, 1, 0.69], [3, 1, 0.31],
+                    [0, 2, 0.64], [1, 2, 0.69], [2, 2, 1.0], [3, 2, 0.22],
+                    [0, 3, 0.28], [1, 3, 0.31], [2, 3, 0.22], [3, 3, 1.0],
+                ]
+            }],
+            "height": 360,
+        }
+    elif plot_id == "test-funnel":
+        return {
+            "plot_type": "funnel",
+            "title": "Data Quality Validation Funnel (Premium)",
+            "series": [{
+                "label": "Validation",
+                "layout": "vertical",
+                "curve": "linear",
+                "borderRadius": 6,
+                "data": [
+                    {"id": "loaded", "label": "Loaded Tickers", "value": 100, "color": "#3b82f6"},
+                    {"id": "fresh", "label": "Fresh Data", "value": 92, "color": "#10b981"},
+                    {"id": "complete", "label": "Complete Returns", "value": 86, "color": "#f59e0b"},
+                    {"id": "validated", "label": "Governance Validated", "value": 78, "color": "#8b5cf6"},
+                ]
+            }],
+            "height": 360,
+        }
+    elif plot_id == "test-radar":
+        return {
+            "plot_type": "radar",
+            "title": "Governance Score Radar (Premium)",
+            "radar": {"metrics": ["Quality", "Diversification", "Downside", "Liquidity", "Traceability"]},
+            "series": [
+                {"label": "Current", "data": [76, 61, 58, 84, 91], "fillArea": True, "color": "#3b82f6"},
+                {"label": "Advisory", "data": [82, 78, 73, 80, 95], "fillArea": True, "color": "#10b981"},
+            ],
+            "height": 360,
+        }
+    elif plot_id == "test-gauge":
+        return {
+            "plot_type": "gauge",
+            "title": "Confidence Score Gauge (Premium)",
+            "value": 87,
+            "valueMin": 0,
+            "valueMax": 100,
+            "height": 260,
+            "text": "87%",
+        }
+    elif plot_id == "test-radial-bar":
+        return {
+            "plot_type": "radial_bar",
+            "title": "Risk Contribution by Sector (Premium)",
+            "categories": ["Tech", "Finance", "Health", "Energy", "Cash"],
+            "series": [
+                {"label": "Risk", "data": [38, 24, 17, 13, 8], "color": "#3b82f6"},
+                {"label": "Allocation", "data": [32, 25, 19, 14, 10], "color": "#10b981"},
+            ],
+            "height": 360,
+        }
+    elif plot_id == "test-radial-line":
+        return {
+            "plot_type": "radial_line",
+            "title": "Regime Component Profile (Premium)",
+            "categories": ["Volatility", "Correlation", "Drawdown", "Turnover", "Liquidity"],
+            "series": [
+                {"label": "Current", "data": [62, 74, 48, 35, 22], "curve": "linear", "closePath": True, "color": "#f59e0b"},
+                {"label": "Threshold", "data": [70, 70, 70, 70, 70], "curve": "linear", "closePath": True, "color": "#ef4444"},
+            ],
+            "height": 360,
         }
     elif plot_id == "test-scatter":
         return {
@@ -727,3 +1249,4 @@ if __name__ == "__main__":
         )
     else:
         uvicorn.run("api.main:app", host=host, port=port, reload=False)
+

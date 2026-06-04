@@ -50,6 +50,20 @@ def get_clean_postgres_url(url: str) -> str:
 _POOL_CACHE = {}
 
 
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 def _test_and_get_pool(postgres_url: str) -> Any:
     global _POOL_CACHE
     if ConnectionPool is None:
@@ -64,12 +78,15 @@ def _test_and_get_pool(postgres_url: str) -> Any:
     # Try clean URL without brackets
     url_no_brackets = get_clean_postgres_url(postgres_url)
     try:
+        min_size = _env_int("SUPABASE_POOL_MIN_SIZE", 0, minimum=0)
+        max_size = max(min_size + 1, _env_int("SUPABASE_POOL_MAX_SIZE", 4, minimum=1))
+        timeout = _env_float("SUPABASE_POOL_TIMEOUT", 5.0, minimum=0.5)
         pool = ConnectionPool(
             conninfo=url_no_brackets,
-            min_size=0,
-            max_size=2,
+            min_size=min_size,
+            max_size=max_size,
             open=True,
-            timeout=5.0,
+            timeout=timeout,
             kwargs={"autocommit": True, "prepare_threshold": None}
         )
         with pool.connection() as conn:
@@ -95,12 +112,15 @@ def _test_and_get_pool(postgres_url: str) -> Any:
                 encoded_password = urllib.parse.quote(decoded_password)
                 url_with_brackets = f"{scheme}://{user}:{encoded_password}@{host_db}"
                 
+                min_size = _env_int("SUPABASE_POOL_MIN_SIZE", 0, minimum=0)
+                max_size = max(min_size + 1, _env_int("SUPABASE_POOL_MAX_SIZE", 4, minimum=1))
+                timeout = _env_float("SUPABASE_POOL_TIMEOUT", 5.0, minimum=0.5)
                 pool = ConnectionPool(
                     conninfo=url_with_brackets,
-                    min_size=0,
-                    max_size=2,
+                    min_size=min_size,
+                    max_size=max_size,
                     open=True,
-                    timeout=5.0,
+                    timeout=timeout,
                     kwargs={"autocommit": True, "prepare_threshold": None}
                 )
                 with pool.connection() as conn:
@@ -201,6 +221,18 @@ class MongoMemoryManager:
                         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
                         ON chat_messages (session_id, created_at, id);
                     """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_recent
+                        ON chat_messages (session_id, created_at DESC, id DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_session_role_created
+                        ON chat_messages (session_id, role, created_at, id);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_created_desc
+                        ON chat_messages (created_at DESC);
+                    """)
             logger.info("Postgres cache tables checked/created.")
         except Exception as exc:
             logger.error("Failed to set up postgres tables: %s", exc)
@@ -226,6 +258,22 @@ class MongoMemoryManager:
             if visualizations is not None:
                 visualizations.create_index([("plot_id", ASCENDING)], unique=True, background=True)
                 visualizations.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True)
+
+            chat_messages = self._collection("chat_messages")
+            if chat_messages is not None:
+                chat_messages.create_index(
+                    [("session_id", ASCENDING), ("created_at", ASCENDING), ("_id", ASCENDING)],
+                    background=True,
+                )
+                chat_messages.create_index(
+                    [("session_id", ASCENDING), ("created_at", DESCENDING), ("_id", DESCENDING)],
+                    background=True,
+                )
+                chat_messages.create_index(
+                    [("session_id", ASCENDING), ("role", ASCENDING), ("created_at", ASCENDING), ("_id", ASCENDING)],
+                    background=True,
+                )
+                chat_messages.create_index([("created_at", DESCENDING)], background=True)
 
             regime_patterns.create_index([("regime_type", ASCENDING), ("created_at", DESCENDING)], background=True)
             regime_patterns.create_index([("target_date", DESCENDING)], background=True)
@@ -406,7 +454,7 @@ class MongoMemoryManager:
             logger.warning("Failed to retrieve similar regimes: %s", exc)
             return []
 
-    def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 90) -> bool:
+    def store_plot(self, plot_id: str, plot_data: dict, ttl_days: int = 365) -> bool:
         """Store a visualization payload in Supabase Postgres or MongoDB."""
         if self.pg_pool:
             try:
@@ -568,10 +616,14 @@ class MongoMemoryManager:
                         cur.execute(
                             """
                             SELECT id, role, content, metadata, created_at
-                            FROM chat_messages
-                            WHERE session_id = %s
-                            ORDER BY created_at ASC, id ASC
-                            LIMIT %s;
+                            FROM (
+                                SELECT id, role, content, metadata, created_at
+                                FROM chat_messages
+                                WHERE session_id = %s
+                                ORDER BY created_at DESC, id DESC
+                                LIMIT %s
+                            ) AS recent_messages
+                            ORDER BY created_at ASC, id ASC;
                             """,
                             (clean_session_id, safe_limit),
                         )
@@ -606,9 +658,11 @@ class MongoMemoryManager:
             chat_col = self._collection("chat_messages")
             if chat_col is None:
                 return []
-            cursor = chat_col.find({"session_id": clean_session_id}).sort("created_at", ASCENDING).limit(safe_limit)
+            cursor = chat_col.find({"session_id": clean_session_id}).sort(
+                [("created_at", DESCENDING), ("_id", DESCENDING)]
+            ).limit(safe_limit)
             messages = []
-            for row in cursor:
+            for row in reversed(list(cursor)):
                 created_at = row.get("created_at")
                 messages.append(
                     {
@@ -682,11 +736,17 @@ class MongoMemoryManager:
             if chat_col is None:
                 return []
             pipeline = [
-                {"$sort": {"session_id": 1, "created_at": 1, "_id": 1}},
+                {
+                    "$addFields": {
+                        "_title_rank": {"$cond": [{"$eq": ["$role", "user"]}, 0, 1]}
+                    }
+                },
+                {"$sort": {"session_id": 1, "_title_rank": 1, "created_at": 1, "_id": 1}},
                 {
                     "$group": {
                         "_id": "$session_id",
-                        "messages": {"$push": {"role": "$role", "content": "$content"}},
+                        "first_role": {"$first": "$role"},
+                        "first_content": {"$first": "$content"},
                         "message_count": {"$sum": 1},
                         "created_at": {"$min": "$created_at"},
                         "updated_at": {"$max": "$created_at"},
@@ -694,21 +754,7 @@ class MongoMemoryManager:
                 },
                 {
                     "$project": {
-                        "first_user": {
-                            "$first": {
-                                "$map": {
-                                    "input": {
-                                        "$filter": {
-                                            "input": "$messages",
-                                            "as": "message",
-                                            "cond": {"$eq": ["$$message.role", "user"]},
-                                        }
-                                    },
-                                    "as": "user_message",
-                                    "in": "$$user_message.content",
-                                }
-                            }
-                        },
+                        "first_user": {"$cond": [{"$eq": ["$first_role", "user"]}, "$first_content", None]},
                         "message_count": 1,
                         "created_at": 1,
                         "updated_at": 1,
@@ -718,7 +764,7 @@ class MongoMemoryManager:
                 {"$limit": safe_limit},
             ]
             sessions = []
-            for row in chat_col.aggregate(pipeline):
+            for row in chat_col.aggregate(pipeline, allowDiskUse=True):
                 created_at = row.get("created_at")
                 updated_at = row.get("updated_at")
                 sessions.append(
@@ -734,3 +780,35 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to list chat sessions: %s", exc)
             return []
+
+    def delete_chat_session(self, session_id: str) -> int:
+        """Delete all persisted chat messages for one session."""
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            return 0
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "DELETE FROM chat_messages WHERE session_id = %s;",
+                            (clean_session_id,),
+                        )
+                        deleted = int(cur.rowcount or 0)
+                return deleted
+            except Exception as exc:
+                logger.warning("Postgres delete_chat_session failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return 0
+
+        try:
+            chat_col = self._collection("chat_messages")
+            if chat_col is None:
+                return 0
+            result = chat_col.delete_many({"session_id": clean_session_id})
+            return int(result.deleted_count or 0)
+        except PyMongoError as exc:
+            logger.warning("Failed to delete chat session %s: %s", clean_session_id, exc)
+            return 0

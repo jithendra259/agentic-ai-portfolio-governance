@@ -11,3 +11,5 @@ Both live_data_tools and custom_plot_tool import GLOBAL_PLOT_IDS from here.
 
 from typing import Any
 GLOBAL_PLOT_IDS: dict[str, Any] = {}
+GLOBAL_PLOT_DATA: dict[str, Any] = {}
+

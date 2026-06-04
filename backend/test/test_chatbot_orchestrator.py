@@ -101,6 +101,19 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
         self.assertIn("correlation heatmap", self.module.SYSTEM_PROMPT)
         self.assertIn("Never tell the user you cannot do this analysis", self.module.SYSTEM_PROMPT)
 
+    def test_resolve_model_prefers_configured_ashna_when_ollama_has_no_models(self):
+        model = self.module._resolve_ollama_model(
+            ["ashnaai", "qwen3-coder-next:cloud", "qwen3:1.7b"],
+            [],
+        )
+
+        self.assertEqual(model, "ashnaai")
+
+    def test_unavailable_ollama_error_is_retryable(self):
+        error = Exception("Failed to connect to Ollama. Is the Ollama server running?")
+
+        self.assertTrue(self.module._is_ollama_unavailable_error(error))
+
 
     @patch('src.orchestrator.chatbot_orchestrator.plot_us_economic_indicators.func')
     def test_classify_and_route_routes_recession_bands_deterministically(self, mock_plot_func):

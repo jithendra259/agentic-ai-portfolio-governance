@@ -84,6 +84,9 @@ def _find_documents_with_retry(
     query: dict,
     projection: Optional[dict] = None,
     sort: Optional[tuple[str, int]] = None,
+    limit: Optional[int] = None,
+    batch_size: Optional[int] = None,
+    max_time_ms: Optional[int] = 15000,
     attempts: int = 2,
     retry_delay_seconds: float = 1.5,
 ):
@@ -95,6 +98,12 @@ def _find_documents_with_retry(
             cursor = collection.find(query, projection or {})
             if sort is not None:
                 cursor = cursor.sort(sort[0], sort[1])
+            if limit is not None:
+                cursor = cursor.limit(max(1, int(limit)))
+            if batch_size is not None:
+                cursor = cursor.batch_size(max(1, int(batch_size)))
+            if max_time_ms is not None:
+                cursor = cursor.max_time_ms(max(1, int(max_time_ms)))
             return list(cursor)
         except (NetworkTimeout, AutoReconnect, PyMongoError) as exc:
             last_error = exc
@@ -113,6 +122,63 @@ def _find_documents_with_retry(
     if last_error is not None:
         raise last_error
     return []
+
+
+def _find_price_documents_with_retry(
+    tickers: list[str],
+    start_date: str | None = None,
+    end_date: str | None = None,
+    keep_ohlcv: bool = False,
+):
+    cleaned = _normalize_tickers(tickers)
+    if not cleaned:
+        return []
+
+    if start_date and end_date:
+        date_expr = {"$ifNull": ["$$hp.Date", "$$hp.date"]}
+        cond = {
+            "$and": [
+                {"$gte": [date_expr, str(start_date)]},
+                {"$lte": [date_expr, str(end_date)]},
+            ]
+        }
+        projection = {
+            "ticker": 1,
+            "historical_prices": {
+                "$filter": {
+                    "input": "$historical_prices",
+                    "as": "hp",
+                    "cond": cond,
+                }
+            },
+        }
+    else:
+        projection = {
+            "ticker": 1,
+            "historical_prices.Date": 1,
+            "historical_prices.date": 1,
+            "historical_prices.Close": 1,
+            "historical_prices.close": 1,
+        }
+
+    if keep_ohlcv and not (start_date and end_date):
+        projection.update({
+            "historical_prices.Open": 1,
+            "historical_prices.open": 1,
+            "historical_prices.High": 1,
+            "historical_prices.high": 1,
+            "historical_prices.Low": 1,
+            "historical_prices.low": 1,
+            "historical_prices.Volume": 1,
+            "historical_prices.volume": 1,
+        })
+
+    return _find_documents_with_retry(
+        {"ticker": {"$in": cleaned}},
+        projection,
+        batch_size=50,
+        max_time_ms=20000,
+    )
 
 
 def _lookup_cache_key(name: str, *parts: str) -> tuple:
@@ -584,7 +650,7 @@ def _generate_inline_governance_plots(
         plot_requests.append(
             {
                 "plot_type": "pie",
-                "title": f"Optimal Allocation Weights as of {target_date}",
+                "title": f"Advisory Allocation Weights as of {target_date}",
                 "data": {"weights": weights},
             }
         )
@@ -904,7 +970,7 @@ def _run_historical_cvar_from_frames(
         "Optimal allocation weights:",
         *allocation_lines,
         "",
-        f"Expected annualized portfolio return: {expected_annualized_return * 100:.2f}%",
+        f"Estimated/backtested annualized portfolio return: {expected_annualized_return * 100:.2f}%",
         f"Expected 95% CVaR (daily tail risk): {expected_cvar_95 * 100:.2f}%",
         "",
         "Historical pricing dates used at or before the target date:",
@@ -1333,15 +1399,10 @@ def plot_historical_prices(
         if start_dt > end_dt:
             return "Unable to generate the historical price plot: start_date must be on or before end_date."
 
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned_tickers}},
-            {
-                "ticker": 1,
-                "historical_prices.Date": 1,
-                "historical_prices.date": 1,
-                "historical_prices.Close": 1,
-                "historical_prices.close": 1,
-            },
+        docs = _find_price_documents_with_retry(
+            cleaned_tickers,
+            start_date=start_dt.strftime("%Y-%m-%d"),
+            end_date=end_dt.strftime("%Y-%m-%d"),
         )
         if not docs:
             return (
@@ -1431,7 +1492,7 @@ def plot_historical_prices(
         
         try:
             mongo = MongoMemoryManager()
-            stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
+            stored = bool(mongo.store_plot(plot_id, spec, ttl_days=365))
         except Exception as e:
             logger.error("Failed to store plot in MongoDB: %s", e)
 
@@ -1822,15 +1883,10 @@ def get_historical_prices(tickers: list[str], target_date: str) -> str:
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
         mongo_error = None
         try:
-            docs = _find_documents_with_retry(
-                {"ticker": {"$in": cleaned_tickers}},
-                {
-                    "ticker": 1,
-                    "historical_prices.Date": 1,
-                    "historical_prices.date": 1,
-                    "historical_prices.Close": 1,
-                    "historical_prices.close": 1,
-                },
+            docs = _find_price_documents_with_retry(
+                cleaned_tickers,
+                start_date="1900-01-01",
+                end_date=target_dt.strftime("%Y-%m-%d"),
             )
         except Exception as exc:
             docs = []
@@ -1971,15 +2027,10 @@ def run_historical_cvar_optimization(
             return "Unable to run historical CVaR optimization: please provide at least two valid tickers."
 
         target_dt = pd.to_datetime(target_date, format="%Y-%m-%d", errors="raise")
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned_tickers}},
-            {
-                "ticker": 1, 
-                "historical_prices.Date": 1, 
-                "historical_prices.date": 1, 
-                "historical_prices.Close": 1, 
-                "historical_prices.close": 1
-            },
+        docs = _find_price_documents_with_retry(
+            cleaned_tickers,
+            start_date=(target_dt - pd.Timedelta(days=540)).strftime("%Y-%m-%d"),
+            end_date=target_dt.strftime("%Y-%m-%d"),
         )
         if not docs:
             return f"Unable to run historical CVaR optimization: none of the requested tickers were found in MongoDB for {target_date}."
@@ -2110,7 +2161,7 @@ def run_historical_cvar_optimization(
             "Optimal allocation weights:",
             *allocation_lines,
             "",
-            f"Expected annualized portfolio return: {expected_annualized_return * 100:.2f}%",
+            f"Estimated/backtested annualized portfolio return: {expected_annualized_return * 100:.2f}%",
             f"Expected 95% CVaR (daily tail risk): {expected_cvar_95 * 100:.2f}%",
             "",
             "Historical pricing dates used at or before the target date:",
@@ -2469,7 +2520,7 @@ def plot_us_economic_indicators(config: RunnableConfig = None) -> str:
     
     try:
         mongo = MongoMemoryManager()
-        stored = bool(mongo.store_plot(plot_id, spec, ttl_days=90))
+        stored = bool(mongo.store_plot(plot_id, spec, ttl_days=365))
     except Exception as e:
         logger.error("Failed to store plot in MongoDB: %s", e)
 

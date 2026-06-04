@@ -39,7 +39,7 @@ class PriceSeriesToolTests(unittest.TestCase):
             },
         ]
 
-        with patch("src.agents.price_series_tool._find_documents_with_retry", return_value=docs):
+        with patch("src.agents.price_series_tool._find_price_documents_with_retry", return_value=docs):
             result = get_price_series_for_analysis.func(
                 tickers=["AAPL", "MSFT"],
                 start_date="2020-01-01",
@@ -58,7 +58,7 @@ class PriceSeriesToolTests(unittest.TestCase):
         self.assertEqual(len(cached["returns"]["AAPL"]), 5)
 
     def test_returns_error_when_no_series_found(self):
-        with patch("src.agents.price_series_tool._find_documents_with_retry", return_value=[]):
+        with patch("src.agents.price_series_tool._find_price_documents_with_retry", return_value=[]):
             result = get_price_series_for_analysis.func(
                 tickers=["AAPL"],
                 start_date="2020-01-01",
@@ -93,7 +93,7 @@ class PriceSeriesToolTests(unittest.TestCase):
             },
         ]
 
-        with patch("src.agents.price_series_tool._find_documents_with_retry", return_value=docs):
+        with patch("src.agents.price_series_tool._find_price_documents_with_retry", return_value=docs):
             result = get_price_series_for_analysis.func(
                 tickers=["AAPL", "MSFT"],
                 start_date="2020-01-01",

@@ -10,7 +10,7 @@ from langchain_core.tools import tool
 
 from src.agents.live_data_tools import (
     _extract_price_frame,
-    _find_documents_with_retry,
+    _find_price_documents_with_retry,
     _normalize_tickers,
 )
 
@@ -104,23 +104,11 @@ def get_price_series_for_analysis(
     try:
         start_str = start_dt.strftime("%Y-%m-%d")
         end_str = end_dt.strftime("%Y-%m-%d")
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned}},
-            {
-                "ticker": 1,
-                "historical_prices": {
-                    "$filter": {
-                        "input": "$historical_prices",
-                        "as": "hp",
-                        "cond": {
-                            "$and": [
-                                {"$gte": [{"$ifNull": ["$$hp.Date", "$$hp.date"]}, start_str]},
-                                {"$lte": [{"$ifNull": ["$$hp.Date", "$$hp.date"]}, end_str]}
-                            ]
-                        }
-                    }
-                }
-            },
+        docs = _find_price_documents_with_retry(
+            cleaned,
+            start_date=start_str,
+            end_date=end_str,
+            keep_ohlcv=True,
         )
     except Exception as exc:
         logger.warning("Price series analysis lookup failed: %s", exc)
