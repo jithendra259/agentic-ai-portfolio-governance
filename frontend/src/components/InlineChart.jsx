@@ -4,10 +4,18 @@ import { BarChart } from '@mui/x-charts/BarChart';
 import { PieChart } from '@mui/x-charts/PieChart';
 import { ScatterChart } from '@mui/x-charts/ScatterChart';
 import { SparkLineChart } from '@mui/x-charts/SparkLineChart';
+import { Heatmap } from '@mui/x-charts-premium/Heatmap';
+import { SankeyChart } from '@mui/x-charts-premium/SankeyChart';
+import { FunnelChart } from '@mui/x-charts-premium/FunnelChart';
+import { RadarChart } from '@mui/x-charts-premium/RadarChart';
+import { Gauge } from '@mui/x-charts-premium/Gauge';
+import { Unstable_RadialBarChart as RadialBarChart } from '@mui/x-charts-premium/RadialBarChart';
+import { Unstable_RadialLineChart as RadialLineChart } from '@mui/x-charts-premium/RadialLineChart';
 import { Box, Typography, Paper } from '@mui/material';
 import { useDrawingArea, useXScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
 import { useTheme, alpha } from '@mui/material/styles';
 import { BACKEND_BASE } from '../config/api';
+import SmartBarChartRenderer from './SmartBarChartRenderer';
 
 // Must match PALETTE in generate_dynamic_plot.py
 const PALETTE = [
@@ -1003,6 +1011,202 @@ function SpecSparkLineChart({ spec }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Sankey chart
 // ─────────────────────────────────────────────────────────────────────────────
+function SpecHeatmapChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 420);
+  const xAxis = spec.xAxis || [{ data: spec.xLabels || [] }];
+  const yAxis = spec.yAxis || [{ data: spec.yLabels || [] }];
+  const series = (spec.series || []).map((serie, index) => ({
+    id: serie.id || `heatmap-${index}`,
+    label: serie.label || spec.title || 'Heatmap',
+    data: serie.data || [],
+    valueFormatter: (value) => value == null ? '' : toFiniteNumber(value).toFixed(3),
+    ...serie,
+  }));
+
+  if (!series.length || !series.some((serie) => Array.isArray(serie.data) && serie.data.length)) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No heatmap data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <Heatmap
+        height={height}
+        xAxis={xAxis}
+        yAxis={yAxis}
+        series={series}
+        borderRadius={spec.borderRadius ?? 4}
+        hideLegend={spec.hideLegend ?? false}
+        margin={spec.margin || { top: 24, right: 36, bottom: 58, left: 72 }}
+        sx={{
+          '& .MuiChartsAxis-tickLabel': AXIS_STYLE,
+          '& .MuiChartsLegend-root': { color: '#d1d5db' },
+        }}
+      />
+    </Box>
+  );
+}
+
+function SpecPremiumSankeyChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 360);
+  const nodes = spec.nodes || [];
+  const links = spec.links || [];
+  const formatValue = getValueFormatter(spec.valueFormatter || 'none');
+
+  if (!links.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No Sankey data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <SankeyChart
+        height={height}
+        series={{
+          data: { nodes, links },
+          nodeOptions: { showLabels: true, ...(spec.nodeOptions || {}) },
+          linkOptions: { opacity: 0.42, color: 'source', ...(spec.linkOptions || {}) },
+          valueFormatter: (value) => formatValue(value),
+        }}
+        margin={spec.margin || { top: 24, right: 24, bottom: 24, left: 24 }}
+      />
+    </Box>
+  );
+}
+
+function SpecFunnelChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 360);
+  const series = spec.series || [];
+  if (!series.length || !series.some((serie) => Array.isArray(serie.data) && serie.data.length)) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No funnel data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <FunnelChart
+        height={height}
+        series={series}
+        hideLegend={spec.hideLegend ?? false}
+        margin={spec.margin || { top: 24, right: 24, bottom: 30, left: 24 }}
+      />
+    </Box>
+  );
+}
+
+function SpecRadarChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 360);
+  const metrics = spec.radar?.metrics || spec.metrics || [];
+  const series = spec.series || [];
+  if (!metrics.length || !series.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No radar data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <RadarChart
+        height={height}
+        radar={{ metrics }}
+        series={series}
+        hideLegend={spec.hideLegend ?? false}
+        margin={spec.margin || { top: 24, right: 28, bottom: 30, left: 28 }}
+      />
+    </Box>
+  );
+}
+
+function SpecGaugeChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 260);
+  const value = toFiniteNumber(spec.value);
+  const valueMin = toFiniteNumber(spec.valueMin, 0);
+  const valueMax = toFiniteNumber(spec.valueMax, 100);
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 220, display: 'flex', justifyContent: 'center' }}>
+      <Gauge
+        width={Math.min(420, spec.width || 360)}
+        height={height}
+        value={value}
+        valueMin={valueMin}
+        valueMax={valueMax}
+        startAngle={spec.startAngle ?? -110}
+        endAngle={spec.endAngle ?? 110}
+        text={spec.text || (({ value: gaugeValue }) => `${toFiniteNumber(gaugeValue).toFixed(0)}`)}
+        sx={{
+          '& .MuiGauge-valueText': { fill: '#f8fafc', fontSize: 28, fontWeight: 700 },
+          '& .MuiGauge-referenceArc': { fill: '#1f2937' },
+          '& .MuiGauge-valueArc': { fill: PALETTE[0] },
+        }}
+      />
+    </Box>
+  );
+}
+
+function SpecRadialBarChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 360);
+  const categories = spec.categories || [];
+  const series = spec.series || [];
+  if (!categories.length || !series.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No radial bar data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <RadialBarChart
+        height={height}
+        series={series}
+        rotationAxis={[{ data: categories, scaleType: 'band' }]}
+        radiusAxis={[{ scaleType: 'linear' }]}
+        grid={spec.grid || { radius: true, rotation: true }}
+        hideLegend={spec.hideLegend ?? false}
+      />
+    </Box>
+  );
+}
+
+function SpecRadialLineChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 360);
+  const categories = spec.categories || [];
+  const series = spec.series || [];
+  if (!categories.length || !series.length) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No radial line data available.</Typography>
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ width: '100%', minWidth: 280 }}>
+      <RadialLineChart
+        height={height}
+        series={series}
+        rotationAxis={[{ data: categories, scaleType: 'point' }]}
+        radiusAxis={[{ scaleType: 'linear' }]}
+        grid={spec.grid || { radius: true, rotation: true }}
+        hideLegend={spec.hideLegend ?? false}
+      />
+    </Box>
+  );
+}
+
 function SpecSankeyChart({ spec }) {
   const height = getResponsiveChartHeight(spec, 350);
   const containerRef = React.useRef(null);
@@ -1891,13 +2095,19 @@ export default function InlineChart({ plotId }) {
   let ChartComponent;
   switch (spec.plot_type) {
     case 'line':        ChartComponent = SpecLineChart; break;
-    case 'bar':         ChartComponent = SpecBarChart;  break;
+    case 'bar':         ChartComponent = SmartBarChartRenderer;  break;
     case 'pie':         ChartComponent = SpecPieChart;  break;
     case 'scatter':     ChartComponent = SpecScatterChart; break;
     case 'sparkline':   ChartComponent = SpecSparkLineChart; break;
-    case 'sankey':      ChartComponent = SpecSankeyChart; break;
+    case 'sankey':      ChartComponent = SpecPremiumSankeyChart; break;
     case 'candlestick': ChartComponent = SpecCandlestickChart; break;
+    case 'heatmap':     ChartComponent = SpecHeatmapChart; break;
     case 'network':     ChartComponent = SpecNetworkChart; break;
+    case 'funnel':      ChartComponent = SpecFunnelChart; break;
+    case 'radar':       ChartComponent = SpecRadarChart; break;
+    case 'gauge':       ChartComponent = SpecGaugeChart; break;
+    case 'radial_bar':  ChartComponent = SpecRadialBarChart; break;
+    case 'radial_line': ChartComponent = SpecRadialLineChart; break;
     default:            return null;
   }
 

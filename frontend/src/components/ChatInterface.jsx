@@ -7,8 +7,29 @@ import MenuItem from '@mui/material/MenuItem';
 import FormControl from '@mui/material/FormControl';
 import IconButton from '@mui/material/IconButton';
 import Tooltip from '@mui/material/Tooltip';
-import { ChatBox, ChatComposerAttachButton } from '@mui/x-chat';
-import { Bot, User, ChevronDown, SquarePen } from 'lucide-react';
+import Button from '@mui/material/Button';
+import {
+  Bot,
+  User,
+  ChevronDown,
+  SquarePen,
+  BarChart2,
+  PanelLeft,
+  Plus,
+  Share,
+  MoreHorizontal,
+  Copy,
+  ThumbsUp,
+  ThumbsDown,
+  RotateCcw,
+  Upload,
+  Mic,
+  AudioLines,
+  Search,
+  Sparkles,
+  Trash2,
+  Square,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import remarkGfm from 'remark-gfm';
@@ -268,8 +289,12 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
   ...otherProps
 }, ref) => {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, ml: 1 }}>
-      <ChatComposerAttachButton ref={ref} {...otherProps} />
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+      <Tooltip title="Attach">
+        <IconButton ref={ref} {...otherProps} className="composer-icon-button" aria-label="Attach file">
+          <Plus size={24} />
+        </IconButton>
+      </Tooltip>
       <FormControl size="small">
         <Select
           value={selectedModel}
@@ -278,7 +303,7 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
           IconComponent={ChevronDown}
           sx={{
             height: 34,
-            minWidth: 130,
+            minWidth: 122,
             fontSize: '0.88rem !important',
             fontWeight: '600 !important',
             color: '#B4B4B4 !important',
@@ -415,10 +440,82 @@ const NewChatButton = forwardRef(({ onNewChat, ...props }, ref) => (
   </Tooltip>
 ));
 
+function messageText(message) {
+  return message?.parts
+    ?.filter((part) => part.type === 'text')
+    .map((part) => part.text || '')
+    .join('') || '';
+}
+
+function patchAssistantMessage(messages, assistantId, updater) {
+  return messages.map((message) => {
+    if (message.id !== assistantId) return message;
+    const text = messageText(message);
+    return {
+      ...message,
+      status: 'streaming',
+      parts: [{ type: 'text', text: updater(text), state: 'streaming' }],
+    };
+  });
+}
+
+function ChatMessageActions({ text, onRegenerate }) {
+  const copyText = () => {
+    navigator.clipboard?.writeText(text || '').catch(() => {});
+  };
+  return (
+    <Box className="message-actions">
+      <Tooltip title="Copy response">
+        <IconButton size="small" onClick={copyText}><Copy size={18} /></IconButton>
+      </Tooltip>
+      <Tooltip title="Good response">
+        <IconButton size="small"><ThumbsUp size={18} /></IconButton>
+      </Tooltip>
+      <Tooltip title="Bad response">
+        <IconButton size="small"><ThumbsDown size={18} /></IconButton>
+      </Tooltip>
+      <Tooltip title="Share">
+        <IconButton size="small"><Upload size={18} /></IconButton>
+      </Tooltip>
+      <Tooltip title="Regenerate">
+        <IconButton size="small" onClick={onRegenerate}><RotateCcw size={18} /></IconButton>
+      </Tooltip>
+      <Tooltip title="More">
+        <IconButton size="small"><MoreHorizontal size={18} /></IconButton>
+      </Tooltip>
+    </Box>
+  );
+}
+
+function ChatMessageRow({ message, onRegenerate }) {
+  const role = message.role || (message.senderId === 'assistant' ? 'assistant' : 'user');
+  const text = messageText(message);
+  const isUser = role === 'user';
+  const isStreaming = message.status === 'streaming'
+    || message.parts?.some((part) => part.state === 'streaming');
+  const isWelcomeMessage = message.id === 'msg-welcome-1';
+  const showActions = !isUser && !isWelcomeMessage && !isStreaming && text.trim().length > 0;
+  return (
+    <Box className={`message-row ${isUser ? 'message-row-user' : 'message-row-assistant'}`}>
+      <Box className="message-content">
+        {!isUser && (
+          <Box className="assistant-avatar">
+            <Sparkles size={16} />
+          </Box>
+        )}
+        <Box className={`message-bubble ${isUser ? 'user-bubble' : 'assistant-bubble'}`}>
+          {renderMarkdown(text)}
+        </Box>
+        {showActions && <ChatMessageActions text={text} onRegenerate={onRegenerate} />}
+      </Box>
+    </Box>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
-export default function ChatInterface() {
+export default function ChatInterface({ setView }) {
   const showPlotFixtureGallery = new URLSearchParams(window.location.search).has('plotTest');
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -438,7 +535,13 @@ export default function ChatInterface() {
   const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [chatSessions, setChatSessions] = useState([]);
+  const [composerText, setComposerText] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [streamStatus, setStreamStatus] = useState('');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const selectedModelRef = useRef('');
+  const messagesEndRef = useRef(null);
+  const activeStreamControllerRef = useRef(null);
 
   const loadSessionMessages = useCallback((targetSessionId) => {
     return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`)
@@ -474,6 +577,10 @@ export default function ChatInterface() {
   useEffect(() => {
     refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
 
   useEffect(() => {
     let active = true;
@@ -635,85 +742,340 @@ export default function ChatInterface() {
     setActiveConversationId(nextId);
   }, [activeConversationId]);
 
+  const handleDeleteConversation = useCallback(async (event, targetSessionId) => {
+    event.stopPropagation();
+    if (!targetSessionId) return;
+
+    try {
+      const response = await fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) throw new Error('Failed to delete chat');
+
+      setChatSessions((current) => current.filter((item) => item.session_id !== targetSessionId));
+
+      if (targetSessionId === sessionId) {
+        handleNewChat();
+      } else {
+        refreshSessions();
+      }
+    } catch (error) {
+      console.error('Failed to delete chat session:', error);
+    }
+  }, [handleNewChat, refreshSessions, sessionId]);
+
+  const stopStreaming = useCallback(() => {
+    activeStreamControllerRef.current?.abort();
+    activeStreamControllerRef.current = null;
+    setIsSubmitting(false);
+    setStreamStatus('');
+  }, []);
+
+  const sendPrompt = useCallback(async (rawText) => {
+    const userText = String(rawText || '').trim();
+    if (!userText || isSubmitting) return;
+
+    const now = new Date().toISOString();
+    const userMessage = {
+      id: `user-${Date.now()}`,
+      conversationId: activeConversationId,
+      role: 'user',
+      author: youUser,
+      createdAt: now,
+      parts: [{ type: 'text', text: userText }],
+    };
+    const assistantId = `assistant-${Date.now() + 1}`;
+    const assistantMessage = {
+      id: assistantId,
+      conversationId: activeConversationId,
+      role: 'assistant',
+      author: botUser,
+      createdAt: now,
+      status: 'streaming',
+      parts: [{ type: 'text', text: '' }],
+    };
+
+    setComposerText('');
+    setIsSubmitting(true);
+    setStreamStatus('Starting stream');
+    setMessages((current) => [...current, userMessage, assistantMessage]);
+
+    const controller = new AbortController();
+    activeStreamControllerRef.current = controller;
+
+    try {
+      const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          user_message: userText,
+          model: selectedModelRef.current || null,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) throw new Error('Network response was not ok');
+
+      const reader = (await parseNDJSONStream(response, controller.signal)).getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (value.type === 'text-delta') {
+          setStreamStatus('Streaming response');
+          setMessages((current) => patchAssistantMessage(
+            current,
+            assistantId,
+            (text) => text + (value.delta || ''),
+          ));
+        } else if (value.type === 'status') {
+          setStreamStatus(value.label || value.stage || 'Processing');
+        } else if (value.type === 'data-plot' && value.plotId) {
+          setMessages((current) => patchAssistantMessage(
+            current,
+            assistantId,
+            (text) => `${text}\n${PLOT_TOKEN}${value.plotId}`,
+          ));
+        } else if (value.type === 'finish') {
+          setMessages((current) => current.map((message) => (
+            message.id === assistantId
+              ? {
+                  ...message,
+                  status: 'sent',
+                  parts: message.parts.map((part) => (
+                    part.type === 'text' ? { ...part, state: 'done' } : part
+                  )),
+                }
+              : message
+          )));
+        }
+      }
+
+      refreshSessions();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setMessages((current) => current.map((message) => (
+          message.id === assistantId
+            ? {
+                ...message,
+                status: 'stopped',
+                parts: [{ type: 'text', text: `${messageText(message).trim()}\n\nResponse stopped.`.trim(), state: 'done' }],
+              }
+            : message
+        )));
+        return;
+      }
+
+      setMessages((current) => patchAssistantMessage(
+        current,
+        assistantId,
+        () => `I could not reach the backend cleanly: ${error.message || 'request failed'}`,
+      ));
+    } finally {
+      if (activeStreamControllerRef.current === controller) {
+        activeStreamControllerRef.current = null;
+      }
+      setIsSubmitting(false);
+      setStreamStatus('');
+    }
+  }, [activeConversationId, isSubmitting, refreshSessions, sessionId]);
+
+  const handleComposerKeyDown = useCallback((event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendPrompt(composerText);
+    }
+  }, [composerText, sendPrompt]);
+
+  const handleRegenerate = useCallback(() => {
+    const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+    const text = messageText(lastUserMessage);
+    if (text) {
+      sendPrompt(text);
+    }
+  }, [messages, sendPrompt]);
+
   if (showPlotFixtureGallery) {
     return <PlotFixtureGallery />;
   }
 
   return (
-    <Box className="chat-app-shell">
-      <Box className="chat-main">
-        <Box className="chat-topbar">
-          <Box>
-            <Typography className="chat-topbar-title">{activeTitle}</Typography>
-            <Typography className="chat-topbar-subtitle">
+    <Box className={`chatgpt-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <Box className="chatgpt-sidebar">
+        <Box className="sidebar-header">
+          <Typography className="sidebar-brand">
+            Portfolio AI <span>Plus</span>
+          </Typography>
+          <Tooltip title="Collapse sidebar">
+            <IconButton
+              className="sidebar-icon"
+              aria-label="Collapse sidebar"
+              onClick={() => setSidebarCollapsed(true)}
+            >
+              <PanelLeft size={20} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        <Button
+          className="sidebar-new-chat"
+          startIcon={<SquarePen size={17} />}
+          onClick={handleNewChat}
+        >
+          New chat
+        </Button>
+
+        <Box className="sidebar-section">
+          <Typography className="sidebar-section-title">Tools</Typography>
+          <button className="sidebar-tool" type="button" onClick={() => setView('analytics')}>
+            <BarChart2 size={18} />
+            Analytics Dashboard
+          </button>
+          <button className="sidebar-tool" type="button">
+            <Search size={18} />
+            Explore Sessions
+          </button>
+        </Box>
+
+        <Box className="sidebar-section sidebar-recents">
+          <Typography className="sidebar-section-title">Recents</Typography>
+          {conversations.slice(0, 14).map((conversation) => (
+            <div
+              key={conversation.id}
+              role="button"
+              tabIndex={0}
+              className={`recent-chat ${conversation.id === sessionId ? 'active' : ''}`}
+              onClick={() => handleActiveConversationChange(conversation.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleActiveConversationChange(conversation.id);
+                }
+              }}
+            >
+              <span>{conversation.title}</span>
+              <Tooltip title="Delete chat">
+                <IconButton
+                  className="recent-delete"
+                  aria-label={`Delete ${conversation.title}`}
+                  size="small"
+                  onClick={(event) => handleDeleteConversation(event, conversation.id)}
+                >
+                  <Trash2 size={16} />
+                </IconButton>
+              </Tooltip>
+            </div>
+          ))}
+        </Box>
+
+        <Box className="sidebar-profile">
+          <Box className="profile-avatar">AI</Box>
+          <Box className="profile-copy">
+            <Typography className="profile-name">Portfolio Governance</Typography>
+            <Typography className="profile-plan">Advisory workspace</Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      <Box className="chatgpt-main">
+        <Box className="chatgpt-topbar">
+          {sidebarCollapsed && (
+            <Tooltip title="Open sidebar">
+              <IconButton
+                className="topbar-icon sidebar-open-button"
+                aria-label="Open sidebar"
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <PanelLeft size={22} />
+              </IconButton>
+            </Tooltip>
+          )}
+          <Box className="topbar-title-wrap">
+            <Typography className="topbar-title">{activeTitle}</Typography>
+            <Typography className="topbar-status">
               {historyLoaded ? 'Memory loaded' : 'Loading memory...'}
             </Typography>
           </Box>
+          <Box className="topbar-actions">
+            <Button
+              className="topbar-dashboard"
+              startIcon={<BarChart2 size={16} />}
+              onClick={() => setView('analytics')}
+            >
+              Analytics
+            </Button>
+            <Button className="share-button" startIcon={<Share size={18} />}>
+              Share
+            </Button>
+            <Tooltip title="More">
+              <IconButton className="topbar-icon" aria-label="More options">
+                <MoreHorizontal size={22} />
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Box>
-        <Box className="chatbox-wrap">
-          <ChatBox
-            key={`${sessionId}-${historyLoaded ? 'loaded' : 'loading'}`}
-            adapter={adapter}
-            activeConversationId={activeConversationId}
-            conversations={conversations}
-            messages={messages}
-            onActiveConversationChange={handleActiveConversationChange}
-            onMessagesChange={handleMessagesChange}
-            slots={{
-              composerAttachButton: CustomAttachButtonWithModelSelector,
-              conversationHeaderActions: NewChatButton,
-            }}
-            slotProps={{
-              conversationHeaderActions: {
-                onNewChat: handleNewChat,
-              },
-              messageContent: {
-                partProps: {
-                  text: { renderText: renderMarkdown },
-                },
-              },
-              composerInput: {
-                sx: {
-                  color: '#ECECEC',
-                  backgroundColor: '#1A1A1A',
-                  '& .MuiOutlinedInput-root': {
-                    color: '#ECECEC',
-                    '& fieldset': {
-                      borderColor: '#404040',
-                    },
-                    '&:hover fieldset': {
-                      borderColor: '#666666',
-                    },
-                    '&.Mui-focused fieldset': {
-                      borderColor: '#FFFFFF',
-                    },
-                  },
-                }
-              },
-              composerAttachButton: {
-                selectedModel,
-                setSelectedModel,
-                availableModels,
-                loadingModels,
-              }
-            }}
-            suggestions={[
-              'Plot AAPL and MSFT prices from 2020 to 2024',
-              'Show me the optimal portfolio allocation',
-              'Analyse systemic risk for my portfolio',
-              'What is the governance score for TSLA?',
-            ]}
-            suggestionsAutoSubmit={false}
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              height: '100%',
-              border: 'none',
-              borderRadius: 0,
-              backgroundColor: '#0D0D0D',
-              color: '#ECECEC',
-            }}
-          />
+
+        <Box className="chat-scroll">
+          <Box className="message-column">
+            {messages.map((message) => (
+              <ChatMessageRow
+                key={message.id}
+                message={message}
+                onRegenerate={handleRegenerate}
+              />
+            ))}
+            {isSubmitting && (
+              <Box className="streaming-status">
+                <Sparkles size={15} />
+                {streamStatus || 'Thinking through the governance context'}
+              </Box>
+            )}
+            <div ref={messagesEndRef} />
+          </Box>
+        </Box>
+
+        <Box className="composer-shell">
+          <Box className="composer-card">
+            <CustomAttachButtonWithModelSelector
+              selectedModel={selectedModel}
+              setSelectedModel={setSelectedModel}
+              availableModels={availableModels}
+              loadingModels={loadingModels}
+            />
+            <textarea
+              className="composer-input"
+              value={composerText}
+              onChange={(event) => setComposerText(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="Ask anything"
+              rows={1}
+            />
+            <Box className="composer-side-actions">
+              <Typography className="thinking-label">Thinking</Typography>
+              <ChevronDown size={16} />
+              <Tooltip title="Voice input">
+                <IconButton className="composer-icon-button" aria-label="Voice input">
+                  <Mic size={21} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip title={isSubmitting ? 'Stop response' : 'Send'}>
+                <span>
+                  <IconButton
+                    className={`composer-send-button ${isSubmitting ? 'composer-stop-button' : ''}`}
+                    aria-label={isSubmitting ? 'Stop response' : 'Send message'}
+                    disabled={!composerText.trim() && !isSubmitting}
+                    onClick={() => (isSubmitting ? stopStreaming() : sendPrompt(composerText))}
+                  >
+                    {isSubmitting ? <Square size={18} fill="currentColor" /> : <AudioLines size={22} />}
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Box>
+          </Box>
+          <Typography className="composer-disclaimer">
+            Portfolio AI can make mistakes. Check important governance outputs.
+          </Typography>
         </Box>
       </Box>
     </Box>

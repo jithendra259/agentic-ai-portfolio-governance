@@ -1,5 +1,8 @@
+import React, { useState } from 'react';
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
 import ChatInterface from './components/ChatInterface';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
+
 
 const darkTheme = createTheme({
   palette: {
@@ -93,12 +96,19 @@ const darkTheme = createTheme({
 });
 
 function App() {
+  const [view, setView] = useState('chat');
+
   return (
     <ThemeProvider theme={darkTheme}>
       <CssBaseline />
-      <ChatInterface />
+      {view === 'chat' ? (
+        <ChatInterface setView={setView} />
+      ) : (
+        <AnalyticsDashboard setView={setView} />
+      )}
     </ThemeProvider>
   );
 }
 
 export default App;
+
