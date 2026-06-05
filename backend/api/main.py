@@ -294,18 +294,47 @@ def _attach_inline_plot_tokens(session_id: str, response_text: str, resolved: di
 
 def _plot_spec_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     spec = dict(payload)
-    spec["plot_type"] = payload.get("plot_type") or payload.get("chart_type") or "bar"
+    chart_type = payload.get("chart_type")
+    if chart_type in {"bar", "rangeBar", "histogram", "mirroredBar"}:
+        spec["plot_type"] = "bar"
+    elif chart_type in {"pie", "donut", "center_label_donut", "nested_donut", "semi_donut"}:
+        spec["plot_type"] = "pie"
+    elif chart_type in {"scatter", "bubble_scatter", "scatter_regression", "webgl_scatter"}:
+        spec["plot_type"] = "scatter"
+    else:
+        spec["plot_type"] = payload.get("plot_type") or chart_type or "bar"
     spec["plot_id"] = payload.get("plot_short_id") or payload.get("plot_id")
-    spec["title"] = payload.get("title") or "Ticker Concentration Plot"
+    spec["title"] = payload.get("title") or spec["plot_id"] or "Chart"
     spec["series"] = payload.get("series") or [
         {
             "key": payload.get("x_axis") or "allocation_percent",
             "label": "Current allocation",
         }
     ]
+    if spec["plot_type"] == "pie":
+        spec["centerLabel"] = payload.get("centerLabel") or payload.get("center_label")
+    if spec["plot_type"] == "line":
+        spec["x_label"] = payload.get("x_label") or payload.get("x_axis") or "Date"
+        spec["y_label"] = payload.get("y_label") or payload.get("y_axis") or "Value"
+        spec["connect_nulls"] = bool(payload.get("connect_nulls", False))
+        spec["curve"] = payload.get("curve") or "linear"
+    if spec["plot_type"] == "scatter":
+        x_axis_label = payload.get("xAxis", [{}])[0].get("label") if isinstance(payload.get("xAxis"), list) and payload.get("xAxis") else None
+        y_axis_label = payload.get("yAxis", [{}])[0].get("label") if isinstance(payload.get("yAxis"), list) and payload.get("yAxis") else None
+        spec["x_label"] = payload.get("x_label") or x_axis_label or payload.get("x_axis") or "X"
+        spec["y_label"] = payload.get("y_label") or y_axis_label or payload.get("y_axis") or "Y"
+        if payload.get("x_unit") == "%":
+            spec["x_format"] = "percent"
+        if payload.get("y_unit") == "%":
+            spec["y_format"] = "percent"
     spec["layout"] = payload.get("layout") or ("horizontal" if payload.get("bar_mode") == "horizontal" else "vertical")
     spec["sort"] = payload.get("sort") or "descending"
-    spec["height"] = payload.get("height") or max(360, min(860, len(payload.get("data", [])) * 36 + 116))
+    if spec["plot_type"] == "pie":
+        spec["height"] = payload.get("height") or 420
+    elif spec["plot_type"] == "scatter":
+        spec["height"] = payload.get("height") or 420
+    else:
+        spec["height"] = payload.get("height") or max(360, min(860, len(payload.get("data", [])) * 36 + 116))
     return spec
 
 

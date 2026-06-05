@@ -28,6 +28,7 @@ def build_response_contract(
         "data_used": _data_used(fallback, state),
         "fallback_used": bool(fallback.get("fallback_used")),
         "missing_inputs": state.get("missing_inputs", []),
+        "planner": state.get("current_plan"),
         "result": result or fallback.get("status") or "",
         "plots": [plot_payload] if isinstance(plot_payload, dict) and validation.get("can_render", True) else [],
         "warnings": state.get("warnings", []) + validation.get("warnings", []),

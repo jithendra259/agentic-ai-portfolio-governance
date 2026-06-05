@@ -76,11 +76,18 @@ def classify_confirmation(message: str) -> str | None:
     return None
 
 
-def build_equal_weight_pending_action(reason: str, target_plot_id: str, tickers: list[str], universe: str | None) -> dict[str, Any]:
+def build_equal_weight_pending_action(
+    reason: str,
+    target_plot_id: str,
+    tickers: list[str],
+    universe: str | None,
+    chart_type: str | None = None,
+) -> dict[str, Any]:
     return {
         "type": "use_equal_weight_proxy",
         "reason": reason,
         "target_plot_id": target_plot_id,
+        "target_chart_type": chart_type,
         "requires_confirmation": True,
         "target_universe": universe,
         "target_tickers": list(tickers),
@@ -117,7 +124,7 @@ def apply_pending_action(state: dict[str, Any], message: str) -> tuple[dict[str,
             "approved_by_user": True,
         }
         state["last_plot_id"] = pending.get("target_plot_id")
-        state["last_chart_type"] = "bar"
+        state["last_chart_type"] = pending.get("target_chart_type") or state.get("last_chart_type") or "bar"
         state["last_plot_status"] = "ready"
         state["missing_inputs"] = []
         state["pending_action"] = None

@@ -1,5 +1,8 @@
 import { BAR_MODES, BAR_SORTS, BAR_UNITS, REQUIRED_BAR_FIELDS, normalizePlotId } from './barChartSchema.js';
 import { getBarChartDefinition } from './barChartRegistry.js';
+import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+
+const CHART_TYPES = new Set(['bar', 'rangeBar', 'histogram', 'mirroredBar']);
 
 export function validateBarChartPayload(payload, options = {}) {
   const errors = [];
@@ -17,27 +20,47 @@ export function validateBarChartPayload(payload, options = {}) {
     errors.push(`requested universe ${options.universe} does not match payload universe ${payload.universe}`);
   }
 
+  const definition = getBarChartDefinition(normalizePlotId(payload.plot_id));
+  const chartType = payload.chart_type || definition?.chart_type || 'bar';
+  const chartTier = payload.chart_tier || definition?.chart_tier || 'free';
+  const requiresPremium = Boolean(payload.requires_premium ?? definition?.requires_premium);
+  const premiumEnabled = getMuiPremiumChartsEnabled(options);
+  const fallbackChart = payload.fallback_chart || definition?.fallback_chart || null;
+
   REQUIRED_BAR_FIELDS.forEach((field) => {
+    if (field === 'bar_mode' && chartType !== 'bar') return;
     if (payload[field] == null || payload[field] === '') errors.push(`missing ${field}`);
   });
 
-  if (payload.chart_type !== 'bar') errors.push('chart_type must be bar');
+  if (!CHART_TYPES.has(chartType)) errors.push(`invalid chart_type ${chartType}`);
   if (payload.bar_mode && !BAR_MODES.has(payload.bar_mode)) errors.push(`invalid bar_mode ${payload.bar_mode}`);
   if (payload.unit && !BAR_UNITS.has(payload.unit)) errors.push(`invalid unit ${payload.unit}`);
   if (payload.sort && !BAR_SORTS.has(payload.sort)) errors.push(`invalid sort ${payload.sort}`);
   if (!Array.isArray(payload.series) || payload.series.length === 0) errors.push('series must contain at least one series');
   if (!Array.isArray(payload.data) || payload.data.length === 0) errors.push('data must contain at least one row');
 
-  const definition = getBarChartDefinition(normalizePlotId(payload.plot_id));
-  const requiredFields = payload.required_fields || definition?.requiredFields || [];
+  if (requiresPremium && !premiumEnabled) {
+    if (fallbackChart) {
+      warnings.push(premiumUnavailableMessage(fallbackChart));
+    } else {
+      errors.push(premiumUnavailableMessage(null));
+    }
+  }
+
+  const requiredFields = payload.required_fields || definition?.required_fields || definition?.requiredFields || [];
   if (Array.isArray(payload.data)) {
     payload.data.forEach((row, index) => {
       requiredFields.forEach((field) => {
         if (row?.[field] == null) errors.push(`row ${index} missing required field ${field}`);
       });
-      payload.series?.forEach((series) => {
-        if (series?.key && row?.[series.key] == null) errors.push(`row ${index} missing series field ${series.key}`);
-      });
+      if (chartType === 'rangeBar') validateRangeRow(row, index, payload, definition, errors);
+      if (chartType === 'mirroredBar') validateMirroredRow(row, index, errors);
+      if (chartType === 'histogram') validateHistogramRow(row, index, errors);
+      if (chartType === 'bar') {
+        payload.series?.forEach((series) => {
+          if (series?.key && row?.[series.key] == null) errors.push(`row ${index} missing series field ${series.key}`);
+        });
+      }
     });
   }
 
@@ -56,7 +79,34 @@ export function validateBarChartPayload(payload, options = {}) {
 
   validateConcentrationMath(payload, errors);
 
-  return { valid: errors.length === 0, errors, warnings };
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    chart_tier: chartTier,
+    requires_premium: requiresPremium,
+    premium_enabled: premiumEnabled,
+    fallback_chart: fallbackChart,
+    premium_unavailable: requiresPremium && !premiumEnabled,
+  };
+}
+
+function validateRangeRow(row, index, payload, definition, errors) {
+  const startField = payload.rangeStartField || definition?.rangeStartField || (row?.start != null ? 'start' : 'start_value');
+  const endField = payload.rangeEndField || definition?.rangeEndField || (row?.end != null ? 'end' : 'end_value');
+  if (row?.[startField] == null) errors.push(`row ${index} missing required field ${startField}`);
+  if (row?.[endField] == null) errors.push(`row ${index} missing required field ${endField}`);
+}
+
+function validateMirroredRow(row, index, errors) {
+  if (row?.current_weight == null) errors.push(`row ${index} missing required field current_weight`);
+  if (row?.advisory_weight == null) errors.push(`row ${index} missing required field advisory_weight`);
+}
+
+function validateHistogramRow(row, index, errors) {
+  for (const field of ['bin_start', 'bin_end', 'count']) {
+    if (row?.[field] == null) errors.push(`row ${index} missing required field ${field}`);
+  }
 }
 
 function validateConcentrationMath(payload, errors) {

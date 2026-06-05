@@ -3,6 +3,8 @@ import { LineChart } from '@mui/x-charts/LineChart';
 import { BarChart } from '@mui/x-charts/BarChart';
 import { PieChart } from '@mui/x-charts/PieChart';
 import { ScatterChart } from '@mui/x-charts/ScatterChart';
+import { ScatterChartPro } from '@mui/x-charts-pro/ScatterChartPro';
+import { ScatterChartPremium } from '@mui/x-charts-premium/ScatterChartPremium';
 import { SparkLineChart } from '@mui/x-charts/SparkLineChart';
 import { Heatmap } from '@mui/x-charts-premium/Heatmap';
 import { SankeyChart } from '@mui/x-charts-premium/SankeyChart';
@@ -12,7 +14,8 @@ import { Gauge } from '@mui/x-charts-premium/Gauge';
 import { Unstable_RadialBarChart as RadialBarChart } from '@mui/x-charts-premium/RadialBarChart';
 import { Unstable_RadialLineChart as RadialLineChart } from '@mui/x-charts-premium/RadialLineChart';
 import { Box, Typography, Paper } from '@mui/material';
-import { useDrawingArea, useXScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
+import { useDrawingArea, useXScale, useYScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
+import { ChartsClipPath } from '@mui/x-charts/ChartsClipPath';
 import { useTheme, alpha } from '@mui/material/styles';
 import { BACKEND_BASE } from '../config/api';
 import SmartBarChartRenderer from './SmartBarChartRenderer';
@@ -72,8 +75,14 @@ function useResponsiveChartWidth(fallback = 360) {
 }
 
 function getValueFormatter(format) {
-  if (format === 'percent') {
+  if (format === 'percent' || format === '%') {
     return v => v == null ? '' : `${v.toFixed(1)}%`;
+  }
+  if (format === 'decimal') {
+    return v => v == null ? '' : Number(v).toFixed(2);
+  }
+  if (format === 'beta') {
+    return v => v == null ? '' : `${Number(v).toFixed(2)} beta`;
   }
   if (format === 'k') {
     return v => v == null ? '' : `${(v / 1000).toFixed(1)}k`;
@@ -293,7 +302,7 @@ function SpecLineChart({ spec }) {
       if (s.shape) entry.shape = s.shape;
 
       // ── Connect nulls ──
-      entry.connectNulls = s.connectNulls ?? true;
+      entry.connectNulls = s.connectNulls ?? spec.connect_nulls ?? spec.connectNulls ?? false;
 
       // ── Highlight scope (per-series overrides global) ──
       if (s.highlightScope) {
@@ -622,6 +631,10 @@ function SpecBarChart({ spec }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function PieCenterLabel({ children }) {
   const { width, height, left, top } = useDrawingArea();
+  const lines = String(children ?? '').split('\n').filter(Boolean);
+  const fontSize = lines.length > 2 ? 12 : 16;
+  const lineHeight = fontSize + 3;
+  const firstDy = lines.length > 1 ? -((lines.length - 1) * lineHeight) / 2 : 0;
   return (
     <text
       x={left + width / 2}
@@ -629,9 +642,13 @@ function PieCenterLabel({ children }) {
       textAnchor="middle"
       dominantBaseline="central"
       fill="#ffffff"
-      style={{ fontSize: '1.25rem', fontWeight: 'bold' }}
+      style={{ fontSize, fontWeight: 'bold' }}
     >
-      {children}
+      {lines.map((line, index) => (
+        <tspan key={`${line}-${index}`} x={left + width / 2} dy={index === 0 ? firstDy : lineHeight}>
+          {line}
+        </tspan>
+      ))}
     </text>
   );
 }
@@ -764,7 +781,8 @@ function SpecPieChart({ spec }) {
 
   const [chartRef, chartWidth] = useResponsiveChartWidth();
   const compact = chartWidth < 460;
-  const chartHeight = compact ? 300 : CHART_HEIGHT;
+  const chartHeight = compact ? Math.min(320, spec.height || 320) : (spec.height || CHART_HEIGHT);
+  const centerLabel = spec.centerLabel || spec.center_label;
   const responsiveSeries = useMemo(() => (
     compact
       ? mappedSeries.map((series) => ({
@@ -818,7 +836,7 @@ function SpecPieChart({ spec }) {
         }}
         {...chartProps}
       >
-        {spec.centerLabel && <PieCenterLabel>{spec.centerLabel}</PieCenterLabel>}
+        {centerLabel && <PieCenterLabel>{centerLabel}</PieCenterLabel>}
       </PieChart>
       {legendItems.length > 0 && (
         <Box
@@ -857,15 +875,22 @@ function SpecScatterChart({ spec }) {
         x: toFiniteNumber(pt.x),
         y: toFiniteNumber(pt.y),
         id: pt.id !== undefined ? pt.id : `pt-${j}`,
+        label: pt.label,
         ...(pt.z !== undefined ? { z: toFiniteNumber(pt.z) } : {}),
+        ...(pt.sizeValue !== undefined ? { sizeValue: toFiniteNumber(pt.sizeValue) } : {}),
+        ...(pt.colorValue !== undefined ? { colorValue: pt.colorValue } : {}),
       }));
       const entry = {
+        id: s.id || s.name || `scatter-${i}`,
         type: 'scatter',
         label: s.label || s.name || `Series ${i + 1}`,
         data: dataPoints,
         color: s.color || PALETTE[i % PALETTE.length],
       };
       if (s.markerSize !== undefined) entry.markerSize = s.markerSize;
+      if (s.sizeAxisId) entry.sizeAxisId = s.sizeAxisId;
+      if (s.colorAxisId) entry.colorAxisId = s.colorAxisId;
+      if (s.labelMarkType) entry.labelMarkType = s.labelMarkType;
       
       if (s.highlightScope) {
         entry.highlightScope = s.highlightScope;
@@ -881,13 +906,16 @@ function SpecScatterChart({ spec }) {
       return spec.xAxis.map(ax => ({
         ...ax,
         tickLabelStyle: AXIS_STYLE,
-        valueFormatter: getValueFormatter(ax.value_format || spec.x_format),
+        valueFormatter: getValueFormatter(ax.value_format || spec.x_format || spec.x_unit),
+        label: ax.label || spec.x_label || spec.x_axis || '',
+        domainLimit: ax.domainLimit || 'nice',
       }));
     }
     return [{
       tickLabelStyle: AXIS_STYLE,
       label: spec.x_label || '',
-      valueFormatter: getValueFormatter(spec.x_format),
+      valueFormatter: getValueFormatter(spec.x_format || spec.x_unit),
+      domainLimit: 'nice',
     }];
   }, [spec]);
 
@@ -896,13 +924,16 @@ function SpecScatterChart({ spec }) {
       return spec.yAxis.map(ax => ({
         ...ax,
         tickLabelStyle: AXIS_STYLE,
-        valueFormatter: getValueFormatter(ax.value_format || spec.y_format),
+        valueFormatter: getValueFormatter(ax.value_format || spec.y_format || spec.y_unit),
+        label: ax.label || spec.y_label || spec.y_axis || '',
+        domainLimit: ax.domainLimit || 'nice',
       }));
     }
     return [{
       tickLabelStyle: AXIS_STYLE,
       label: spec.y_label || '',
-      valueFormatter: getValueFormatter(spec.y_format),
+      valueFormatter: getValueFormatter(spec.y_format || spec.y_unit),
+      domainLimit: 'nice',
     }];
   }, [spec]);
 
@@ -915,42 +946,100 @@ function SpecScatterChart({ spec }) {
     return undefined;
   }, [spec]);
 
-  if (!series.length) return null;
-
   const chartProps = {};
   if (spec.skipAnimation) chartProps.skipAnimation = true;
   if (spec.hideLegend) chartProps.hideLegend = true;
   if (spec.colors && Array.isArray(spec.colors)) chartProps.colors = spec.colors;
+  if (spec.renderer) chartProps.renderer = spec.renderer;
   chartProps.hitAreaRadius = spec.hitAreaRadius !== undefined ? spec.hitAreaRadius : 20;
 
   const gridConfig = spec.grid || { horizontal: true, vertical: true };
   const animationSx = useMemo(() => getAnimationSx(spec.animation), [spec.animation]);
   const [chartRef, chartWidth] = useResponsiveChartWidth();
+  const chartHeight = getResponsiveChartHeight(spec, 420);
+  const ChartComponent = spec.component === 'ScatterChartPremium' || spec.chart_type === 'webgl_scatter' || spec.renderer === 'webgl'
+    ? ScatterChartPremium
+    : spec.component === 'ScatterChartPro' || spec.chart_type === 'bubble_scatter'
+      ? ScatterChartPro
+      : ScatterChart;
+
+  if (!series.length) return null;
 
   return (
-    <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
-      <ScatterChart
+    <Box ref={chartRef} sx={{ width: '100%', minWidth: 0, ...animationSx }}>
+      <ChartComponent
         width={chartWidth}
         series={series}
         xAxis={xAxisConfig}
         yAxis={yAxisConfig}
         {...(zAxisConfig ? { zAxis: zAxisConfig } : {})}
-        height={CHART_HEIGHT}
-        margin={{ top: 16, right: 24, left: 60, bottom: 56 }}
+        height={chartHeight}
+        margin={spec.margin || { top: 46, right: 28, left: 72, bottom: 68 }}
         grid={gridConfig}
         sx={{
           '& .MuiChartsAxis-tickLabel': AXIS_STYLE,
+          '& .MuiChartsAxis-label': { fill: '#e5e7eb', fontSize: 12, fontWeight: 600 },
           '& .MuiChartsGrid-line': GRID_STYLE,
           '& .MuiChartsLegend-root': {
             color: '#e5e7eb',
             fontSize: 12,
           },
+          '& .MuiScatter-root .MuiScatter-mark': {
+            fillOpacity: spec.chart_type === 'bubble_scatter' ? 0.68 : 0.9,
+            strokeWidth: 1.2,
+          },
           ...animationSx,
         }}
-        slotProps={{ legend: { sx: { color: '#e5e7eb', fontSize: 12 } } }}
+        slotProps={{
+          legend: {
+            position: { vertical: 'top', horizontal: 'middle' },
+            sx: { color: '#e5e7eb', fontSize: 12 },
+          },
+        }}
         {...chartProps}
-      />
+      >
+        {spec.regression_line && <ScatterRegressionLine regression={spec.regression_line} />}
+      </ChartComponent>
     </Box>
+  );
+}
+
+function ScatterRegressionLine({ regression }) {
+  const xScale = useXScale();
+  const yScale = useYScale();
+  const clipPathId = `scatter-regression-${React.useId()}`;
+
+  if (!regression || !xScale || !yScale) return null;
+  const xMin = Number(regression.x_min);
+  const xMax = Number(regression.x_max);
+  const slope = Number(regression.slope);
+  const intercept = Number(regression.intercept);
+  const yMin = Number.isFinite(Number(regression.y_min)) ? Number(regression.y_min) : slope * xMin + intercept;
+  const yMax = Number.isFinite(Number(regression.y_max)) ? Number(regression.y_max) : slope * xMax + intercept;
+  if (![xMin, xMax, yMin, yMax].every(Number.isFinite)) return null;
+
+  const x1 = xScale(xMin);
+  const x2 = xScale(xMax);
+  const y1 = yScale(yMin);
+  const y2 = yScale(yMax);
+  if (![x1, x2, y1, y2].every(Number.isFinite)) return null;
+
+  return (
+    <React.Fragment>
+      <ChartsClipPath id={clipPathId} />
+      <g clipPath={`url(#${clipPathId})`}>
+        <line
+          x1={x1}
+          y1={y1}
+          x2={x2}
+          y2={y2}
+          stroke={regression.color || '#f25467'}
+          strokeWidth={2}
+          strokeDasharray={regression.strokeDasharray || '6 4'}
+          pointerEvents="none"
+        />
+      </g>
+    </React.Fragment>
   );
 }
 

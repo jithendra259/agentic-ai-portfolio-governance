@@ -2,6 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { adaptBarChartPayload } from './barChartDataAdapter.js';
 import { inferBarMode } from './barChartIntelligence.js';
+import { CHART_TIER } from './chartTierConfig.js';
+import { getBarChartDefinition } from './barChartRegistry.js';
 import { validateBarChartPayload } from './barChartValidator.js';
 
 function basePayload(overrides = {}) {
@@ -100,6 +102,74 @@ describe('bar chart intelligence', () => {
     }));
     assert.deepEqual(adapted.dataset.map((row) => row.ticker), ['NVDA', 'MSFT', 'AAPL']);
   });
+
+  it('premium disabled range bars fall back to a standard min/max bar', () => {
+    const adapted = adaptBarChartPayload({
+      plot_type: 'bar',
+      plot_id: 'return_range_by_ticker',
+      chart_type: 'rangeBar',
+      chart_tier: CHART_TIER.PREMIUM,
+      component: 'BarChartPremium',
+      requires_premium: true,
+      fallback_chart: 'standard_min_max_bar',
+      title: 'Return Range by Ticker',
+      x_axis: 'ticker',
+      y_axis: 'return_range_percent',
+      unit: 'percent',
+      series: [{ key: 'return_range', label: 'Return range' }],
+      data: [{ ticker: 'AAPL', min_return: -2.3, max_return: 3.1 }],
+    }, { premiumEnabled: false });
+
+    assert.equal(adapted.valid, true);
+    assert.equal(adapted.usePremiumRenderer, false);
+    assert.equal(adapted.payload.fallback_used, true);
+    assert.equal(adapted.payload.status, 'premium_unavailable');
+    assert.deepEqual(adapted.series.map((series) => series.dataKey), ['min_return', 'max_return']);
+  });
+
+  it('premium enabled return range renders a rangeBar series', () => {
+    const adapted = adaptBarChartPayload({
+      plot_type: 'bar',
+      plot_id: 'return_range_by_ticker',
+      chart_type: 'rangeBar',
+      chart_tier: CHART_TIER.PREMIUM,
+      component: 'BarChartPremium',
+      requires_premium: true,
+      fallback_chart: 'standard_min_max_bar',
+      title: 'Return Range by Ticker',
+      x_axis: 'ticker',
+      y_axis: 'return_range_percent',
+      unit: 'percent',
+      series: [{ key: 'return_range', label: 'Return range' }],
+      data: [{ ticker: 'AAPL', min_return: -2.3, max_return: 3.1 }],
+    }, { premiumEnabled: true });
+
+    assert.equal(adapted.valid, true);
+    assert.equal(adapted.usePremiumRenderer, true);
+    assert.equal(adapted.series[0].type, 'rangeBar');
+    assert.deepEqual(adapted.series[0].datasetKeys, { start: 'min_return', end: 'max_return' });
+  });
+
+  it('histogram payload keeps adjacent bars tight', () => {
+    const adapted = adaptBarChartPayload({
+      plot_type: 'bar',
+      plot_id: 'return_distribution_histogram',
+      chart_type: 'histogram',
+      chart_tier: CHART_TIER.FREE,
+      component: 'BarChart',
+      title: 'Return Distribution',
+      x_axis: 'return_bin',
+      y_axis: 'count',
+      unit: 'count',
+      series: [{ key: 'count', label: 'Frequency' }],
+      data: [{ bin_start: -2, bin_end: -1, count: 4 }],
+    });
+
+    assert.equal(adapted.valid, true);
+    assert.equal(adapted.xAxis[0].categoryGapRatio, 0);
+    assert.equal(adapted.xAxis[0].barGapRatio, 0);
+    assert.equal(adapted.dataset[0].return_bin, '-2.0--1.0');
+  });
 });
 
 describe('bar chart validation', () => {
@@ -133,5 +203,67 @@ describe('bar chart validation', () => {
     const result = validateBarChartPayload(basePayload({ universe: 'U3' }), { universe: 'U1' });
     assert.equal(result.valid, false);
     assert.match(result.errors.join('\n'), /universe/);
+  });
+
+  it('registry marks premium chart definitions as optional', () => {
+    const definition = getBarChartDefinition('return_range_by_ticker');
+    assert.equal(definition.chart_tier, CHART_TIER.PREMIUM);
+    assert.equal(definition.requires_premium, true);
+    assert.equal(definition.fallback_chart, 'standard_min_max_bar');
+  });
+
+  it('range bars require start and end fields', () => {
+    const result = validateBarChartPayload({
+      ...basePayload({
+        plot_id: 'return_range_by_ticker',
+        chart_type: 'rangeBar',
+        chart_tier: CHART_TIER.PREMIUM,
+        component: 'BarChartPremium',
+        requires_premium: true,
+        fallback_chart: 'standard_min_max_bar',
+        x_axis: 'ticker',
+        y_axis: 'return_range_percent',
+        data: [{ ticker: 'AAPL', min_return: -2.3 }],
+      }),
+    }, { premiumEnabled: true });
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /max_return/);
+  });
+
+  it('waterfall charts require start_value and end_value', () => {
+    const result = validateBarChartPayload(basePayload({
+      plot_id: 'portfolio_return_waterfall',
+      chart_type: 'rangeBar',
+      chart_tier: CHART_TIER.PREMIUM,
+      component: 'BarChartPremium',
+      requires_premium: true,
+      fallback_chart: 'contribution_bar',
+      x_axis: 'component',
+      y_axis: 'return_contribution_percent',
+      data: [{ component: 'AAPL', start_value: 0 }],
+    }), { premiumEnabled: true });
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /end_value/);
+  });
+
+  it('mirrored current vs advisory blocks missing advisory weights', () => {
+    const result = validateBarChartPayload(basePayload({
+      plot_id: 'current_vs_advisory_mirrored_bar',
+      chart_type: 'mirroredBar',
+      chart_tier: CHART_TIER.PREMIUM,
+      component: 'BarChartPremium',
+      requires_premium: true,
+      fallback_chart: 'grouped_bar',
+      x_axis: 'weight_percent',
+      y_axis: 'ticker',
+      data: [{ ticker: 'AAPL', current_weight: 20 }],
+    }), { premiumEnabled: true });
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join('\n'), /advisory_weight/);
+  });
+
+  it('free charts remain valid when premium is disabled', () => {
+    const result = validateBarChartPayload(basePayload(), { premiumEnabled: false });
+    assert.equal(result.valid, true);
   });
 });

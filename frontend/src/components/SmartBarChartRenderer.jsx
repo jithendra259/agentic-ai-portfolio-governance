@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { Box, Typography } from '@mui/material';
+import { BarChart } from '@mui/x-charts/BarChart';
 import { BarChartPremium } from '@mui/x-charts-premium/BarChartPremium';
 import { adaptBarChartPayload } from './barChartDataAdapter.js';
 import { chooseRenderer } from './barChartIntelligence.js';
@@ -38,10 +39,11 @@ export default function SmartBarChartRenderer({ spec }) {
   }
 
   const renderer = adapted.renderer || chooseRenderer(adapted.payload);
+  const ChartComponent = adapted.usePremiumRenderer ? BarChartPremium : BarChart;
 
   return (
     <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
-      <BarChartPremium
+      <ChartComponent
         width={chartWidth}
         height={adapted.chartHeight}
         dataset={adapted.dataset}

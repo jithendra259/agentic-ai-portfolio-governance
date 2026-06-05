@@ -60,6 +60,8 @@ def default_session_state(session_id: str) -> dict[str, Any]:
         "last_chart_type": None,
         "last_bar_mode": None,
         "last_plot_status": None,
+        "current_plan": None,
+        "last_plan": None,
         "last_modules_called": [],
         "last_modules_skipped": [],
         "missing_inputs": [],
