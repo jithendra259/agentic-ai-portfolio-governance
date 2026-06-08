@@ -297,12 +297,98 @@ def _extract_tickers(query: str) -> list[str]:
         "THE", "RISK", "WHAT", "IS", "MY", "YOUR", "LAST", "THIS", "THAT",
         "DO", "NOT", "DONT", "DON", "NO", "ANSWER", "QUESTION",
     }
-    tickers = []
-    for ticker in re.findall(r"\b[A-Z]{1,5}\b", query.upper()):
-        if ticker in stopwords or (ticker.startswith("U") and ticker[1:].isdigit()):
+    
+    # 1. Try to find explicit lists like ["AAPL", "MSFT"] or [AAPL, MSFT]
+    list_matches = re.findall(r"\[\s*([^\]]+)\s*\]", query)
+    if list_matches:
+        explicit_tickers = []
+        for match in list_matches:
+            words = re.findall(r"\b[A-Z]{1,5}\b", match.upper())
+            for w in words:
+                if w not in stopwords and not (w.startswith("U") and w[1:].isdigit()):
+                    if w not in explicit_tickers:
+                        explicit_tickers.append(w)
+        if explicit_tickers:
+            return explicit_tickers
+
+    # 2. Otherwise, check word-by-word with context rules
+    query_upper = query.upper()
+    # Normalize punctuation to spaces except keep letters/numbers
+    normalized_query = re.sub(r"[^A-Z0-9\s]", " ", query_upper)
+    tokens = normalized_query.split()
+    
+    context_preceding = {
+        "TICKER", "TICKERS", "COMPARE", "COMPARING", "COMPARISON", "FOR",
+        "BETWEEN", "OF", "SYMBOL", "SYMBOLS", "USED", "TICKERS_USED"
+    }
+    context_any = {
+        "AND", "WITH", "VERSUS", "VS"
+    }
+    context_keywords = context_preceding.union(context_any)
+    
+    # Find all candidate tokens (their indices in tokens)
+    candidate_indices = []
+    for idx, token in enumerate(tokens):
+        if re.match(r"^[A-Z]{1,5}$", token) and token not in stopwords and token not in context_keywords:
+            if not (token.startswith("U") and token[1:].isdigit()):
+                candidate_indices.append(idx)
+                
+    # Now, identify which candidates have direct context or are known tickers
+    accepted_indices = set()
+    for idx in candidate_indices:
+        token = tokens[idx]
+        # Check if known universe ticker
+        is_known = False
+        from src.memory.session_state import KNOWN_UNIVERSE_TICKERS
+        for u_tickers in KNOWN_UNIVERSE_TICKERS.values():
+            if token in u_tickers:
+                is_known = True
+                break
+        if is_known:
+            accepted_indices.add(idx)
             continue
-        if ticker not in tickers:
-            tickers.append(ticker)
+            
+        # Check context
+        has_context = False
+        # Preceding context within 2 words
+        for offset in (1, 2):
+            if idx - offset >= 0:
+                prev_token = tokens[idx - offset]
+                if prev_token in context_preceding or prev_token in context_any:
+                    has_context = True
+                    break
+        # Succeeding context within 2 words
+        if not has_context:
+            for offset in (1, 2):
+                if idx + offset < len(tokens):
+                    next_token = tokens[idx + offset]
+                    if next_token in context_any:
+                        has_context = True
+                        break
+        if has_context:
+            accepted_indices.add(idx)
+            
+    # Propagate: if a candidate index is adjacent to an accepted candidate index
+    # (i.e. within 2 positions), we accept it to handle lists.
+    changed = True
+    while changed:
+        changed = False
+        for idx in candidate_indices:
+            if idx in accepted_indices:
+                continue
+            for accepted_idx in accepted_indices:
+                if abs(idx - accepted_idx) <= 2:
+                    accepted_indices.add(idx)
+                    changed = True
+                    break
+                    
+    # Finally, build the list of tickers in order of appearance
+    tickers = []
+    for idx in sorted(accepted_indices):
+        token = tokens[idx]
+        if token not in tickers:
+            tickers.append(token)
+            
     return tickers
 
 

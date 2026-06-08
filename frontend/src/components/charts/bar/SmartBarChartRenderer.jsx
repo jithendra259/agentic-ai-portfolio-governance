@@ -2,33 +2,27 @@ import React, { useMemo } from 'react';
 import { Box, Typography } from '@mui/material';
 import { BarChart } from '@mui/x-charts/BarChart';
 import { BarChartPremium } from '@mui/x-charts-premium/BarChartPremium';
+import { PiecewiseColorLegend } from '@mui/x-charts/ChartsLegend';
 import { adaptBarChartPayload } from './barChartDataAdapter.js';
 import { chooseRenderer } from './barChartIntelligence.js';
-
-const AXIS_STYLE = { fill: '#e5e7eb', fontSize: 12, fontWeight: 600 };
-const GRID_STYLE = { stroke: '#2b3138', strokeWidth: 1 };
-
-function useResponsiveChartWidth(fallback = 360) {
-  const ref = React.useRef(null);
-  const [width, setWidth] = React.useState(fallback);
-
-  React.useEffect(() => {
-    if (!ref.current) return undefined;
-    const updateWidth = (value) => setWidth(Math.max(300, Math.floor(value || fallback)));
-    updateWidth(ref.current.getBoundingClientRect().width);
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries?.[0]) updateWidth(entries[0].contentRect.width);
-    });
-    resizeObserver.observe(ref.current);
-    return () => resizeObserver.disconnect();
-  }, [fallback]);
-
-  return [ref, width];
-}
+import { useResponsiveChartWidth } from '../common/useResponsiveChartWidth';
+import { AXIS_STYLE, GRID_STYLE, decorateAxes } from './barChartUtils';
+import BarThresholdNotes from './BarThresholdNotes';
+import BarWarnings from './BarWarnings';
 
 export default function SmartBarChartRenderer({ spec }) {
   const adapted = useMemo(() => adaptBarChartPayload(spec), [spec]);
-  const [chartRef, chartWidth] = useResponsiveChartWidth();
+  // SmartBarChartRenderer uses a minWidth of 300px
+  const [chartRef, chartWidth] = useResponsiveChartWidth(360, 300);
+
+  const isPiecewise = useMemo(() => {
+    const checkAxis = (axis) => axis?.some((ax) => ax?.colorMap?.type === 'piecewise');
+    return checkAxis(adapted.xAxis) || checkAxis(adapted.yAxis);
+  }, [adapted.xAxis, adapted.yAxis]);
+
+  const slotsConfig = useMemo(() => {
+    return isPiecewise ? { legend: PiecewiseColorLegend } : undefined;
+  }, [isPiecewise]);
 
   if (!adapted.valid) {
     return (
@@ -55,6 +49,7 @@ export default function SmartBarChartRenderer({ spec }) {
         margin={adapted.margin}
         grid={adapted.grid}
         borderRadius={adapted.borderRadius}
+        slots={slotsConfig}
         slotProps={{
           legend: {
             position: { vertical: 'top', horizontal: 'middle' },
@@ -74,48 +69,3 @@ export default function SmartBarChartRenderer({ spec }) {
     </Box>
   );
 }
-
-function decorateAxes(axes) {
-  return (axes || []).map((axis) => ({
-    ...axis,
-    tickLabelStyle: axis.tickLabelStyle || AXIS_STYLE,
-  }));
-}
-
-function BarThresholdNotes({ thresholds }) {
-  if (!thresholds?.length) return null;
-  return (
-    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
-      {thresholds.map((threshold) => (
-        <Box
-          key={`${threshold.name}-${threshold.value}`}
-          sx={{
-            px: 1,
-            py: 0.5,
-            border: '1px solid #374151',
-            borderRadius: '6px',
-            color: '#d1d5db',
-            fontSize: 12,
-          }}
-        >
-          {threshold.name}: {threshold.value}
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
-function BarWarnings({ warnings, interpretation }) {
-  const notes = [...(warnings || []), interpretation].filter(Boolean);
-  if (!notes.length) return null;
-  return (
-    <Box sx={{ mt: 1, color: '#9ca3af', fontSize: 12, lineHeight: 1.45 }}>
-      {notes.map((note) => (
-        <Typography key={note} variant="caption" sx={{ display: 'block', color: 'inherit' }}>
-          {note}
-        </Typography>
-      ))}
-    </Box>
-  );
-}
-

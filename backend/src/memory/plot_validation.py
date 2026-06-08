@@ -170,6 +170,24 @@ def _validate_line_payload(
     if not tickers:
         errors.append("ticker list is empty")
 
+    series_list = payload.get("series")
+    if isinstance(series_list, list):
+        tickers_set = {t.upper() for t in tickers}
+        approved_metrics = {
+            "PORTFOLIO_VALUE", "DRAWDOWN_PERCENT", "DRAWDOWN", "CVAR_95", "INSTABILITY_INDEX", 
+            "VOLATILITY_SPIKE", "CORRELATION_SPIKE", "MAXIMUM_DRAWDOWN", "THRESHOLD", "REGIME", 
+            "CVAR", "BENCHMARK", "PORTFOLIO", "VALUE", "SCORE", "DRAWDOWN_PERCENTAGE", 
+            "INSTABILITY", "VOLATILITY", "CORRELATION", "HISTORICAL_ADJUSTED_CLOSE", 
+            "NORMALIZED_PRICE_COMPARISON", "PORTFOLIO_VALUE_OVER_TIME", "DRAWDOWN_OVER_TIME",
+            "ROLLING_VOLATILITY_OVER_TIME", "ROLLING_CORRELATION_OVER_TIME", "INSTABILITY_INDEX_OVER_TIME",
+            "CVAR_OVER_TIME", "GOVERNANCE_METRIC_THRESHOLD_OVER_TIME", "BENCHMARK_SERIES"
+        }
+        for s in series_list:
+            if isinstance(s, dict):
+                s_name = str(s.get("name") or "").upper()
+                if s_name not in tickers_set and s_name not in approved_metrics:
+                    errors.append(f"series name '{s.get('name')}' is not a valid ticker and is not an approved metric")
+
     if payload.get("plot_id") == "historical_adjusted_close" and len(tickers) > 1:
         errors.append("raw multi-ticker price comparison must use normalized_price_comparison")
 

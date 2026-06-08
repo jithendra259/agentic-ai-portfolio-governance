@@ -344,10 +344,14 @@ function buildStandardBarSpec(payload) {
     ...(showLabels ? { barLabel: (item) => formatValue(item.value, payload.unit) } : {}),
   }));
 
+  const xAxisOverride = payload.xAxis?.[0] || {};
+  const yAxisOverride = payload.yAxis?.[0] || {};
+
   const numericAxis = {
     label: fieldLabel(layout === 'horizontal' ? payload.x_axis : payload.y_axis),
     valueFormatter: (value) => formatValue(Math.abs(Number(value)), payload.unit),
     domainLimit: 'nice',
+    ...(layout === 'horizontal' ? xAxisOverride : yAxisOverride),
   };
   const categoryAxis = {
     dataKey: categoryKey,
@@ -357,6 +361,7 @@ function buildStandardBarSpec(payload) {
     tickLabelPlacement: 'middle',
     ...(payload.categoryGapRatio != null ? { categoryGapRatio: payload.categoryGapRatio } : { categoryGapRatio: 0.32 }),
     ...(payload.barGapRatio != null ? { barGapRatio: payload.barGapRatio } : { barGapRatio: 0.12 }),
+    ...(layout === 'horizontal' ? yAxisOverride : xAxisOverride),
   };
 
   return {

@@ -284,6 +284,12 @@ def _build_line_spec(data: dict, title: str) -> dict:
         "series": series,
     }
 
+    # ── Zoom configuration (Pro/Premium feature) ──
+    if "zoom" in data:
+        spec["zoom"] = data["zoom"]
+    elif total_points > 120:
+        spec["zoom"] = {"slider": {"enabled": True}}
+
     # ── Grid (default: horizontal lines for readability) ──
     spec["grid"] = data.get("grid", {"horizontal": True})
 
@@ -471,6 +477,12 @@ def _build_bar_spec(data: dict, title: str) -> dict:
     # ── Y-axis config (colorMap, width, label) ──
     if "yAxis" in data and isinstance(data["yAxis"], list):
         spec["yAxis"] = data["yAxis"]
+
+    # ── Zoom configuration (Pro/Premium feature) ──
+    if "zoom" in data:
+        x_axes = spec.setdefault("xAxis", [{}])
+        if isinstance(x_axes, list) and len(x_axes) > 0:
+            x_axes[0]["zoom"] = data["zoom"]
 
     if "animation" in data and isinstance(data["animation"], dict):
         spec["animation"] = data["animation"]
@@ -680,6 +692,15 @@ def _build_scatter_spec(data: dict, title: str) -> dict:
         spec["yAxis"] = data["yAxis"]
     if "zAxis" in data and isinstance(data["zAxis"], list):
         spec["zAxis"] = data["zAxis"]
+
+    # ── Zoom configuration (Pro/Premium feature) ──
+    if "zoom" in data:
+        x_axes = spec.setdefault("xAxis", [{}])
+        if isinstance(x_axes, list) and len(x_axes) > 0:
+            x_axes[0]["zoom"] = data["zoom"]
+        y_axes = spec.setdefault("yAxis", [{}])
+        if isinstance(y_axes, list) and len(y_axes) > 0:
+            y_axes[0]["zoom"] = data["zoom"]
         
     # Optional general chart settings
     if "grid" in data:

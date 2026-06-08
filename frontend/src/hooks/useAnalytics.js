@@ -10,11 +10,15 @@ function useTabAnalytics(endpoint, tickers, startDate, endDate) {
     let isMounted = true;
     setLoading(true);
     setError('');
-
     const formattedTickers = Array.isArray(tickers) ? tickers.join(',') : tickers;
     const url = `${BACKEND_BASE}/api/analytics/${endpoint}?tickers=${encodeURIComponent(formattedTickers)}&start_date=${startDate}&end_date=${endDate}`;
+    const token = localStorage.getItem('portfolio-governance-auth-token');
+    const headers = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
 
-    fetch(url)
+    fetch(url, { headers })
       .then(async res => {
         if (!res.ok) {
           const text = await res.text().catch(() => '');

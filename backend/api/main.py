@@ -67,7 +67,7 @@ if __name__ == "__main__" and _is_port_open("127.0.0.1", 8000):
     sys.exit(1)
 
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -104,7 +104,6 @@ context_resolver = ContextResolver()
 missing_data_resolver = MissingDataResolver()
 
 
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -112,6 +111,18 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 LEGACY_OUTPUTS_DIR = PROJECT_ROOT / "src" / "outputs"
 PLOT_TOKEN = "__PLOTSPEC__:"
 
+from src.utils.crypto_utils import hash_password, verify_password, create_auth_token, verify_auth_token
+
+def get_current_user_id(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ")[1]
+    payload = verify_auth_token(token)
+    if not payload:
+        return None
+    user = payload.get("user", {})
+    return user.get("id") or user.get("email")
 
 def _sync_legacy_outputs() -> None:
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -133,6 +144,43 @@ async def lifespan(app: FastAPI):
         memory.setup_indexes()
         logger.info("MongoDB indexes are active.")
         app.state.mongo_available = True
+        
+        # Seed default users in MongoDB users collection
+        try:
+            from datetime import datetime, timezone
+            users_col = memory._db["users"]
+            
+            # Admin User
+            admin_email = "admin@governance.ai"
+            if not users_col.find_one({"email": admin_email}):
+                pw_hash = hash_password("password")
+                users_col.insert_one({
+                    "email": admin_email,
+                    "name": "Governance Admin",
+                    "password_hash": pw_hash,
+                    "image": "https://avatars.githubusercontent.com/u/19550456",
+                    "plan": "Advisory workspace",
+                    "created_at": datetime.now(timezone.utc)
+                })
+                logger.info("Default admin seeded in MongoDB users collection.")
+                
+            # Demo User matching Toolpad login screenshot
+            demo_email = "toolpad-demo@mui.com"
+            if not users_col.find_one({"email": demo_email}):
+                demo_hash = hash_password("@demo1")
+                users_col.insert_one({
+                    "email": demo_email,
+                    "name": "Toolpad Demo User",
+                    "password_hash": demo_hash,
+                    "image": "https://mui.com/static/images/avatar/1.jpg",
+                    "plan": "Standard Workspace",
+                    "created_at": datetime.now(timezone.utc)
+                })
+                logger.info("Demo user seeded in MongoDB users collection.")
+                
+        except Exception as seed_exc:
+            logger.error("Failed to seed default users in MongoDB: %s", seed_exc)
+            
     except Exception as exc:
         logger.error("Failed to build MongoDB indexes: %s", exc)
         app.state.mongo_available = False
@@ -141,6 +189,8 @@ async def lifespan(app: FastAPI):
 
 from api.analytics_router import router as analytics_router
 from api.governance_router import router as governance_router
+from api.auth_router import router as auth_router
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(
     title="Agentic Portfolio Governance API",
@@ -148,24 +198,32 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-app.include_router(analytics_router)
-app.include_router(governance_router)
 
-
-# CORS Support for robust local development
-from fastapi.middleware.cors import CORSMiddleware
+# CORS must be registered before routers so all responses — including redirects — have proper headers.
+# allow_credentials=True requires explicit origins; "*" + credentials is rejected by browsers.
+_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(analytics_router)
+app.include_router(governance_router)
+app.include_router(auth_router)
+
 OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
-
 
 class ChatRequest(BaseModel):
     session_id: str
@@ -343,16 +401,17 @@ def _persist_chat_message(
     role: str,
     content: str,
     metadata: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> None:
     session_memory_store.append_message(session_id, role, content, metadata=metadata)
     try:
-        memory_manager.append_chat_message(session_id, role, content, metadata=metadata)
+        memory_manager.append_chat_message(session_id, role, content, metadata=metadata, user_id=user_id)
     except Exception as exc:
         logger.warning("Failed to persist %s chat message for session %s: %s", role, session_id, exc)
 
 
-def _resolve_chat_memory(session_id: str, message: str) -> dict[str, Any]:
-    persisted_messages = memory_manager.list_chat_messages(session_id, limit=25)
+def _resolve_chat_memory(session_id: str, message: str, user_id: str | None = None) -> dict[str, Any]:
+    persisted_messages = memory_manager.list_chat_messages(session_id, limit=25, user_id=user_id)
     if persisted_messages:
         session_memory_store.hydrate_messages(session_id, persisted_messages)
     last_25 = session_memory_store.get_last_messages(session_id, limit=25)
@@ -364,7 +423,13 @@ def _resolve_chat_memory(session_id: str, message: str) -> dict[str, Any]:
     return resolved
 
 
-def _persist_memory_response(session_id: str, response_text: str, resolved: dict[str, Any], metadata: dict[str, Any]) -> None:
+def _persist_memory_response(
+    session_id: str,
+    response_text: str,
+    resolved: dict[str, Any],
+    metadata: dict[str, Any],
+    user_id: str | None = None,
+) -> None:
     state = dict(resolved.get("session_state") or {})
     state["last_response_summary"] = response_text[:500]
     session_memory_store.save_state(session_id, state)
@@ -374,7 +439,7 @@ def _persist_memory_response(session_id: str, response_text: str, resolved: dict
         "response_contract_summary": contract_summary(contract),
         "response_contract": {k: v for k, v in contract.items() if k != "debug_user_message"},
     }
-    _persist_chat_message(session_id, "assistant", response_text, metadata=enriched_metadata)
+    _persist_chat_message(session_id, "assistant", response_text, metadata=enriched_metadata, user_id=user_id)
 
 
 def _audit_resolved_memory(session_id: str, message: str, resolved: dict[str, Any]) -> None:
@@ -452,33 +517,88 @@ def health_check() -> dict:
 
 
 @app.get("/chat/sessions", response_model=ChatSessionsResponse)
-def chat_sessions(limit: int = 50) -> ChatSessionsResponse:
+def chat_sessions(request: Request, limit: int = 50) -> ChatSessionsResponse:
+    user_id = get_current_user_id(request)
     safe_limit = max(1, min(int(limit or 50), 100))
-    sessions = memory_manager.list_chat_sessions(limit=safe_limit)
+    sessions = memory_manager.list_chat_sessions(limit=safe_limit, user_id=user_id)
     return ChatSessionsResponse(sessions=sessions)
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
-def chat_messages(session_id: str, limit: int = 200) -> ChatHistoryResponse:
+def chat_messages(session_id: str, request: Request, limit: int = 200) -> ChatHistoryResponse:
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
-    rows = memory_manager.list_chat_messages(session_id, limit=limit)
+    user_id = get_current_user_id(request)
+    rows = memory_manager.list_chat_messages(session_id, limit=limit, user_id=user_id)
     return ChatHistoryResponse(session_id=session_id, messages=rows)
 
 
 @app.delete("/chat/{session_id}", response_model=DeleteChatSessionResponse)
-def delete_chat_session(session_id: str) -> DeleteChatSessionResponse:
+def delete_chat_session(session_id: str, request: Request) -> DeleteChatSessionResponse:
     clean_session_id = str(session_id or "").strip()
     if not clean_session_id:
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
+    user_id = get_current_user_id(request)
     deleted_count = 0
     if hasattr(memory_manager, "delete_chat_session"):
-        deleted_count = int(memory_manager.delete_chat_session(clean_session_id) or 0)
+        deleted_count = int(memory_manager.delete_chat_session(clean_session_id, user_id=user_id) or 0)
     session_memory_store.delete_session(clean_session_id)
     return DeleteChatSessionResponse(session_id=clean_session_id, deleted_count=deleted_count)
 
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+@app.post("/api/auth/login")
+def auth_login(request: LoginRequest):
+    if not memory_manager or not memory_manager.is_available:
+        raise HTTPException(status_code=503, detail="Database connection is unavailable")
+        
+    email = request.email.strip().lower()
+    password = request.password
+    
+    try:
+        users_col = memory_manager._db["users"]
+        user_doc = users_col.find_one({"email": email})
+        
+        if not user_doc or not verify_password(user_doc.get("password_hash", ""), password):
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
+            
+        payload = {
+            "user": {
+                "id": str(user_doc.get("_id")),
+                "name": user_doc.get("name", "User"),
+                "email": user_doc.get("email", email),
+                "image": user_doc.get("image"),
+                "plan": user_doc.get("plan", "Standard Workspace")
+            }
+        }
+        token = create_auth_token(payload)
+        return {"token": token, "session": payload}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Login failed due to database error")
+        raise HTTPException(status_code=500, detail=f"Database error: {exc}")
+
+@app.get("/api/auth/session")
+def auth_session(request: Request):
+    auth_header = request.headers.get("authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return {"session": None}
+    token = auth_header.split(" ")[1]
+    payload = verify_auth_token(token)
+    if not payload:
+        return {"session": None}
+    return {"session": payload}
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    return {"status": "ok"}
 
 @app.get("/audit/recent")
 def recent_audit_records(limit: int = 100) -> dict[str, Any]:

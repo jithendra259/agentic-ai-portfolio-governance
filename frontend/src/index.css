@@ -114,6 +114,12 @@ body,
   overflow-x: auto;
 }
 
+/* =============================================================================
+   SIDEBAR SHELL  —  Toolpad-master-inspired smooth transitions
+   cubic-bezier(0.4, 0, 0.6, 1) = Material Design "sharp" easing
+   enteringScreen: 225ms  |  leavingScreen: 195ms
+   ============================================================================= */
+
 .chatgpt-shell {
   display: flex;
   height: 100vh;
@@ -123,47 +129,163 @@ body,
   color: #f4f4f4;
 }
 
+/* ── Sidebar container ─────────────────────────────────────────────────────── */
 .chatgpt-sidebar {
-  width: 310px;
-  min-width: 0;
-  max-width: 310px;
-  flex: 0 0 310px;
+  position: relative;
+  width: 260px;
+  flex: 0 0 260px;
+  display: flex;           /* keeps absolute children in correct stacking context */
+  flex-direction: column;
+  background: linear-gradient(180deg, #080808 0%, #050505 100%);
+  border-right: 1px solid #1c1c1c;
+  box-sizing: border-box;
+  overflow: hidden;
+  z-index: 10;
+  /* Toolpad drawer width transition — sharp cubic-bezier */
+  transition:
+    width 225ms cubic-bezier(0.4, 0, 0.6, 1),
+    flex-basis 225ms cubic-bezier(0.4, 0, 0.6, 1),
+    border-right-color 195ms ease;
+  will-change: width, flex-basis;
+}
+
+/* Mini icon-rail mode (64px) */
+.chatgpt-shell.sidebar-mini .chatgpt-sidebar {
+  width: 64px;
+  flex: 0 0 64px;
+  transition:
+    width 195ms cubic-bezier(0.4, 0, 0.6, 1),
+    flex-basis 195ms cubic-bezier(0.4, 0, 0.6, 1);
+}
+
+/* Fully closed (0px) */
+.chatgpt-shell.sidebar-closed .chatgpt-sidebar {
+  width: 0;
+  flex: 0 0 0px;
+  border-right-color: transparent;
+  transition:
+    width 195ms cubic-bezier(0.4, 0, 0.6, 1),
+    flex-basis 195ms cubic-bezier(0.4, 0, 0.6, 1),
+    border-right-color 120ms ease;
+}
+
+/* ── Full sidebar content panel ────────────────────────────────────────────── */
+.sidebar-full-content {
+  position: absolute;
+  inset: 0;
+  width: 260px;       /* fixed so overflow-clipping handles the reveal */
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 14px 16px;
-  background: #050505;
-  border-right: 1px solid #202020;
+  gap: 10px;
+  padding: 16px 12px 14px;
   box-sizing: border-box;
   opacity: 1;
-  overflow: hidden;
   transform: translateX(0);
+  pointer-events: auto;
+  /* Delayed fade-in when expanding from mini → full */
   transition:
-    width 220ms ease,
-    max-width 220ms ease,
-    flex-basis 220ms ease,
-    gap 220ms ease,
-    padding 220ms ease,
-    opacity 160ms ease,
-    transform 220ms ease,
-    border-color 220ms ease;
-  will-change: width, flex-basis, opacity, transform;
+    opacity 160ms 60ms ease,
+    transform 160ms 60ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.chatgpt-shell.sidebar-collapsed .chatgpt-sidebar {
-  width: 0;
-  max-width: 0;
-  flex: 0 0 0;
-  flex-basis: 0;
-  gap: 0;
-  padding-left: 0;
-  padding-right: 0;
-  border-right-color: transparent;
+.chatgpt-shell.sidebar-mini .sidebar-full-content,
+.chatgpt-shell.sidebar-closed .sidebar-full-content {
   opacity: 0;
-  transform: translateX(-14px);
+  transform: translateX(-8px);
   pointer-events: none;
+  /* Fast fade-out when collapsing full → mini */
+  transition:
+    opacity 100ms ease,
+    transform 100ms ease;
 }
 
+/* ── Mini icon-rail content panel ─────────────────────────────────────────── */
+.sidebar-mini-content {
+  position: absolute;
+  inset: 0;
+  width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0 12px;
+  gap: 3px;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  /* Fast fade-out when expanding mini → full */
+  transition: opacity 100ms ease;
+}
+
+.chatgpt-shell.sidebar-mini .sidebar-mini-content {
+  opacity: 1;
+  pointer-events: auto;
+  /* Delayed fade-in after sidebar has narrowed */
+  transition: opacity 180ms 80ms ease;
+}
+
+/* ── Mini icon buttons ─────────────────────────────────────────────────────── */
+.mini-icon-btn {
+  width: 40px !important;
+  height: 40px !important;
+  color: #888 !important;
+  border-radius: 10px !important;
+  flex-shrink: 0 !important;
+  transition: background-color 130ms ease, color 130ms ease, transform 120ms ease !important;
+}
+
+.mini-icon-btn:hover {
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: #f4f4f4 !important;
+  transform: scale(1.06);
+}
+
+.mini-icon-btn:active {
+  transform: scale(0.95) !important;
+}
+
+.mini-session {
+  background: #141414 !important;
+  font-size: 0.64rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em;
+}
+
+.mini-session-active {
+  background: #262626 !important;
+  color: #ffffff !important;
+  box-shadow: inset 0 0 0 1.5px #3a3a3a, 0 0 8px rgba(255,255,255,0.04) !important;
+}
+
+.mini-profile-btn {
+  background: #ef5b48 !important;
+  color: #fff !important;
+  border-radius: 50% !important;
+  font-size: 0.68rem !important;
+  font-weight: 800 !important;
+  margin-top: 4px;
+}
+
+.mini-divider {
+  width: 28px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #2a2a2a, transparent);
+  margin: 5px 0;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.mini-recents {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  overflow: hidden;
+  max-height: 300px;
+  flex: 1;
+}
+
+/* ── Shared flex rules ─────────────────────────────────────────────────────── */
 .sidebar-header,
 .chatgpt-topbar,
 .topbar-actions,
@@ -175,88 +297,149 @@ body,
   align-items: center;
 }
 
-.chatgpt-sidebar > * {
-  min-width: 282px;
-}
-
+/* ── Sidebar header ────────────────────────────────────────────────────────── */
 .sidebar-header {
   justify-content: space-between;
+  flex-shrink: 0;
 }
 
 .sidebar-brand {
   color: #fff !important;
-  font-size: 1.55rem !important;
-  font-weight: 750 !important;
-  letter-spacing: 0 !important;
+  font-size: 1.45rem !important;
+  font-weight: 780 !important;
+  letter-spacing: -0.025em !important;
+  line-height: 1.2 !important;
 }
 
 .sidebar-brand span {
-  color: #b8b8b8;
-  font-weight: 650;
+  color: #555;
+  font-weight: 500;
 }
 
 .sidebar-icon,
 .topbar-icon,
 .composer-icon-button {
-  color: #f1f1f1 !important;
-  width: 38px !important;
-  height: 38px !important;
+  color: #888 !important;
+  width: 36px !important;
+  height: 36px !important;
+  border-radius: 8px !important;
+  transition: background-color 130ms ease, color 130ms ease !important;
 }
 
 .sidebar-icon:hover,
 .topbar-icon:hover,
 .composer-icon-button:hover {
-  background: #242424 !important;
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: #f4f4f4 !important;
 }
 
+/* ── New chat button ───────────────────────────────────────────────────────── */
 .sidebar-new-chat {
   justify-content: flex-start !important;
-  color: #f3f3f3 !important;
-  background: #151515 !important;
-  border-radius: 8px !important;
-  padding: 10px 12px !important;
+  color: #e8e8e8 !important;
+  background: #111 !important;
+  border: 1px solid #242424 !important;
+  border-radius: 10px !important;
+  padding: 9px 12px !important;
   text-transform: none !important;
-  font-weight: 650 !important;
+  font-weight: 600 !important;
+  font-size: 0.875rem !important;
+  letter-spacing: -0.01em !important;
+  flex-shrink: 0;
+  transition:
+    background-color 130ms ease,
+    border-color 130ms ease,
+    transform 120ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 130ms ease !important;
 }
 
+.sidebar-new-chat:hover {
+  background: #191919 !important;
+  border-color: #333 !important;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4) !important;
+}
+
+.sidebar-new-chat:active {
+  transform: translateY(0) !important;
+  box-shadow: none !important;
+}
+
+/* ── Sections ──────────────────────────────────────────────────────────────── */
 .sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .sidebar-section-title {
-  color: #e6e6e6 !important;
-  font-size: 0.8rem !important;
-  font-weight: 750 !important;
-  padding: 12px 2px 4px !important;
+  color: #484848 !important;
+  font-size: 0.68rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.07em !important;
+  text-transform: uppercase !important;
+  padding: 8px 10px 5px !important;
 }
 
+/* ── Tool & Recent items ───────────────────────────────────────────────────── */
 .sidebar-tool,
 .recent-chat {
   width: 100%;
-  min-height: 42px;
+  min-height: 36px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #eeeeee;
+  color: #aaa;
   font: inherit;
+  font-size: 0.855rem;
   text-align: left;
-  padding: 9px 12px;
+  padding: 7px 10px;
   cursor: pointer;
+  position: relative;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
 }
 
 .recent-chat {
   justify-content: space-between;
 }
 
-.sidebar-tool:hover,
-.recent-chat:hover,
+.sidebar-tool:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e8e8e8;
+}
+
+.recent-chat:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #e8e8e8;
+}
+
 .recent-chat.active {
-  background: #303030;
+  background: rgba(255, 255, 255, 0.072);
+  color: #f8f8f8;
+}
+
+/* Active item — animated left-edge indicator (toolpad active-page style) */
+.recent-chat.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 5px;
+  bottom: 5px;
+  width: 2.5px;
+  background: linear-gradient(180deg, #6a6a6a 0%, #383838 100%);
+  border-radius: 0 3px 3px 0;
+  animation: sidebar-active-in 220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@keyframes sidebar-active-in {
+  from { opacity: 0; transform: scaleY(0.3); }
+  to   { opacity: 1; transform: scaleY(1); }
 }
 
 .recent-chat span {
@@ -267,13 +450,18 @@ body,
   white-space: nowrap;
 }
 
+/* ── Delete button (appears on hover) ──────────────────────────────────────── */
 .recent-delete {
   flex: 0 0 auto;
-  width: 30px !important;
-  height: 30px !important;
-  color: #b9b9b9 !important;
+  width: 28px !important;
+  height: 28px !important;
+  color: #666 !important;
+  border-radius: 6px !important;
   opacity: 0;
-  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease !important;
 }
 
 .recent-chat:hover .recent-delete,
@@ -283,50 +471,91 @@ body,
 }
 
 .recent-delete:hover {
-  color: #ff8d8d !important;
-  background: rgba(255, 106, 106, 0.12) !important;
+  color: #ff7e7e !important;
+  background: rgba(255, 80, 80, 0.1) !important;
 }
 
+/* ── Recents scroll area ───────────────────────────────────────────────────── */
 .sidebar-recents {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
-  padding-right: 4px;
+  overflow-x: hidden;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
 }
 
+/* ── Profile section ───────────────────────────────────────────────────────── */
 .sidebar-profile {
-  gap: 12px;
-  min-height: 66px;
-  padding: 10px;
-  border-top: 1px solid #171717;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 10px;
+  border-top: 1px solid #161616;
+  border-radius: 8px;
+  flex-shrink: 0;
+  transition: background-color 130ms ease;
+}
+
+.sidebar-profile:hover {
+  background: rgba(255, 255, 255, 0.03);
 }
 
 .profile-avatar {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
   display: grid;
   place-items: center;
   border-radius: 50%;
   background: #ef5b48;
   color: #fff;
-  font-size: 0.85rem;
-  font-weight: 750;
+  font-size: 0.8rem;
+  font-weight: 780;
+  letter-spacing: 0.02em;
+  transition: transform 130ms ease;
+}
+
+.sidebar-profile:hover .profile-avatar {
+  transform: scale(1.06);
 }
 
 .profile-copy {
   min-width: 0;
+  flex: 1;
 }
 
 .profile-name {
-  color: #fff !important;
-  font-size: 0.9rem !important;
+  color: #f0f0f0 !important;
+  font-size: 0.875rem !important;
   font-weight: 650 !important;
   line-height: 1.25 !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .profile-plan {
-  color: #aaa !important;
-  font-size: 0.78rem !important;
+  color: #555 !important;
+  font-size: 0.74rem !important;
+  line-height: 1.3 !important;
+}
+
+/* ── Scrollbars ────────────────────────────────────────────────────────────── */
+.sidebar-recents::-webkit-scrollbar {
+  width: 3px;
+}
+
+.sidebar-recents::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-recents::-webkit-scrollbar-thumb {
+  background: #242424;
+  border-radius: 999px;
+}
+
+.sidebar-recents:hover::-webkit-scrollbar-thumb {
+  background: #363636;
 }
 
 .chatgpt-main {
@@ -624,15 +853,21 @@ body,
   color: #cfcfcf !important;
 }
 
-.chat-scroll::-webkit-scrollbar,
-.sidebar-recents::-webkit-scrollbar {
-  width: 8px;
+.chat-scroll::-webkit-scrollbar {
+  width: 4px;
 }
 
-.chat-scroll::-webkit-scrollbar-thumb,
-.sidebar-recents::-webkit-scrollbar-thumb {
-  background: #3a3a3a;
+.chat-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
   border-radius: 999px;
+}
+
+.chat-scroll:hover::-webkit-scrollbar-thumb {
+  background: #424242;
 }
 
 .plot-fixture-page {
@@ -691,7 +926,8 @@ body,
     padding: 0 16px;
   }
 
-  .chatgpt-sidebar {
+  /* On mobile, force sidebar closed and show the open button in topbar */
+  .chatgpt-shell .chatgpt-sidebar {
     display: none;
   }
 

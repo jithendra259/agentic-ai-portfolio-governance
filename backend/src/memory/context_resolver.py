@@ -129,7 +129,8 @@ class ContextResolver:
 
         universe = _extract_universe(message) or entities.get("universe") or state.get("active_universe")
         entity_tickers = _filter_tickers(entities.get("tickers") or [])
-        explicit_subset = bool(entity_tickers) and not _requests_full_universe_scope(message, universe)
+        reused_from_cache = plan.get("cache", {}).get("reuse_previous_analysis", False)
+        explicit_subset = bool(entity_tickers) and not reused_from_cache and not _requests_full_universe_scope(message, universe)
         tickers = _resolve_tickers(universe, entity_tickers, state.get("active_tickers") or [], explicit_subset)
         start_date = entities.get("start_date") or state.get("active_date_range", {}).get("start")
         end_date = entities.get("end_date") or state.get("active_date_range", {}).get("end")

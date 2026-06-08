@@ -3,71 +3,15 @@ import { Box } from '@mui/material';
 import { ScatterChart } from '@mui/x-charts/ScatterChart';
 import { ScatterChartPro } from '@mui/x-charts-pro/ScatterChartPro';
 import { ScatterChartPremium } from '@mui/x-charts-premium/ScatterChartPremium';
-import { useXScale, useYScale } from '@mui/x-charts/hooks';
-import { ChartsClipPath } from '@mui/x-charts/ChartsClipPath';
-
-const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
-const AXIS_STYLE = { fill: '#9ca3af', fontSize: 11 };
-const GRID_STYLE = { stroke: '#374151', strokeDasharray: '4 4' };
-
-function toFiniteNumber(value, fallback = 0) {
-  const next = Number(value);
-  return Number.isFinite(next) ? next : fallback;
-}
-
-function getValueFormatter(format) {
-  if (format === 'percent' || format === '%') return (v) => (v == null ? '' : `${v.toFixed(1)}%`);
-  if (format === 'decimal') return (v) => (v == null ? '' : Number(v).toFixed(2));
-  if (format === 'beta') return (v) => (v == null ? '' : `${Number(v).toFixed(2)} beta`);
-  if (format === 'k') return (v) => (v == null ? '' : `${(v / 1000).toFixed(1)}k`);
-  if (format === 'currency') return (v) => (v == null ? '' : `$${v.toLocaleString()}`);
-  return (v) => {
-    if (v == null) return '';
-    if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
-    if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}k`;
-    return Number(v).toFixed(2);
-  };
-}
-
-function useResponsiveChartWidth(fallback = 360) {
-  const ref = React.useRef(null);
-  const [width, setWidth] = React.useState(fallback);
-  React.useEffect(() => {
-    if (!ref.current) return;
-    const updateWidth = (value) => setWidth(Math.max(280, Math.floor(value || fallback)));
-    updateWidth(ref.current.getBoundingClientRect().width);
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries?.[0]) updateWidth(entries[0].contentRect.width);
-    });
-    resizeObserver.observe(ref.current);
-    return () => resizeObserver.disconnect();
-  }, [fallback]);
-  return [ref, width];
-}
-
-function ScatterRegressionLine({ regression }) {
-  const xScale = useXScale();
-  const yScale = useYScale();
-  const clipPathId = `scatter-regression-${React.useId()}`;
-  if (!regression || !xScale || !yScale) return null;
-  const xMin = Number(regression.x_min);
-  const xMax = Number(regression.x_max);
-  const slope = Number(regression.slope);
-  const intercept = Number(regression.intercept);
-  const yMin = Number.isFinite(Number(regression.y_min)) ? Number(regression.y_min) : slope * xMin + intercept;
-  const yMax = Number.isFinite(Number(regression.y_max)) ? Number(regression.y_max) : slope * xMax + intercept;
-  if (![xMin, xMax, yMin, yMax].every(Number.isFinite)) return null;
-  const x1 = xScale(xMin); const x2 = xScale(xMax); const y1 = yScale(yMin); const y2 = yScale(yMax);
-  if (![x1, x2, y1, y2].every(Number.isFinite)) return null;
-  return (
-    <React.Fragment>
-      <ChartsClipPath id={clipPathId} />
-      <g clipPath={`url(#${clipPathId})`}>
-        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={regression.color || '#f25467'} strokeWidth={2} strokeDasharray={regression.strokeDasharray || '6 4'} pointerEvents="none" />
-      </g>
-    </React.Fragment>
-  );
-}
+import { useResponsiveChartWidth } from '../common/useResponsiveChartWidth';
+import {
+  PALETTE,
+  AXIS_STYLE,
+  GRID_STYLE,
+  toFiniteNumber,
+  getValueFormatter,
+} from './scatterChartUtils';
+import ScatterRegressionLine from './ScatterRegressionLine';
 
 export default function ScatterChartRenderer({ spec }) {
   const series = useMemo(() => {
@@ -126,21 +70,26 @@ export default function ScatterChartRenderer({ spec }) {
   }, [spec]);
 
   const zAxisConfig = useMemo(() => (spec.zAxis && Array.isArray(spec.zAxis) ? spec.zAxis.map((ax) => ({ ...ax })) : undefined), [spec]);
+  
   const chartProps = {};
   if (spec.skipAnimation) chartProps.skipAnimation = true;
   if (spec.hideLegend) chartProps.hideLegend = true;
   if (spec.colors && Array.isArray(spec.colors)) chartProps.colors = spec.colors;
   if (spec.renderer) chartProps.renderer = spec.renderer;
   chartProps.hitAreaRadius = spec.hitAreaRadius !== undefined ? spec.hitAreaRadius : 20;
+  
   const gridConfig = spec.grid || { horizontal: true, vertical: true };
-  const [chartRef, chartWidth] = useResponsiveChartWidth();
+  const [chartRef, chartWidth] = useResponsiveChartWidth(360, 280);
   const chartHeight = spec.height || 420;
+  
   const ChartComponent = spec.component === 'ScatterChartPremium' || spec.chart_type === 'webgl_scatter' || spec.renderer === 'webgl'
     ? ScatterChartPremium
     : spec.component === 'ScatterChartPro' || spec.chart_type === 'bubble_scatter'
       ? ScatterChartPro
       : ScatterChart;
+
   if (!series.length) return null;
+
   return (
     <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
       <ChartComponent

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
 import ChatInterface from './components/ChatInterface';
 import AnalyticsDashboard from './components/AnalyticsDashboard';
-
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { AppProvider } from '@toolpad/core/AppProvider';
+import AuthPageContainer from './components/auth/AuthPageContainer';
 
 const darkTheme = createTheme({
   palette: {
@@ -95,20 +97,56 @@ const darkTheme = createTheme({
   },
 });
 
-function App() {
+function AuthWrapper() {
+  const { session, login, logout, loading } = useAuth();
   const [view, setView] = useState('chat');
 
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', minHeight: '100vh', justifyContent: 'center', alignItems: 'center', bgcolor: '#0D0D0D' }}>
+        <CircularProgress sx={{ color: '#FFFFFF' }} />
+      </Box>
+    );
+  }
+
+  if (!session) {
+    return <AuthPageContainer />;
+  }
+
+  const BRANDING = {
+    title: 'Portfolio Governance',
+  };
+
+  const AUTHENTICATION = {
+    signIn: login,
+    signOut: logout,
+  };
+
   return (
-    <ThemeProvider theme={darkTheme}>
-      <CssBaseline />
+    <AppProvider 
+      session={session} 
+      authentication={AUTHENTICATION} 
+      branding={BRANDING} 
+      theme={darkTheme}
+    >
       {view === 'chat' ? (
         <ChatInterface setView={setView} />
       ) : (
         <AnalyticsDashboard setView={setView} />
       )}
+    </AppProvider>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider theme={darkTheme}>
+      <CssBaseline />
+      <AuthProvider>
+        <AuthWrapper />
+      </AuthProvider>
     </ThemeProvider>
   );
 }
 
 export default App;
-

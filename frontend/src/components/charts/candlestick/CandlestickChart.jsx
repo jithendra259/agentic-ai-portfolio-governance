@@ -1,115 +1,25 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Box, Chip, Typography } from '@mui/material';
-
-function toFiniteNumber(value, fallback = 0) {
-  const next = Number(value);
-  return Number.isFinite(next) ? next : fallback;
-}
-
-function getResponsiveChartHeight(spec, fallback = 320) {
-  const requested = Number(spec?.height);
-  if (!Number.isFinite(requested)) return fallback;
-  return Math.max(180, Math.min(requested, 720));
-}
+import { useResponsiveChartWidth } from '../common/useResponsiveChartWidth';
+import {
+  getResponsiveChartHeight,
+  formatVolume,
+  formatAsDollar,
+  layoutCandlestick,
+} from './candlestickChartUtils';
 
 export default function CandlestickChart({ spec }) {
   const height = getResponsiveChartHeight(spec, 320);
-  const containerRef = React.useRef(null);
-  const [containerWidth, setContainerWidth] = React.useState(360);
-  const [hoveredIndex, setHoveredIndex] = React.useState(null);
+  const [containerRef, containerWidth] = useResponsiveChartWidth(360, 320);
+  const [hoveredIndex, setHoveredIndex] = useState(null);
+  
   const primarySeries = Array.isArray(spec?.series)
     ? spec.series.find((series) => Array.isArray(series?.data) && series.data.length > 0)
     : null;
   const pts = primarySeries?.data || (Array.isArray(spec?.data) ? spec.data : []);
 
-  const formatVolume = (val) => {
-    if (val == null) return '';
-    if (val >= 1000000000) return `${(val / 1000000000).toFixed(1)}B`;
-    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
-    if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
-    return val.toString();
-  };
-
-  const formatAsDollar = (value) => {
-    if (value == null) return '';
-    return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 0 : 2 })}`;
-  };
-
-  React.useEffect(() => {
-    if (!containerRef.current) return;
-    const resizeObserver = new ResizeObserver((entries) => {
-      if (entries?.[0]) {
-        setContainerWidth(Math.max(320, entries[0].contentRect.width || 640));
-      }
-    });
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []);
-
   const chart = useMemo(() => {
-    const data = pts
-      .map((entry, index) => ({
-        index,
-        date: entry.date,
-        dateObj: entry.date ? new Date(entry.date) : null,
-        open: toFiniteNumber(entry.open),
-        high: toFiniteNumber(entry.high),
-        low: toFiniteNumber(entry.low),
-        close: toFiniteNumber(entry.close),
-        volume: Math.max(0, toFiniteNumber(entry.volume)),
-      }))
-      .sort((a, b) => {
-        const aTime = a.dateObj instanceof Date && !Number.isNaN(a.dateObj.getTime()) ? a.dateObj.getTime() : 0;
-        const bTime = b.dateObj instanceof Date && !Number.isNaN(b.dateObj.getTime()) ? b.dateObj.getTime() : 0;
-        return aTime - bTime;
-      })
-      .map((entry, index) => ({ ...entry, index }));
-
-    const margin = { top: 22, right: 64, bottom: 42, left: 34 };
-    const innerWidth = Math.max(260, containerWidth - margin.left - margin.right);
-    const innerHeight = Math.max(200, height - margin.top - margin.bottom);
-    const volumeHeight = data.some((entry) => entry.volume > 0) ? Math.max(46, innerHeight * 0.22) : 0;
-    const volumeGap = volumeHeight ? 12 : 0;
-    const priceHeight = innerHeight - volumeHeight - volumeGap;
-    const plotBottom = margin.top + priceHeight;
-    const minLow = Math.min(...data.map((entry) => entry.low));
-    const maxHigh = Math.max(...data.map((entry) => entry.high));
-    const pricePadding = Math.max((maxHigh - minLow) * 0.1, 1);
-    const minPrice = minLow - pricePadding;
-    const maxPrice = maxHigh + pricePadding;
-    const priceRange = Math.max(maxPrice - minPrice, 1);
-    const maxVolume = Math.max(1, ...data.map((entry) => entry.volume));
-    const step = innerWidth / Math.max(1, data.length);
-    const candleWidth = Math.max(5, Math.min(16, step * 0.58));
-    const denseMode = data.length > 60;
-    const xFor = (index) => margin.left + step * (index + 0.5);
-    const priceY = (value) => margin.top + ((maxPrice - value) / priceRange) * priceHeight;
-    const volumeY = (value) => plotBottom + volumeGap + volumeHeight - (value / maxVolume) * volumeHeight;
-    const priceTicks = Array.from({ length: 5 }, (_, index) => {
-      const value = minPrice + (priceRange * index) / 4;
-      return { value, y: priceY(value) };
-    }).reverse();
-    const windowSize = 20;
-    const movingAverage = data.map((_, index) => {
-      if (index < windowSize - 1) return null;
-      const window = data.slice(index - windowSize + 1, index + 1);
-      return window.reduce((sum, entry) => sum + entry.close, 0) / window.length;
-    });
-    const movingAveragePath = movingAverage
-      .map((value, index) => value == null ? null : `${index === windowSize - 1 ? 'M' : 'L'} ${xFor(index)} ${priceY(value)}`)
-      .filter(Boolean)
-      .join(' ');
-    const tickEvery = Math.max(1, Math.ceil(data.length / 7));
-    const dateTicks = data
-      .filter((_, index) => index === 0 || index === data.length - 1 || index % tickEvery === 0)
-      .map((entry) => ({
-        x: xFor(entry.index),
-        label: entry.dateObj instanceof Date && !Number.isNaN(entry.dateObj.getTime())
-          ? entry.dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-          : entry.date,
-      }));
-
-    return { width: containerWidth, height, data, margin, innerWidth, priceHeight, volumeHeight, volumeGap, plotBottom, candleWidth, xFor, priceY, volumeY, priceTicks, dateTicks, movingAverage, movingAveragePath, hasVolume: volumeHeight > 0, denseMode };
+    return layoutCandlestick({ pts, containerWidth, height });
   }, [containerWidth, height, pts]);
 
   if (pts.length === 0) {
@@ -122,6 +32,7 @@ export default function CandlestickChart({ spec }) {
 
   const hovered = hoveredIndex == null ? null : chart.data[hoveredIndex];
   const tooltipLeft = hovered ? Math.min(Math.max(chart.xFor(hovered.index) + 12, 12), chart.width - 190) : 0;
+  
   const handleHoverMove = (event) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const relativeX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * chart.width;

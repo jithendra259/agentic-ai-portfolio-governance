@@ -29,6 +29,7 @@ import {
   Sparkles,
   Trash2,
   Square,
+  LogOut,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -38,6 +39,7 @@ import 'katex/dist/katex.min.css';
 import InlineChart from './InlineChart';
 import PlotFixtureGallery from './PlotFixtureGallery';
 import { BACKEND_BASE } from '../config/api';
+import { useAuth } from '../context/AuthContext';
 
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
@@ -516,6 +518,7 @@ function ChatMessageRow({ message, onRegenerate }) {
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface({ setView }) {
+  const { session, token, logout } = useAuth();
   const showPlotFixtureGallery = new URLSearchParams(window.location.search).has('plotTest');
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -538,13 +541,17 @@ export default function ChatInterface({ setView }) {
   const [composerText, setComposerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [streamStatus, setStreamStatus] = useState('');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarState, setSidebarState] = useState('full'); // 'full' | 'mini' | 'closed'
   const selectedModelRef = useRef('');
   const messagesEndRef = useRef(null);
   const activeStreamControllerRef = useRef(null);
 
   const loadSessionMessages = useCallback((targetSessionId) => {
-    return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`)
+    return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch conversation history');
         return res.json();
@@ -553,10 +560,14 @@ export default function ChatInterface({ setView }) {
         const loadedMessages = (data?.messages || []).map((item) => toChatMessage(item, targetSessionId));
         return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
       });
-  }, []);
+  }, [token]);
 
   const refreshSessions = useCallback(() => {
-    return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`)
+    return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch chat sessions');
         return res.json();
@@ -568,7 +579,7 @@ export default function ChatInterface({ setView }) {
         console.error('Failed to load chat sessions:', err);
         setChatSessions([]);
       });
-  }, []);
+  }, [token]);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -654,7 +665,10 @@ export default function ChatInterface({ setView }) {
 
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ 
           session_id: sessionId, 
           user_message: userText,
@@ -702,7 +716,7 @@ export default function ChatInterface({ setView }) {
 
       return ndjsonStream.pipeThrough(transformStream).pipeThrough(refreshAfterStream);
     },
-  }), [refreshSessions, sessionId]);
+  }), [refreshSessions, sessionId, token]);
 
   const handleMessagesChange = (nextMessages) => {
     const alignedMessages = nextMessages.map((message) => {
@@ -749,6 +763,9 @@ export default function ChatInterface({ setView }) {
     try {
       const response = await fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}`, {
         method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
       });
       if (!response.ok) throw new Error('Failed to delete chat');
 
@@ -762,7 +779,7 @@ export default function ChatInterface({ setView }) {
     } catch (error) {
       console.error('Failed to delete chat session:', error);
     }
-  }, [handleNewChat, refreshSessions, sessionId]);
+  }, [handleNewChat, refreshSessions, sessionId, token]);
 
   const stopStreaming = useCallback(() => {
     activeStreamControllerRef.current?.abort();
@@ -806,7 +823,10 @@ export default function ChatInterface({ setView }) {
     try {
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           session_id: sessionId,
           user_message: userText,
@@ -901,96 +921,191 @@ export default function ChatInterface({ setView }) {
   }
 
   return (
-    <Box className={`chatgpt-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+    <Box className={`chatgpt-shell sidebar-${sidebarState}`}>
       <Box className="chatgpt-sidebar">
-        <Box className="sidebar-header">
-          <Typography className="sidebar-brand">
-            Portfolio AI <span>Plus</span>
-          </Typography>
-          <Tooltip title="Collapse sidebar">
+
+        {/* ════════════════════════════════════════════════════════════════════
+            FULL SIDEBAR CONTENT (260px)
+            Fades out fast when collapsing, fades in with delay when expanding
+            ════════════════════════════════════════════════════════════════════ */}
+        <Box className="sidebar-full-content">
+          <Box className="sidebar-header">
+            <Typography className="sidebar-brand">
+              Portfolio AI <span>Plus</span>
+            </Typography>
+            <Tooltip title="Collapse to icon rail">
+              <IconButton
+                className="sidebar-icon"
+                aria-label="Collapse sidebar to icon rail"
+                onClick={() => setSidebarState('mini')}
+              >
+                <PanelLeft size={18} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+
+          <Button
+            className="sidebar-new-chat"
+            startIcon={<SquarePen size={16} />}
+            onClick={handleNewChat}
+            fullWidth
+          >
+            New chat
+          </Button>
+
+          <Box className="sidebar-section">
+            <Typography className="sidebar-section-title">Tools</Typography>
+            <button className="sidebar-tool" type="button" onClick={() => setView('analytics')}>
+              <BarChart2 size={16} />
+              Analytics Dashboard
+            </button>
+            <button className="sidebar-tool" type="button">
+              <Search size={16} />
+              Explore Sessions
+            </button>
+          </Box>
+
+          <Box className="sidebar-section sidebar-recents">
+            <Typography className="sidebar-section-title">Recents</Typography>
+            {conversations.slice(0, 14).map((conversation) => (
+              <div
+                key={conversation.id}
+                role="button"
+                tabIndex={0}
+                className={`recent-chat ${conversation.id === sessionId ? 'active' : ''}`}
+                onClick={() => handleActiveConversationChange(conversation.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleActiveConversationChange(conversation.id);
+                  }
+                }}
+              >
+                <span>{conversation.title}</span>
+                <Tooltip title="Delete chat">
+                  <IconButton
+                    className="recent-delete"
+                    aria-label={`Delete ${conversation.title}`}
+                    size="small"
+                    onClick={(event) => handleDeleteConversation(event, conversation.id)}
+                  >
+                    <Trash2 size={14} />
+                  </IconButton>
+                </Tooltip>
+              </div>
+            ))}
+          </Box>
+
+          <Box className="sidebar-profile">
+            <Box className="profile-avatar">
+              {session?.user?.name
+                ? session.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+                : 'AI'}
+            </Box>
+            <Box className="profile-copy">
+              <Typography className="profile-name">
+                {session?.user?.name || 'Portfolio Governance'}
+              </Typography>
+              <Typography className="profile-plan">
+                {session?.user?.plan || 'Advisory workspace'}
+              </Typography>
+            </Box>
+            <Tooltip title="Sign Out">
+              <IconButton
+                size="small"
+                onClick={logout}
+                sx={{
+                  color: '#555',
+                  flexShrink: 0,
+                  borderRadius: '6px',
+                  transition: 'color 130ms ease, background-color 130ms ease',
+                  '&:hover': { color: '#f4f4f4', backgroundColor: 'rgba(255,255,255,0.07)' },
+                }}
+              >
+                <LogOut size={14} />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </Box>
+
+        {/* ════════════════════════════════════════════════════════════════════
+            MINI ICON-RAIL CONTENT (64px)
+            Inspired by toolpad-master DashboardLayout mini drawer:
+            - Icon-only with MUI Tooltip on hover (placement="right")
+            - Session initials in avatar buttons
+            - Active session highlighted with inner border glow
+            ════════════════════════════════════════════════════════════════════ */}
+        <Box className="sidebar-mini-content">
+          {/* Toggle: expand back to full */}
+          <Tooltip title="Expand sidebar" placement="right" arrow>
             <IconButton
-              className="sidebar-icon"
-              aria-label="Collapse sidebar"
-              onClick={() => setSidebarCollapsed(true)}
+              className="mini-icon-btn"
+              aria-label="Expand sidebar"
+              onClick={() => setSidebarState('full')}
             >
-              <PanelLeft size={20} />
+              <PanelLeft size={17} />
+            </IconButton>
+          </Tooltip>
+
+          {/* New chat */}
+          <Tooltip title="New chat" placement="right" arrow>
+            <IconButton
+              className="mini-icon-btn"
+              aria-label="New chat"
+              onClick={handleNewChat}
+            >
+              <SquarePen size={16} />
+            </IconButton>
+          </Tooltip>
+
+          <Box className="mini-divider" />
+
+          {/* Tools */}
+          <Tooltip title="Analytics Dashboard" placement="right" arrow>
+            <IconButton
+              className="mini-icon-btn"
+              aria-label="Analytics Dashboard"
+              onClick={() => setView('analytics')}
+            >
+              <BarChart2 size={16} />
+            </IconButton>
+          </Tooltip>
+
+          <Tooltip title="Explore Sessions" placement="right" arrow>
+            <IconButton
+              className="mini-icon-btn"
+              aria-label="Explore Sessions"
+            >
+              <Search size={16} />
+            </IconButton>
+          </Tooltip>
+
+          <Box className="mini-divider" />
+
+          {/* Spacer — no chat history in mini mode */}
+          <Box sx={{ flex: 1 }} />
+
+          {/* Profile avatar */}
+          <Tooltip
+            title={session?.user?.name || 'Profile'}
+            placement="right"
+            arrow
+          >
+            <IconButton
+              className="mini-icon-btn mini-profile-btn"
+              aria-label="Profile"
+              onClick={logout}
+            >
+              {session?.user?.name
+                ? session.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+                : 'AI'}
             </IconButton>
           </Tooltip>
         </Box>
-
-        <Button
-          className="sidebar-new-chat"
-          startIcon={<SquarePen size={17} />}
-          onClick={handleNewChat}
-        >
-          New chat
-        </Button>
-
-        <Box className="sidebar-section">
-          <Typography className="sidebar-section-title">Tools</Typography>
-          <button className="sidebar-tool" type="button" onClick={() => setView('analytics')}>
-            <BarChart2 size={18} />
-            Analytics Dashboard
-          </button>
-          <button className="sidebar-tool" type="button">
-            <Search size={18} />
-            Explore Sessions
-          </button>
-        </Box>
-
-        <Box className="sidebar-section sidebar-recents">
-          <Typography className="sidebar-section-title">Recents</Typography>
-          {conversations.slice(0, 14).map((conversation) => (
-            <div
-              key={conversation.id}
-              role="button"
-              tabIndex={0}
-              className={`recent-chat ${conversation.id === sessionId ? 'active' : ''}`}
-              onClick={() => handleActiveConversationChange(conversation.id)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  handleActiveConversationChange(conversation.id);
-                }
-              }}
-            >
-              <span>{conversation.title}</span>
-              <Tooltip title="Delete chat">
-                <IconButton
-                  className="recent-delete"
-                  aria-label={`Delete ${conversation.title}`}
-                  size="small"
-                  onClick={(event) => handleDeleteConversation(event, conversation.id)}
-                >
-                  <Trash2 size={16} />
-                </IconButton>
-              </Tooltip>
-            </div>
-          ))}
-        </Box>
-
-        <Box className="sidebar-profile">
-          <Box className="profile-avatar">AI</Box>
-          <Box className="profile-copy">
-            <Typography className="profile-name">Portfolio Governance</Typography>
-            <Typography className="profile-plan">Advisory workspace</Typography>
-          </Box>
-        </Box>
       </Box>
 
-      <Box className="chatgpt-main">
+        <Box className="chatgpt-main">
         <Box className="chatgpt-topbar">
-          {sidebarCollapsed && (
-            <Tooltip title="Open sidebar">
-              <IconButton
-                className="topbar-icon sidebar-open-button"
-                aria-label="Open sidebar"
-                onClick={() => setSidebarCollapsed(false)}
-              >
-                <PanelLeft size={22} />
-              </IconButton>
-            </Tooltip>
-          )}
           <Box className="topbar-title-wrap">
             <Typography className="topbar-title">{activeTitle}</Typography>
             <Typography className="topbar-status">

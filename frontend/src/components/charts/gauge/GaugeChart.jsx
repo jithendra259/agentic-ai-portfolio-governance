@@ -1,16 +1,14 @@
 import React from 'react';
 import { Box } from '@mui/material';
 import { Gauge } from '@mui/x-charts-premium/Gauge';
-
-const PALETTE = ['#3b82f6'];
-function toFiniteNumber(value, fallback = 0) { const next = Number(value); return Number.isFinite(next) ? next : fallback; }
-function getResponsiveChartHeight(spec, fallback = 260) { const requested = Number(spec?.height); return Number.isFinite(requested) ? Math.max(180, Math.min(requested, 720)) : fallback; }
+import { PALETTE, toFiniteNumber, getResponsiveChartHeight } from './gaugeChartUtils';
 
 export default function GaugeChartRenderer({ spec }) {
   const height = getResponsiveChartHeight(spec, 260);
   const value = toFiniteNumber(spec.value);
   const valueMin = toFiniteNumber(spec.valueMin, 0);
   const valueMax = toFiniteNumber(spec.valueMax, 100);
+  
   return (
     <Box sx={{ width: '100%', minWidth: 220, display: 'flex', justifyContent: 'center' }}>
       <Gauge

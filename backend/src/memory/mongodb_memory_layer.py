@@ -549,6 +549,7 @@ class MongoMemoryManager:
         role: str,
         content: str,
         metadata: dict[str, Any] | None = None,
+        user_id: str | None = None,
     ) -> None:
         """Persist a chat message for UI history hydration."""
         clean_session_id = str(session_id or "").strip()
@@ -557,7 +558,10 @@ class MongoMemoryManager:
         if not clean_session_id or clean_role not in {"user", "assistant", "system"} or not clean_content.strip():
             return
 
-        metadata_payload = json.dumps(metadata or {})
+        resolved_metadata = dict(metadata or {})
+        if user_id:
+            resolved_metadata["user_id"] = str(user_id)
+        metadata_payload = json.dumps(resolved_metadata)
 
         if self.pg_pool:
             try:
@@ -581,15 +585,16 @@ class MongoMemoryManager:
             chat_col = self._collection("chat_messages")
             if chat_col is None:
                 return
-            chat_col.insert_one(
-                {
-                    "session_id": clean_session_id,
-                    "role": clean_role,
-                    "content": clean_content,
-                    "metadata": metadata or {},
-                    "created_at": datetime.now(timezone.utc),
-                }
-            )
+            doc = {
+                "session_id": clean_session_id,
+                "role": clean_role,
+                "content": clean_content,
+                "metadata": resolved_metadata,
+                "created_at": datetime.now(timezone.utc),
+            }
+            if user_id:
+                doc["user_id"] = str(user_id)
+            chat_col.insert_one(doc)
         except PyMongoError as exc:
             logger.warning("Failed to append chat message for session %s: %s", clean_session_id, exc)
 
@@ -601,7 +606,7 @@ class MongoMemoryManager:
             return normalized
         return f"{normalized[:61].rstrip()}..."
 
-    def list_chat_messages(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    def list_chat_messages(self, session_id: str, limit: int = 200, user_id: str | None = None) -> list[dict[str, Any]]:
         """Return persisted chat messages in chronological order."""
         clean_session_id = str(session_id or "").strip()
         if not clean_session_id:
@@ -613,20 +618,36 @@ class MongoMemoryManager:
             try:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT id, role, content, metadata, created_at
-                            FROM (
+                        if user_id:
+                            cur.execute(
+                                """
                                 SELECT id, role, content, metadata, created_at
-                                FROM chat_messages
-                                WHERE session_id = %s
-                                ORDER BY created_at DESC, id DESC
-                                LIMIT %s
-                            ) AS recent_messages
-                            ORDER BY created_at ASC, id ASC;
-                            """,
-                            (clean_session_id, safe_limit),
-                        )
+                                FROM (
+                                    SELECT id, role, content, metadata, created_at
+                                    FROM chat_messages
+                                    WHERE session_id = %s AND (metadata->>'user_id' = %s)
+                                    ORDER BY created_at DESC, id DESC
+                                    LIMIT %s
+                                ) AS recent_messages
+                                ORDER BY created_at ASC, id ASC;
+                                """,
+                                (clean_session_id, str(user_id), safe_limit),
+                            )
+                        else:
+                            cur.execute(
+                                """
+                                SELECT id, role, content, metadata, created_at
+                                FROM (
+                                    SELECT id, role, content, metadata, created_at
+                                    FROM chat_messages
+                                    WHERE session_id = %s
+                                    ORDER BY created_at DESC, id DESC
+                                    LIMIT %s
+                                ) AS recent_messages
+                                ORDER BY created_at ASC, id ASC;
+                                """,
+                                (clean_session_id, safe_limit),
+                            )
                         rows = cur.fetchall()
 
                 messages = []
@@ -658,7 +679,12 @@ class MongoMemoryManager:
             chat_col = self._collection("chat_messages")
             if chat_col is None:
                 return []
-            cursor = chat_col.find({"session_id": clean_session_id}).sort(
+            
+            query = {"session_id": clean_session_id}
+            if user_id:
+                query["$or"] = [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+
+            cursor = chat_col.find(query).sort(
                 [("created_at", DESCENDING), ("_id", DESCENDING)]
             ).limit(safe_limit)
             messages = []
@@ -678,7 +704,7 @@ class MongoMemoryManager:
             logger.warning("Failed to list chat messages for session %s: %s", clean_session_id, exc)
             return []
 
-    def list_chat_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_chat_sessions(self, limit: int = 50, user_id: str | None = None) -> list[dict[str, Any]]:
         """Return persisted chat sessions sorted by most recent activity."""
         safe_limit = max(1, min(int(limit or 50), 100))
 
@@ -686,33 +712,63 @@ class MongoMemoryManager:
             try:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            WITH ranked_messages AS (
+                        if user_id:
+                            cur.execute(
+                                """
+                                WITH ranked_messages AS (
+                                    SELECT
+                                        session_id,
+                                        role,
+                                        content,
+                                        created_at,
+                                        ROW_NUMBER() OVER (
+                                            PARTITION BY session_id
+                                            ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
+                                        ) AS title_rank
+                                    FROM chat_messages
+                                    WHERE metadata->>'user_id' = %s
+                                )
                                 SELECT
                                     session_id,
-                                    role,
-                                    content,
-                                    created_at,
-                                    ROW_NUMBER() OVER (
-                                        PARTITION BY session_id
-                                        ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
-                                    ) AS title_rank
-                                FROM chat_messages
+                                    MAX(CASE WHEN title_rank = 1 AND role = 'user' THEN content ELSE NULL END) AS title,
+                                    COUNT(*) AS message_count,
+                                    MIN(created_at) AS created_at,
+                                    MAX(created_at) AS updated_at
+                                FROM ranked_messages
+                                GROUP BY session_id
+                                ORDER BY updated_at DESC
+                                LIMIT %s;
+                                """,
+                                (str(user_id), safe_limit),
                             )
-                            SELECT
-                                session_id,
-                                MAX(CASE WHEN title_rank = 1 AND role = 'user' THEN content ELSE NULL END) AS title,
-                                COUNT(*) AS message_count,
-                                MIN(created_at) AS created_at,
-                                MAX(created_at) AS updated_at
-                            FROM ranked_messages
-                            GROUP BY session_id
-                            ORDER BY updated_at DESC
-                            LIMIT %s;
-                            """,
-                            (safe_limit,),
-                        )
+                        else:
+                            cur.execute(
+                                """
+                                WITH ranked_messages AS (
+                                    SELECT
+                                        session_id,
+                                        role,
+                                        content,
+                                        created_at,
+                                        ROW_NUMBER() OVER (
+                                            PARTITION BY session_id
+                                            ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
+                                        ) AS title_rank
+                                    FROM chat_messages
+                                )
+                                SELECT
+                                    session_id,
+                                    MAX(CASE WHEN title_rank = 1 AND role = 'user' THEN content ELSE NULL END) AS title,
+                                    COUNT(*) AS message_count,
+                                    MIN(created_at) AS created_at,
+                                    MAX(created_at) AS updated_at
+                                FROM ranked_messages
+                                GROUP BY session_id
+                                ORDER BY updated_at DESC
+                                LIMIT %s;
+                                """,
+                                (safe_limit,),
+                            )
                         rows = cur.fetchall()
 
                 return [
@@ -735,7 +791,14 @@ class MongoMemoryManager:
             chat_col = self._collection("chat_messages")
             if chat_col is None:
                 return []
-            pipeline = [
+            pipeline = []
+            if user_id:
+                pipeline.append({
+                    "$match": {
+                        "$or": [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+                    }
+                })
+            pipeline.extend([
                 {
                     "$addFields": {
                         "_title_rank": {"$cond": [{"$eq": ["$role", "user"]}, 0, 1]}
@@ -762,7 +825,7 @@ class MongoMemoryManager:
                 },
                 {"$sort": {"updated_at": -1}},
                 {"$limit": safe_limit},
-            ]
+            ])
             sessions = []
             for row in chat_col.aggregate(pipeline, allowDiskUse=True):
                 created_at = row.get("created_at")
@@ -781,7 +844,7 @@ class MongoMemoryManager:
             logger.warning("Failed to list chat sessions: %s", exc)
             return []
 
-    def delete_chat_session(self, session_id: str) -> int:
+    def delete_chat_session(self, session_id: str, user_id: str | None = None) -> int:
         """Delete all persisted chat messages for one session."""
         clean_session_id = str(session_id or "").strip()
         if not clean_session_id:
@@ -791,10 +854,16 @@ class MongoMemoryManager:
             try:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
-                        cur.execute(
-                            "DELETE FROM chat_messages WHERE session_id = %s;",
-                            (clean_session_id,),
-                        )
+                        if user_id:
+                            cur.execute(
+                                "DELETE FROM chat_messages WHERE session_id = %s AND metadata->>'user_id' = %s;",
+                                (clean_session_id, str(user_id)),
+                            )
+                        else:
+                            cur.execute(
+                                "DELETE FROM chat_messages WHERE session_id = %s;",
+                                (clean_session_id,),
+                            )
                         deleted = int(cur.rowcount or 0)
                 return deleted
             except Exception as exc:
@@ -807,7 +876,12 @@ class MongoMemoryManager:
             chat_col = self._collection("chat_messages")
             if chat_col is None:
                 return 0
-            result = chat_col.delete_many({"session_id": clean_session_id})
+            
+            query = {"session_id": clean_session_id}
+            if user_id:
+                query["$or"] = [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+                
+            result = chat_col.delete_many(query)
             return int(result.deleted_count or 0)
         except PyMongoError as exc:
             logger.warning("Failed to delete chat session %s: %s", clean_session_id, exc)
