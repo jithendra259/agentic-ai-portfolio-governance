@@ -1,7 +1,7 @@
 import { getBarChartDefinition } from './barChartRegistry.js';
 import { chooseLayout, getMainMetric, inferBarMode, shouldShowLabels } from './barChartIntelligence.js';
 import { normalizePlotId } from './barChartSchema.js';
-import { CHART_TIER, getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+import { CHART_TIER, getMuiPremiumChartsEnabled, premiumUnavailableMessage } from '../chartTierConfig.js';
 
 const DEFAULT_COLORS = ['#4f63f6', '#ffc857', '#f25467', '#38bdf8', '#4cc98a', '#e879b9', '#fb923c', '#818cf8'];
 const POSITIVE_COLOR = '#4cc98a';
@@ -435,3 +435,9 @@ function formatValue(value, unit) {
 function emptyAdaptedSpec(reason) {
   return { valid: false, reason, dataset: [], series: [], xAxis: [], yAxis: [], chartHeight: 260, margin: {}, usePremiumRenderer: false };
 }
+
+
+
+
+
+

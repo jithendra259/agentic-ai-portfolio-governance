@@ -1,6 +1,6 @@
 import { BAR_MODES, BAR_SORTS, BAR_UNITS, REQUIRED_BAR_FIELDS, normalizePlotId } from './barChartSchema.js';
 import { getBarChartDefinition } from './barChartRegistry.js';
-import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from '../chartTierConfig.js';
 
 const CHART_TYPES = new Set(['bar', 'rangeBar', 'histogram', 'mirroredBar']);
 
@@ -128,3 +128,8 @@ function assertClose(actual, expected, message, errors) {
   if (!Number.isFinite(expected)) return;
   if (Math.abs(actual - expected) > 1e-6) errors.push(message);
 }
+
+
+
+
+

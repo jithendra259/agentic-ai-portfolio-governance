@@ -1,4 +1,4 @@
-import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from '../chartTierConfig.js';
 import { getLineChartDefinition } from './lineChartRegistry.js';
 
 const LINE_TYPES = new Set(['line', 'line_area', 'stacked_area', 'dual_axis_line']);
@@ -85,3 +85,6 @@ function parseDate(value) {
 function isAscending(dates) {
   return dates.every((date, index) => index === 0 || date.getTime() >= dates[index - 1].getTime());
 }
+
+
+

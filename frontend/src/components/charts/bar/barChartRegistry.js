@@ -1,4 +1,4 @@
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 
 function defineChart(config) {
   const requiredFields = config.required_fields || config.requiredFields || [];
@@ -242,3 +242,6 @@ export const BAR_CHART_REGISTRY = {
 export function getBarChartDefinition(plotId) {
   return BAR_CHART_REGISTRY[plotId] || null;
 }
+
+
+

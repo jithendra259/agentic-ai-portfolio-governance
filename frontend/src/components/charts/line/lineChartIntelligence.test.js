@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 import { getLineChartDefinition } from './lineChartRegistry.js';
 import { validateLineChartPayload } from './lineChartValidator.js';
 
@@ -119,3 +119,4 @@ describe('line chart validation', () => {
     assert.match(result.errors.join('\n'), /optimizer/);
   });
 });
+

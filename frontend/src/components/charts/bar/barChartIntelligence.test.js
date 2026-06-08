@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { adaptBarChartPayload } from './barChartDataAdapter.js';
 import { inferBarMode } from './barChartIntelligence.js';
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 import { getBarChartDefinition } from './barChartRegistry.js';
 import { validateBarChartPayload } from './barChartValidator.js';
 
@@ -267,3 +267,5 @@ describe('bar chart validation', () => {
     assert.equal(result.valid, true);
   });
 });
+
+

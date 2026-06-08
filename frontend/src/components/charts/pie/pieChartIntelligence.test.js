@@ -115,3 +115,5 @@ describe('pie chart validation', () => {
     assert.match(result.errors.join('\n'), /optimizer/);
   });
 });
+
+

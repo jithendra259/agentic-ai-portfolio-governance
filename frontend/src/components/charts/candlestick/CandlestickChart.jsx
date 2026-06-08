@@ -1,0 +1,236 @@
+import React, { useMemo } from 'react';
+import { Box, Chip, Typography } from '@mui/material';
+
+function toFiniteNumber(value, fallback = 0) {
+  const next = Number(value);
+  return Number.isFinite(next) ? next : fallback;
+}
+
+function getResponsiveChartHeight(spec, fallback = 320) {
+  const requested = Number(spec?.height);
+  if (!Number.isFinite(requested)) return fallback;
+  return Math.max(180, Math.min(requested, 720));
+}
+
+export default function CandlestickChart({ spec }) {
+  const height = getResponsiveChartHeight(spec, 320);
+  const containerRef = React.useRef(null);
+  const [containerWidth, setContainerWidth] = React.useState(360);
+  const [hoveredIndex, setHoveredIndex] = React.useState(null);
+  const primarySeries = Array.isArray(spec?.series)
+    ? spec.series.find((series) => Array.isArray(series?.data) && series.data.length > 0)
+    : null;
+  const pts = primarySeries?.data || (Array.isArray(spec?.data) ? spec.data : []);
+
+  const formatVolume = (val) => {
+    if (val == null) return '';
+    if (val >= 1000000000) return `${(val / 1000000000).toFixed(1)}B`;
+    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
+    if (val >= 1000) return `${(val / 1000).toFixed(1)}k`;
+    return val.toString();
+  };
+
+  const formatAsDollar = (value) => {
+    if (value == null) return '';
+    return `$${value.toLocaleString('en-US', { maximumFractionDigits: value >= 100 ? 0 : 2 })}`;
+  };
+
+  React.useEffect(() => {
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (entries?.[0]) {
+        setContainerWidth(Math.max(320, entries[0].contentRect.width || 640));
+      }
+    });
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  const chart = useMemo(() => {
+    const data = pts
+      .map((entry, index) => ({
+        index,
+        date: entry.date,
+        dateObj: entry.date ? new Date(entry.date) : null,
+        open: toFiniteNumber(entry.open),
+        high: toFiniteNumber(entry.high),
+        low: toFiniteNumber(entry.low),
+        close: toFiniteNumber(entry.close),
+        volume: Math.max(0, toFiniteNumber(entry.volume)),
+      }))
+      .sort((a, b) => {
+        const aTime = a.dateObj instanceof Date && !Number.isNaN(a.dateObj.getTime()) ? a.dateObj.getTime() : 0;
+        const bTime = b.dateObj instanceof Date && !Number.isNaN(b.dateObj.getTime()) ? b.dateObj.getTime() : 0;
+        return aTime - bTime;
+      })
+      .map((entry, index) => ({ ...entry, index }));
+
+    const margin = { top: 22, right: 64, bottom: 42, left: 34 };
+    const innerWidth = Math.max(260, containerWidth - margin.left - margin.right);
+    const innerHeight = Math.max(200, height - margin.top - margin.bottom);
+    const volumeHeight = data.some((entry) => entry.volume > 0) ? Math.max(46, innerHeight * 0.22) : 0;
+    const volumeGap = volumeHeight ? 12 : 0;
+    const priceHeight = innerHeight - volumeHeight - volumeGap;
+    const plotBottom = margin.top + priceHeight;
+    const minLow = Math.min(...data.map((entry) => entry.low));
+    const maxHigh = Math.max(...data.map((entry) => entry.high));
+    const pricePadding = Math.max((maxHigh - minLow) * 0.1, 1);
+    const minPrice = minLow - pricePadding;
+    const maxPrice = maxHigh + pricePadding;
+    const priceRange = Math.max(maxPrice - minPrice, 1);
+    const maxVolume = Math.max(1, ...data.map((entry) => entry.volume));
+    const step = innerWidth / Math.max(1, data.length);
+    const candleWidth = Math.max(5, Math.min(16, step * 0.58));
+    const denseMode = data.length > 60;
+    const xFor = (index) => margin.left + step * (index + 0.5);
+    const priceY = (value) => margin.top + ((maxPrice - value) / priceRange) * priceHeight;
+    const volumeY = (value) => plotBottom + volumeGap + volumeHeight - (value / maxVolume) * volumeHeight;
+    const priceTicks = Array.from({ length: 5 }, (_, index) => {
+      const value = minPrice + (priceRange * index) / 4;
+      return { value, y: priceY(value) };
+    }).reverse();
+    const windowSize = 20;
+    const movingAverage = data.map((_, index) => {
+      if (index < windowSize - 1) return null;
+      const window = data.slice(index - windowSize + 1, index + 1);
+      return window.reduce((sum, entry) => sum + entry.close, 0) / window.length;
+    });
+    const movingAveragePath = movingAverage
+      .map((value, index) => value == null ? null : `${index === windowSize - 1 ? 'M' : 'L'} ${xFor(index)} ${priceY(value)}`)
+      .filter(Boolean)
+      .join(' ');
+    const tickEvery = Math.max(1, Math.ceil(data.length / 7));
+    const dateTicks = data
+      .filter((_, index) => index === 0 || index === data.length - 1 || index % tickEvery === 0)
+      .map((entry) => ({
+        x: xFor(entry.index),
+        label: entry.dateObj instanceof Date && !Number.isNaN(entry.dateObj.getTime())
+          ? entry.dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : entry.date,
+      }));
+
+    return { width: containerWidth, height, data, margin, innerWidth, priceHeight, volumeHeight, volumeGap, plotBottom, candleWidth, xFor, priceY, volumeY, priceTicks, dateTicks, movingAverage, movingAveragePath, hasVolume: volumeHeight > 0, denseMode };
+  }, [containerWidth, height, pts]);
+
+  if (pts.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <Typography variant="body2" sx={{ color: '#9ca3af' }}>No candlestick data available.</Typography>
+      </Box>
+    );
+  }
+
+  const hovered = hoveredIndex == null ? null : chart.data[hoveredIndex];
+  const tooltipLeft = hovered ? Math.min(Math.max(chart.xFor(hovered.index) + 12, 12), chart.width - 190) : 0;
+  const handleHoverMove = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const relativeX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * chart.width;
+    const step = chart.width / Math.max(1, chart.data.length);
+    const index = Math.floor((relativeX - chart.margin.left) / Math.max(step, 1));
+    if (index >= 0 && index < chart.data.length) setHoveredIndex(index);
+    else setHoveredIndex(null);
+  };
+
+  return (
+    <Box ref={containerRef} sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 0.5, mb: 0.5 }}>
+        <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 600, letterSpacing: 0.2 }}>
+          OHLC
+        </Typography>
+        {chart.denseMode && (
+          <Chip
+            label="Dense data"
+            size="small"
+            variant="outlined"
+            sx={{ height: 22, borderColor: '#334155', color: '#cbd5e1', bgcolor: 'rgba(15, 23, 42, 0.55)', '& .MuiChip-label': { px: 1, fontSize: 11, fontWeight: 600 } }}
+          />
+        )}
+      </Box>
+      <svg width="100%" height={height} viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={spec.title || 'Candlestick chart'}>
+        <rect x="0" y="0" width={chart.width} height={chart.height} fill="transparent" />
+        <g>
+          {chart.priceTicks.map((tick) => (
+            <g key={tick.value}>
+              <line x1={chart.margin.left} x2={chart.margin.left + chart.innerWidth} y1={tick.y} y2={tick.y} stroke="#374151" strokeDasharray="4 4" />
+              <text x={chart.margin.left + chart.innerWidth + 8} y={tick.y + 4} fill="#cbd5e1" fontSize="11" fontWeight="700">
+                {formatAsDollar(tick.value)}
+              </text>
+            </g>
+          ))}
+          {chart.dateTicks.map((tick) => (
+            <g key={`${tick.x}-${tick.label}`}>
+              <line x1={tick.x} x2={tick.x} y1={chart.margin.top} y2={chart.hasVolume ? chart.plotBottom + chart.volumeGap + chart.volumeHeight : chart.plotBottom} stroke="#334155" strokeOpacity="0.55" />
+              <text x={tick.x} y={height - 14} fill="#cbd5e1" fontSize="11" textAnchor="middle">
+                {tick.label}
+              </text>
+            </g>
+          ))}
+        </g>
+        {chart.hasVolume && (
+          <g>
+            <line x1={chart.margin.left} x2={chart.margin.left + chart.innerWidth} y1={chart.plotBottom + chart.volumeGap + chart.volumeHeight} y2={chart.plotBottom + chart.volumeGap + chart.volumeHeight} stroke="#475569" />
+            {chart.data.map((entry) => {
+              const rising = entry.index === 0 || entry.close >= chart.data[entry.index - 1].close;
+              const x = chart.xFor(entry.index) - chart.candleWidth / 2;
+              const y = chart.volumeY(entry.volume);
+              const h = chart.plotBottom + chart.volumeGap + chart.volumeHeight - y;
+              return <rect key={`volume-${entry.index}`} x={x} y={y} width={chart.candleWidth} height={Math.max(1, h)} fill={rising ? '#22c55e' : '#ef4444'} opacity="0.78" />;
+            })}
+          </g>
+        )}
+        <g>
+          {chart.movingAveragePath && <path d={chart.movingAveragePath} fill="none" stroke="#3b82f6" strokeWidth="2" strokeLinecap="round" />}
+          {chart.data.map((entry) => {
+            const rising = entry.close >= entry.open;
+            const color = rising ? '#22c55e' : '#ef4444';
+            const x = chart.xFor(entry.index);
+            const openY = chart.priceY(entry.open);
+            const closeY = chart.priceY(entry.close);
+            const highY = chart.priceY(entry.high);
+            const lowY = chart.priceY(entry.low);
+            const bodyY = Math.min(openY, closeY);
+            const bodyHeight = Math.max(2, Math.abs(closeY - openY));
+            return (
+              <g key={`candle-${entry.index}`} pointerEvents="none">
+                <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth="1.5" />
+                <rect x={x - chart.candleWidth / 2} y={bodyY} width={chart.candleWidth} height={bodyHeight} rx="1" fill={color} />
+                <rect x={x - chart.candleWidth / 2 - 3} y={chart.margin.top} width={chart.candleWidth + 6} height={chart.priceHeight + chart.volumeGap + chart.volumeHeight} fill="transparent">
+                  <title>{`${entry.date}: O ${formatAsDollar(entry.open)} H ${formatAsDollar(entry.high)} L ${formatAsDollar(entry.low)} C ${formatAsDollar(entry.close)} V ${formatVolume(entry.volume)}`}</title>
+                </rect>
+              </g>
+            );
+          })}
+        </g>
+        <rect
+          x={chart.margin.left}
+          y={chart.margin.top}
+          width={chart.innerWidth}
+          height={chart.priceHeight + chart.volumeGap + chart.volumeHeight}
+          fill="transparent"
+          onMouseMove={handleHoverMove}
+          onMouseLeave={() => setHoveredIndex(null)}
+          style={{ cursor: 'crosshair' }}
+        />
+        <g>
+          <line x1={chart.margin.left} x2={chart.margin.left + chart.innerWidth} y1={chart.plotBottom} y2={chart.plotBottom} stroke="#94a3b8" />
+          <line x1={chart.margin.left + chart.innerWidth} x2={chart.margin.left + chart.innerWidth} y1={chart.margin.top} y2={chart.plotBottom} stroke="#94a3b8" />
+          {chart.movingAveragePath && (
+            <g>
+              <line x1={chart.margin.left + chart.innerWidth - 110} x2={chart.margin.left + chart.innerWidth - 82} y1={chart.margin.top + 10} y2={chart.margin.top + 10} stroke="#3b82f6" strokeWidth="2" />
+              <text x={chart.margin.left + chart.innerWidth - 76} y={chart.margin.top + 14} fill="#cbd5e1" fontSize="11">20-day SMA</text>
+            </g>
+          )}
+        </g>
+      </svg>
+      {hovered && (
+        <Box sx={{ position: 'absolute', top: 12, left: tooltipLeft, pointerEvents: 'none', background: 'rgba(15, 23, 42, 0.92)', border: '1px solid #334155', borderRadius: 1, color: '#e5e7eb', px: 1, py: 0.75, fontSize: 11, boxShadow: '0 10px 24px rgba(0,0,0,0.25)', zIndex: 2 }}>
+          <Box sx={{ fontWeight: 700, mb: 0.25 }}>{hovered.date}</Box>
+          <Box>O {formatAsDollar(hovered.open)} H {formatAsDollar(hovered.high)}</Box>
+          <Box>L {formatAsDollar(hovered.low)} C {formatAsDollar(hovered.close)}</Box>
+          {chart.hasVolume && <Box>V {formatVolume(hovered.volume)}</Box>}
+          {chart.movingAverage[hovered.index] != null && <Box sx={{ color: '#93c5fd' }}>SMA {formatAsDollar(chart.movingAverage[hovered.index])}</Box>}
+        </Box>
+      )}
+    </Box>
+  );
+}

@@ -1,4 +1,4 @@
-import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from '../chartTierConfig.js';
 import { getScatterChartDefinition, SCATTER_CHART_TYPES } from './scatterChartRegistry.js';
 
 export function validateScatterChartPayload(payload, options = {}) {
@@ -88,3 +88,7 @@ export function validateScatterChartPayload(payload, options = {}) {
     premium_unavailable: requiresPremium && !premiumEnabled,
   };
 }
+
+
+
+

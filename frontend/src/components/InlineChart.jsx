@@ -13,12 +13,27 @@ import { RadarChart } from '@mui/x-charts-premium/RadarChart';
 import { Gauge } from '@mui/x-charts-premium/Gauge';
 import { Unstable_RadialBarChart as RadialBarChart } from '@mui/x-charts-premium/RadialBarChart';
 import { Unstable_RadialLineChart as RadialLineChart } from '@mui/x-charts-premium/RadialLineChart';
-import { Box, Typography, Paper } from '@mui/material';
+import { Box, Typography, Paper, Chip, Skeleton } from '@mui/material';
 import { useDrawingArea, useXScale, useYScale, useAnimateBarLabel } from '@mui/x-charts/hooks';
 import { ChartsClipPath } from '@mui/x-charts/ChartsClipPath';
 import { useTheme, alpha } from '@mui/material/styles';
 import { BACKEND_BASE } from '../config/api';
-import SmartBarChartRenderer from './SmartBarChartRenderer';
+import SmartBarChartRenderer from './charts/bar/SmartBarChartRenderer';
+import {
+  CandlestickChart,
+  FunnelChartRenderer,
+  GaugeChartRenderer,
+  HeatmapChartRenderer,
+  LineChartRenderer,
+  NetworkChartRenderer,
+  PieChartRenderer,
+  RadarChartRenderer,
+  RadialBarChartRenderer,
+  RadialLineChartRenderer,
+  SankeyChartRenderer,
+  ScatterChartRenderer,
+  SparklineChartRenderer,
+} from './charts';
 
 // Must match PALETTE in generate_dynamic_plot.py
 const PALETTE = [
@@ -1533,10 +1548,13 @@ function SpecSankeyChart({ spec }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function SpecCandlestickChart({ spec }) {
   const height = getResponsiveChartHeight(spec, CHART_HEIGHT);
-  const pts = spec.series?.[0]?.data || [];
   const containerRef = React.useRef(null);
   const [containerWidth, setContainerWidth] = React.useState(360);
   const [hoveredIndex, setHoveredIndex] = React.useState(null);
+  const primarySeries = Array.isArray(spec?.series)
+    ? spec.series.find((series) => Array.isArray(series?.data) && series.data.length > 0)
+    : null;
+  const pts = primarySeries?.data || (Array.isArray(spec?.data) ? spec.data : []);
 
   const formatVolume = (val) => {
     if (val == null) return '';
@@ -1563,16 +1581,23 @@ function SpecCandlestickChart({ spec }) {
   }, []);
 
   const chart = useMemo(() => {
-    const data = pts.map((entry, index) => ({
-      index,
-      date: entry.date,
-      dateObj: entry.date ? new Date(entry.date) : null,
-      open: toFiniteNumber(entry.open),
-      high: toFiniteNumber(entry.high),
-      low: toFiniteNumber(entry.low),
-      close: toFiniteNumber(entry.close),
-      volume: Math.max(0, toFiniteNumber(entry.volume)),
-    }));
+    const data = pts
+      .map((entry, index) => ({
+        index,
+        date: entry.date,
+        dateObj: entry.date ? new Date(entry.date) : null,
+        open: toFiniteNumber(entry.open),
+        high: toFiniteNumber(entry.high),
+        low: toFiniteNumber(entry.low),
+        close: toFiniteNumber(entry.close),
+        volume: Math.max(0, toFiniteNumber(entry.volume)),
+      }))
+      .sort((a, b) => {
+        const aTime = a.dateObj instanceof Date && !Number.isNaN(a.dateObj.getTime()) ? a.dateObj.getTime() : 0;
+        const bTime = b.dateObj instanceof Date && !Number.isNaN(b.dateObj.getTime()) ? b.dateObj.getTime() : 0;
+        return aTime - bTime;
+      })
+      .map((entry, index) => ({ ...entry, index }));
 
     const margin = { top: 22, right: 64, bottom: 42, left: 34 };
     const innerWidth = Math.max(260, containerWidth - margin.left - margin.right);
@@ -1591,6 +1616,7 @@ function SpecCandlestickChart({ spec }) {
     const maxVolume = Math.max(1, ...data.map((entry) => entry.volume));
     const step = innerWidth / Math.max(1, data.length);
     const candleWidth = Math.max(5, Math.min(16, step * 0.58));
+    const denseMode = data.length > 60;
 
     const xFor = (index) => margin.left + step * (index + 0.5);
     const priceY = (value) => margin.top + ((maxPrice - value) / priceRange) * priceHeight;
@@ -1641,6 +1667,7 @@ function SpecCandlestickChart({ spec }) {
       movingAverage,
       movingAveragePath,
       hasVolume: volumeHeight > 0,
+      denseMode,
     };
   }, [containerWidth, height, pts]);
 
@@ -1654,9 +1681,36 @@ function SpecCandlestickChart({ spec }) {
 
   const hovered = hoveredIndex == null ? null : chart.data[hoveredIndex];
   const tooltipLeft = hovered ? Math.min(Math.max(chart.xFor(hovered.index) + 12, 12), chart.width - 190) : 0;
+  const handleHoverMove = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const relativeX = ((event.clientX - rect.left) / Math.max(rect.width, 1)) * chart.width;
+    const step = chart.width / Math.max(1, chart.data.length);
+    const index = Math.floor((relativeX - chart.margin.left) / Math.max(step, 1));
+    if (index >= 0 && index < chart.data.length) setHoveredIndex(index);
+    else setHoveredIndex(null);
+  };
 
   return (
     <Box ref={containerRef} sx={{ width: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', px: 0.5, mb: 0.5 }}>
+        <Typography variant="caption" sx={{ color: '#94a3b8', fontWeight: 600, letterSpacing: 0.2 }}>
+          OHLC
+        </Typography>
+        {chart.denseMode && (
+          <Chip
+            label="Dense data"
+            size="small"
+            variant="outlined"
+            sx={{
+              height: 22,
+              borderColor: '#334155',
+              color: '#cbd5e1',
+              bgcolor: 'rgba(15, 23, 42, 0.55)',
+              '& .MuiChip-label': { px: 1, fontSize: 11, fontWeight: 600 },
+            }}
+          />
+        )}
+      </Box>
       <svg width="100%" height={height} viewBox={`0 0 ${chart.width} ${chart.height}`} role="img" aria-label={spec.title || 'Candlestick chart'}>
         <rect x="0" y="0" width={chart.width} height={chart.height} fill="transparent" />
         <g>
@@ -1736,8 +1790,7 @@ function SpecCandlestickChart({ spec }) {
             return (
               <g
                 key={`candle-${entry.index}`}
-                onMouseEnter={() => setHoveredIndex(entry.index)}
-                onMouseLeave={() => setHoveredIndex(null)}
+                pointerEvents="none"
               >
                 <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth="1.5" />
                 <rect
@@ -1761,6 +1814,16 @@ function SpecCandlestickChart({ spec }) {
             );
           })}
         </g>
+        <rect
+          x={chart.margin.left}
+          y={chart.margin.top}
+          width={chart.innerWidth}
+          height={chart.priceHeight + chart.volumeGap + chart.volumeHeight}
+          fill="transparent"
+          onMouseMove={handleHoverMove}
+          onMouseLeave={() => setHoveredIndex(null)}
+          style={{ cursor: 'crosshair' }}
+        />
         <g>
           <line x1={chart.margin.left} x2={chart.margin.left + chart.innerWidth} y1={chart.plotBottom} y2={chart.plotBottom} stroke="#94a3b8" />
           <line x1={chart.margin.left + chart.innerWidth} x2={chart.margin.left + chart.innerWidth} y1={chart.margin.top} y2={chart.plotBottom} stroke="#94a3b8" />
@@ -2161,8 +2224,12 @@ export default function InlineChart({ plotId }) {
 
   if (loading) {
     return (
-      <Paper elevation={3} sx={{ p: 4, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, display: 'flex', justifyContent: 'center', border: '1px solid #1f2937' }}>
-        <Typography variant="body2" sx={{ color: '#9ca3af' }}>Loading visualization...</Typography>
+      <Paper elevation={3} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #1f2937' }}>
+        <Typography variant="body2" sx={{ color: '#cbd5e1', mb: 1 }}>
+          Loading visualization...
+        </Typography>
+        <Skeleton variant="rounded" height={24} sx={{ bgcolor: 'rgba(148, 163, 184, 0.12)', mb: 1.5 }} />
+        <Skeleton variant="rounded" height={320} sx={{ bgcolor: 'rgba(148, 163, 184, 0.08)' }} />
       </Paper>
     );
   }
@@ -2183,20 +2250,20 @@ export default function InlineChart({ plotId }) {
 
   let ChartComponent;
   switch (spec.plot_type) {
-    case 'line':        ChartComponent = SpecLineChart; break;
+    case 'line':        ChartComponent = LineChartRenderer; break;
     case 'bar':         ChartComponent = SmartBarChartRenderer;  break;
-    case 'pie':         ChartComponent = SpecPieChart;  break;
-    case 'scatter':     ChartComponent = SpecScatterChart; break;
-    case 'sparkline':   ChartComponent = SpecSparkLineChart; break;
-    case 'sankey':      ChartComponent = SpecPremiumSankeyChart; break;
-    case 'candlestick': ChartComponent = SpecCandlestickChart; break;
-    case 'heatmap':     ChartComponent = SpecHeatmapChart; break;
-    case 'network':     ChartComponent = SpecNetworkChart; break;
-    case 'funnel':      ChartComponent = SpecFunnelChart; break;
-    case 'radar':       ChartComponent = SpecRadarChart; break;
-    case 'gauge':       ChartComponent = SpecGaugeChart; break;
-    case 'radial_bar':  ChartComponent = SpecRadialBarChart; break;
-    case 'radial_line': ChartComponent = SpecRadialLineChart; break;
+    case 'pie':         ChartComponent = PieChartRenderer;  break;
+    case 'scatter':     ChartComponent = ScatterChartRenderer; break;
+    case 'sparkline':   ChartComponent = SparklineChartRenderer; break;
+    case 'sankey':      ChartComponent = SankeyChartRenderer; break;
+    case 'candlestick': ChartComponent = CandlestickChart; break;
+    case 'heatmap':     ChartComponent = HeatmapChartRenderer; break;
+    case 'network':     ChartComponent = NetworkChartRenderer; break;
+    case 'funnel':      ChartComponent = FunnelChartRenderer; break;
+    case 'radar':       ChartComponent = RadarChartRenderer; break;
+    case 'gauge':       ChartComponent = GaugeChartRenderer; break;
+    case 'radial_bar':  ChartComponent = RadialBarChartRenderer; break;
+    case 'radial_line': ChartComponent = RadialLineChartRenderer; break;
     default:            return null;
   }
 
@@ -2227,3 +2294,5 @@ export default function InlineChart({ plotId }) {
     </Paper>
   );
 }
+
+

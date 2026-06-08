@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 import { getScatterChartDefinition } from './scatterChartRegistry.js';
 import { validateScatterChartPayload } from './scatterChartValidator.js';
 
@@ -118,3 +118,5 @@ describe('scatter chart validation', () => {
     assert.match(result.errors.join('\n'), /optimizer/);
   });
 });
+
+

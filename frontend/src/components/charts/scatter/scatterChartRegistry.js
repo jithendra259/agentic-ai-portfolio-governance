@@ -1,4 +1,4 @@
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 
 export const SCATTER_CHART_TYPES = new Set(['scatter', 'bubble_scatter', 'scatter_regression', 'webgl_scatter']);
 
@@ -141,3 +141,6 @@ export const SCATTER_CHART_REGISTRY = {
 export function getScatterChartDefinition(plotId) {
   return SCATTER_CHART_REGISTRY[String(plotId || '').trim()] || null;
 }
+
+
+

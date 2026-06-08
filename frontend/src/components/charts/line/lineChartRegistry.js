@@ -1,4 +1,4 @@
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 
 function defineLineChart(config) {
   const requiredFields = config.required_fields || [];
@@ -125,3 +125,5 @@ export const LINE_CHART_REGISTRY = {
 export function getLineChartDefinition(plotId) {
   return LINE_CHART_REGISTRY[String(plotId || '').trim()] || null;
 }
+
+

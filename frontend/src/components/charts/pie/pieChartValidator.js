@@ -1,4 +1,4 @@
-import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from './chartTierConfig.js';
+import { getMuiPremiumChartsEnabled, premiumUnavailableMessage } from '../chartTierConfig.js';
 import { getPieChartDefinition, PIE_CHART_TYPES } from './pieChartRegistry.js';
 
 const PERCENT_SUM_TOLERANCE = 0.5;
@@ -106,3 +106,7 @@ function isPercentPie(payload, valueField) {
     'sector_ticker_nested_donut',
   ]).has(String(payload.plot_id || ''));
 }
+
+
+
+

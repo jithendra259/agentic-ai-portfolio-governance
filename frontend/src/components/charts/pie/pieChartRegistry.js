@@ -1,4 +1,4 @@
-import { CHART_TIER } from './chartTierConfig.js';
+import { CHART_TIER } from '../chartTierConfig.js';
 
 export const PIE_CHART_TYPES = new Set(['pie', 'donut', 'center_label_donut', 'nested_donut', 'semi_donut']);
 
@@ -103,3 +103,6 @@ export const PIE_CHART_REGISTRY = {
 export function getPieChartDefinition(plotId) {
   return PIE_CHART_REGISTRY[String(plotId || '').trim()] || null;
 }
+
+
+

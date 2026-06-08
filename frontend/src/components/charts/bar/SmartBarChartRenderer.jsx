@@ -118,3 +118,4 @@ function BarWarnings({ warnings, interpretation }) {
     </Box>
   );
 }
+
