@@ -1084,6 +1084,18 @@ def _build_radar_spec(data: dict, title: str) -> dict:
     if not metrics:
         raise ValueError("Radar chart data must include metrics/categories.")
 
+    # Normalize metrics — support both string[] and MetricConfig[] ({ name, min, max })
+    normalized_metrics = []
+    for metric in metrics:
+        if isinstance(metric, dict):
+            normalized_metrics.append({
+                "name": str(metric.get("name", metric.get("label", ""))),
+                "min": float(metric["min"]) if "min" in metric else None,
+                "max": float(metric["max"]) if "max" in metric else None,
+            })
+        else:
+            normalized_metrics.append(str(metric))
+
     normalized_series = []
     for index, series in enumerate(raw_series):
         if not isinstance(series, dict):
@@ -1103,14 +1115,51 @@ def _build_radar_spec(data: dict, title: str) -> dict:
     if not normalized_series:
         raise ValueError("Radar chart data must include at least one numeric series.")
 
-    return {
+    # Build radar config with advanced options
+    radar_config = {"metrics": normalized_metrics}
+    if data.get("startAngle") is not None:
+        radar_config["startAngle"] = float(data["startAngle"])
+    if data.get("labelGap") is not None:
+        radar_config["labelGap"] = float(data["labelGap"])
+    if "max" in data:
+        radar_config["max"] = float(data["max"])
+
+    spec = {
         "plot_type": "radar",
         "title": title,
-        "radar": {"metrics": [str(metric) for metric in metrics]},
+        "radar": radar_config,
         "series": normalized_series,
         "height": data.get("height", 360),
         "hideLegend": bool(data.get("hideLegend", False)),
     }
+
+    # Grid customization
+    if data.get("shape") in ("sharp", "circular"):
+        spec["shape"] = data["shape"]
+    if data.get("divisions") is not None:
+        spec["divisions"] = int(data["divisions"])
+
+    # Highlight mode
+    if data.get("highlight") in ("axis", "series", "none"):
+        spec["highlight"] = data["highlight"]
+
+    # Color palette
+    if "colors" in data:
+        spec["colors"] = data["colors"]
+
+    # Animation control
+    if data.get("skipAnimation") is not None:
+        spec["skipAnimation"] = bool(data["skipAnimation"])
+
+    # Toolbar
+    if data.get("showToolbar") is not None:
+        spec["showToolbar"] = bool(data["showToolbar"])
+
+    # Keyboard navigation
+    if data.get("disableKeyboardNavigation") is not None:
+        spec["disableKeyboardNavigation"] = bool(data["disableKeyboardNavigation"])
+
+    return spec
 
 
 def _build_gauge_spec(data: dict, title: str) -> dict:

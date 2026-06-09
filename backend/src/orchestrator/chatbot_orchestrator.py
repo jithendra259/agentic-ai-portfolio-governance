@@ -268,24 +268,43 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
     if model_name.startswith("ashna") or model_name == "ashnaai":
         from langchain_openai import ChatOpenAI
         api_key = os.getenv("ASHNA_API_KEY")
-        base_url = os.getenv("ASHNA_BASE_URL") or "https://api.ashna.ai/v1/api"
-        if api_key:
+        base_url = os.getenv("ASHNA_BASE_URL")
+        
+        if api_key and base_url:
+            # Normalize base URL: remove /api suffix if present (should be just /v1)
+            base_url = base_url.rstrip("/")
+            if base_url.endswith("/api"):
+                base_url = base_url[:-4]  # Remove /api suffix
+            if not base_url.endswith("/v1"):
+                base_url = base_url + "/v1"
+            
             actual_model = model_name
             if model_name.startswith("ashna/"):
                 actual_model = model_name[len("ashna/"):]
-            kwargs = {
-                "model": actual_model,
-                "temperature": temperature,
-                "api_key": api_key,
-                "base_url": base_url,
-                "tags": ["orchestrator_llm"],
-                "streaming": True,
-            }
-            if num_predict is not None:
-                kwargs["max_tokens"] = num_predict
-            return ChatOpenAI(**kwargs)
+            
+            try:
+                logger.info(f"Initializing Ashna ChatOpenAI with model={actual_model}, base_url={base_url}")
+                kwargs = {
+                    "model": actual_model,
+                    "temperature": temperature,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                    "tags": ["orchestrator_llm"],
+                    "streaming": True,
+                    "timeout": 30,
+                    "max_retries": 2,
+                }
+                if num_predict is not None:
+                    kwargs["max_tokens"] = num_predict
+                return ChatOpenAI(**kwargs)
+            except Exception as e:
+                logger.error(f"Failed to initialize Ashna API: {e}. Falling back to local Ollama.")
+                model_name = "qwen3-coder-next:cloud"
         else:
-            logger.warning("ASHNA_API_KEY is not set in environment. Falling back to local default.")
+            if not api_key:
+                logger.warning("ASHNA_API_KEY is not set in environment. Falling back to local default.")
+            elif not base_url:
+                logger.warning("ASHNA_BASE_URL is not set in environment. Falling back to local default.")
             model_name = "qwen3-coder-next:cloud"
 
     kwargs = {

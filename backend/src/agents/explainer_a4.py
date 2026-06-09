@@ -15,16 +15,31 @@ class GenerativeExplainerAgent:
         model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "gpt-oss:120b-cloud").strip()
         if model_name.startswith("ashna") or model_name == "ashnaai" or (os.getenv("ASHNA_API_KEY") and model_name == "gpt-oss:120b-cloud"):
             active_model = "ashnaai" if model_name == "gpt-oss:120b-cloud" else model_name
-            from langchain_openai import ChatOpenAI
             api_key = os.getenv("ASHNA_API_KEY")
-            base_url = os.getenv("ASHNA_BASE_URL") or "https://api.ashna.ai/v1/api"
-            if api_key:
-                self.llm = ChatOpenAI(
-                    model=active_model,
-                    temperature=0.5,
-                    api_key=api_key,
-                    base_url=base_url,
-                )
+            base_url = os.getenv("ASHNA_BASE_URL")
+            
+            if api_key and base_url:
+                # Normalize base URL: remove /api suffix if present (should be just /v1)
+                base_url = base_url.rstrip("/")
+                if base_url.endswith("/api"):
+                    base_url = base_url[:-4]  # Remove /api suffix
+                if not base_url.endswith("/v1"):
+                    base_url = base_url + "/v1"
+                
+                try:
+                    from langchain_openai import ChatOpenAI
+                    self.llm = ChatOpenAI(
+                        model=active_model,
+                        temperature=0.5,
+                        api_key=api_key,
+                        base_url=base_url,
+                        timeout=30,
+                        max_retries=2,
+                    )
+                except Exception as e:
+                    import logging
+                    logging.warning(f"Failed to initialize Ashna API in explainer_a4: {e}. Using Ollama fallback.")
+                    self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
             else:
                 self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
         else:
