@@ -562,6 +562,10 @@ export default function ChatInterface({ setView }) {
       });
   }, [token]);
 
+  // Use a ref to track loadSessionMessages to avoid unnecessary re-runs
+  const loadSessionMessagesRef = useRef(loadSessionMessages);
+  loadSessionMessagesRef.current = loadSessionMessages;
+
   const refreshSessions = useCallback(() => {
     return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`, {
       headers: {
@@ -628,7 +632,7 @@ export default function ChatInterface({ setView }) {
     setHistoryLoaded(false);
     setActiveConversationId(sessionId);
 
-    loadSessionMessages(sessionId)
+    loadSessionMessagesRef.current(sessionId)
       .then((nextMessages) => {
         if (!active) return;
         setMessages(nextMessages);
@@ -646,7 +650,7 @@ export default function ChatInterface({ setView }) {
     return () => {
       active = false;
     };
-  }, [loadSessionMessages, sessionId]);
+  }, [sessionId]);
 
   const activeSession = chatSessions.find((item) => item.session_id === sessionId);
   const activeTitle = activeSession?.title || 'Portfolio Assistant';
@@ -749,6 +753,7 @@ export default function ChatInterface({ setView }) {
   }, []);
 
   const handleActiveConversationChange = useCallback((nextId) => {
+    console.log('handleActiveConversationChange called with:', nextId, 'current active:', activeConversationId);
     if (!nextId || nextId === activeConversationId) return;
 
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextId);
