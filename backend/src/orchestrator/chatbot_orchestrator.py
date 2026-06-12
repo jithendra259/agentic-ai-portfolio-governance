@@ -681,8 +681,9 @@ GOVERNANCE RULES:
 - Read the tool output carefully instead of inventing any values.
 
 METHODOLOGY RAG RULES:
-- If the user asks how the framework works, how I_t is computed, how HITL works, why a result is statistically insignificant, or asks for methodology/documentation details, use search_methodology_knowledge_base.
-- This tool returns grounded PDF chunks from the local methodology knowledge base. Quote or summarize those chunks instead of inventing explanations.
+- If the user asks who, what, when, where, why, or how questions about the paper, EDA, statistics, ARIMA, GARCH, ADF, stationarity, forecasting models, data types, missing values, outliers, G-CVaR, HITL, RAG, methodology, or documentation details, use search_methodology_knowledge_base.
+- This tool returns grounded PDF/local knowledge chunks from the methodology knowledge base. Summarize those chunks instead of inventing explanations.
+- For "who wrote this", "what is this study", "when was it done", "where is the market context", "why use EDA", or "how does the method work", answer directly from the retrieved chunks.
 
 GRAPH RAG RULES:
 - If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.

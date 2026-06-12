@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 DB_NAME = "Stock_data"
 PDF_COLLECTION = "pdf_chunks"
 TICKER_COLLECTION = "ticker"
+LOCAL_KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 
 
 class MethodologyVectorRAG:
@@ -92,22 +93,73 @@ class MethodologyVectorRAG:
     def _load_chunk_docs(self) -> list[dict[str, Any]]:
         collection = self._get_collection()
         if collection is None:
-            return []
+            return self._load_local_knowledge_docs()
 
-        return list(
-            collection.find(
-                {"$or": [{"source_type": "pdf"}, {"source_paper": "methodology"}]},
-                {
-                    "_id": 0,
-                    "chunk_id": 1,
-                    "source_paper": 1,
-                    "page_number": 1,
-                    "raw_text": 1,
-                    "embedding": 1,
-                    "embedding_model": 1,
-                },
+        try:
+            docs = list(
+                collection.find(
+                    {"$or": [{"source_type": "pdf"}, {"source_paper": "methodology"}, {"source_type": "local_knowledge"}]},
+                    {
+                        "_id": 0,
+                        "chunk_id": 1,
+                        "source_paper": 1,
+                        "page_number": 1,
+                        "raw_text": 1,
+                        "embedding": 1,
+                        "embedding_model": 1,
+                        "source_type": 1,
+                    },
+                )
             )
-        )
+        except Exception as exc:
+            logger.warning("Methodology Mongo retrieval failed; using local knowledge fallback: %s", exc)
+            return self._load_local_knowledge_docs()
+        local_docs = self._load_local_knowledge_docs()
+        if docs:
+            existing_ids = {doc.get("chunk_id") for doc in docs}
+            docs.extend(doc for doc in local_docs if doc.get("chunk_id") not in existing_ids)
+            return docs
+        return local_docs
+
+    def _load_local_knowledge_docs(self) -> list[dict[str, Any]]:
+        docs: list[dict[str, Any]] = []
+        if not LOCAL_KNOWLEDGE_DIR.exists():
+            return docs
+
+        for path in sorted(LOCAL_KNOWLEDGE_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            chunks = self._chunk_local_text(text)
+            for index, chunk in enumerate(chunks, start=1):
+                docs.append(
+                    {
+                        "chunk_id": f"local:{path.stem}:{index}",
+                        "source_paper": path.name,
+                        "source_type": "local_knowledge",
+                        "page_number": "local",
+                        "raw_text": chunk,
+                    }
+                )
+        return docs
+
+    @staticmethod
+    def _chunk_local_text(text: str, max_chars: int = 1800) -> list[str]:
+        sections = [section.strip() for section in re.split(r"\n(?=##\s+)", text or "") if section.strip()]
+        chunks: list[str] = []
+        for section in sections:
+            if len(section) <= max_chars:
+                chunks.append(section)
+                continue
+            start = 0
+            while start < len(section):
+                end = min(len(section), start + max_chars)
+                split_at = section.rfind("\n", start, end)
+                if split_at <= start:
+                    split_at = end
+                chunk = section[start:split_at].strip()
+                if chunk:
+                    chunks.append(chunk)
+                start = split_at
+        return chunks
 
     def _vector_search(self, query: str, docs: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
         embedding_model = self._get_embedding_model()
@@ -180,7 +232,8 @@ class MethodologyVectorRAG:
 
         scored_docs = []
         for doc in docs:
-            doc_terms = self._tokenize(doc.get("raw_text", ""))
+            raw_text = str(doc.get("raw_text", ""))
+            doc_terms = self._tokenize(raw_text)
             if not doc_terms:
                 continue
 
@@ -188,7 +241,15 @@ class MethodologyVectorRAG:
             if not overlap:
                 continue
 
+            text_lower = raw_text.lower()
             score = float(len(overlap) / max(1, len(query_terms)))
+            for term in overlap:
+                if len(term) >= 3 and re.search(rf"\b{re.escape(term)}\b", text_lower):
+                    score += 0.15
+                if re.search(rf"^##\s+.*\b{re.escape(term)}\b", text_lower, flags=re.MULTILINE):
+                    score += 0.45
+                if re.search(rf"^what\s+{re.escape(term)}\b|^how\s+.*\b{re.escape(term)}\b|^why\s+.*\b{re.escape(term)}\b", text_lower, flags=re.MULTILINE):
+                    score += 0.35
             enriched = dict(doc)
             enriched["score"] = score
             scored_docs.append(enriched)
@@ -220,7 +281,16 @@ class MethodologyVectorRAG:
 
     @staticmethod
     def _tokenize(text: str) -> set[str]:
-        return set(re.findall(r"[a-zA-Z0-9_]+", str(text).lower()))
+        stopwords = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "do", "does", "for",
+            "from", "how", "in", "is", "it", "of", "on", "or", "the", "this",
+            "to", "was", "what", "when", "where", "which", "who", "why", "with",
+        }
+        return {
+            token
+            for token in re.findall(r"[a-zA-Z0-9_]+", str(text).lower())
+            if token not in stopwords and len(token) > 1
+        }
 
     def _get_collection(self):
         if self._collection is not None:

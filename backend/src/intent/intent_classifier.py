@@ -207,6 +207,9 @@ class IntentClassifier:
         IntentType.METHODOLOGY_QUESTION: [
             r"\b(?:how|why|what is)\b.*\b(?:g-cvar|optimizer|governance framework|methodology|the math)\b.*\b(?:work|function|based on)\b",
             r"\b(?:explain|describe|break down)\b.*\b(?:architecture|methodology|algorithm|approach|system)\b",
+            r"\b(?:who|what|when|where|why|how)\b.*\b(?:paper|ssrn|study|research|author|authors|eda|exploratory data analysis|arima|garch|adf|stationarity|random forest|gradient boosting|pre-covid|post-covid|covid|volatility|correlation|skewness|kurtosis|outlier|missing values|data types|hitl|rag|cvar|g-cvar)\b",
+            r"\b(?:explain|define|describe|summarize|break down)\b.*\b(?:eda|exploratory data analysis|arima|garch|adf|stationarity|random forest|gradient boosting|volatility|correlation|skewness|kurtosis|outlier|missing values|data types|hitl|rag|cvar|g-cvar)\b",
+            r"\b(?:what|why|how)\b.*\b(?:use|uses|used|important|matter|needed)\b.*\b(?:eda|statistics|stationarity|correlation|volatility|garch|arima|hitl|rag)\b",
         ],
         IntentType.DOCUMENTATION_REQUEST: [
             r"\b(?:show|get|provide|link)\b.*\b(?:documentation|docs|help|guide|readme|paper|thesis)\b",
