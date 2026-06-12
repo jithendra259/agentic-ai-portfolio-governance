@@ -87,6 +87,7 @@ from src.memory.missing_data_resolver import MissingDataResolver
 from src.memory.response_contract import build_response_contract, contract_summary
 from src.agents.plot_store import GLOBAL_PLOT_DATA
 from src.decision.apg_bench_response import build_apg_bench_response
+from src.decision.full_stock_eda_response import build_full_stock_eda_response
 from src.decision.plot_prompt_response import build_plot_prompt_response
 from src.decision.regime_response import build_regime_only_response
 
@@ -684,6 +685,16 @@ def chat(request: ChatRequest) -> ChatResponse:
             )
             return ChatResponse(session_id=request.session_id, response=benchmark_response)
 
+        full_stock_eda_response = build_full_stock_eda_response(request.user_message)
+        if full_stock_eda_response is not None:
+            _persist_memory_response(
+                request.session_id,
+                full_stock_eda_response,
+                resolved_memory,
+                metadata={"model": request.model, "transport": "rest", "router_fast_path": "stock_eda_full"},
+            )
+            return ChatResponse(session_id=request.session_id, response=full_stock_eda_response)
+
         plot_response = build_plot_prompt_response(request.user_message)
         if plot_response is not None:
             _persist_memory_response(
@@ -896,6 +907,27 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "model": request.model,
                         "transport": "stream",
                         "router_fast_path": "apg_bench",
+                        "plot_ids": [],
+                    },
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
+            full_stock_eda_response = build_full_stock_eda_response(request.user_message)
+            if full_stock_eda_response is not None:
+                accumulated_response = full_stock_eda_response
+                async for chunk in _stream_text_delta(text_id, full_stock_eda_response):
+                    yield chunk
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "stock_eda_full",
                         "plot_ids": [],
                     },
                 )
