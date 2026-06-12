@@ -111,6 +111,9 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 LEGACY_OUTPUTS_DIR = PROJECT_ROOT / "src" / "outputs"
 PLOT_TOKEN = "__PLOTSPEC__:"
 
+if os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"):
+    OUTPUTS_DIR = Path("/tmp/outputs")
+
 from src.utils.crypto_utils import hash_password, verify_password, create_auth_token, verify_auth_token
 
 def get_current_user_id(request: Request) -> str | None:
@@ -222,8 +225,12 @@ app.include_router(analytics_router)
 app.include_router(governance_router)
 app.include_router(auth_router)
 
-OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
+try:
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    if OUTPUTS_DIR.exists():
+        app.mount("/outputs", StaticFiles(directory=OUTPUTS_DIR), name="outputs")
+except OSError as exc:
+    logger.warning("Skipping outputs static mount: %s", exc)
 
 class ChatRequest(BaseModel):
     session_id: str
