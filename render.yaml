@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: agentic-ai-portfolio-governance-backend
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHONPATH
+        value: /app
