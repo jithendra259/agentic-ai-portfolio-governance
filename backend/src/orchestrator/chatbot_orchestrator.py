@@ -307,6 +307,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                 logger.warning("ASHNA_BASE_URL is not set in environment. Falling back to local default.")
             model_name = "qwen3-coder-next:cloud"
 
+    ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
     kwargs = {
         "model": model_name,
         "temperature": temperature,
@@ -314,6 +315,8 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         "keep_alive": "10m",
         "tags": ["orchestrator_llm"],
     }
+    if ollama_base_url:
+        kwargs["base_url"] = ollama_base_url.rstrip("/")
     if num_predict is not None:
         kwargs["num_predict"] = num_predict
     return ChatOllama(**kwargs)

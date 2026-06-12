@@ -13,6 +13,7 @@ class GenerativeExplainerAgent:
     def __init__(self):
 
         model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or "gpt-oss:120b-cloud").strip()
+        ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
         if model_name.startswith("ashna") or model_name == "ashnaai" or (os.getenv("ASHNA_API_KEY") and model_name == "gpt-oss:120b-cloud"):
             active_model = "ashnaai" if model_name == "gpt-oss:120b-cloud" else model_name
             api_key = os.getenv("ASHNA_API_KEY")
@@ -41,9 +42,15 @@ class GenerativeExplainerAgent:
                     logging.warning(f"Failed to initialize Ashna API in explainer_a4: {e}. Using Ollama fallback.")
                     self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
             else:
-                self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+                kwargs = {"model": "gpt-oss:120b-cloud", "temperature": 0.5}
+                if ollama_base_url:
+                    kwargs["base_url"] = ollama_base_url.rstrip("/")
+                self.llm = ChatOllama(**kwargs)
         else:
-            self.llm = ChatOllama(model=model_name, temperature=0.5)
+            kwargs = {"model": model_name, "temperature": 0.5}
+            if ollama_base_url:
+                kwargs["base_url"] = ollama_base_url.rstrip("/")
+            self.llm = ChatOllama(**kwargs)
 
         self.prompt = PromptTemplate(
             input_variables=[

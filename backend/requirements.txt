@@ -36,8 +36,4 @@ langgraph>=0.1.0
 langchain-core>=0.1.0
 langchain-text-splitters>=0.2.0
 
-# Optional research / notebook dependencies retained for the local thesis workflow
-matplotlib>=3.5.0
-seaborn>=0.12.0
-yfinance==0.2.32
-sentence-transformers>=3.0.0
+# Optional research / notebook dependencies are kept out of the Render web service
