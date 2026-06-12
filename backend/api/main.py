@@ -203,8 +203,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS must be registered before routers so all responses — including redirects — have proper headers.
+# CORS must be registered before routers so all responses including redirects have proper headers.
 # allow_credentials=True requires explicit origins; "*" + credentials is rejected by browsers.
+_FRONTEND_BASE_URL = (os.getenv("FRONTEND_BASE_URL") or "http://localhost:5173").rstrip("/")
 _ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -213,6 +214,8 @@ _ALLOWED_ORIGINS = [
     "http://localhost:8000",
     "http://127.0.0.1:8000",
 ]
+if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _ALLOWED_ORIGINS:
+    _ALLOWED_ORIGINS.append(_FRONTEND_BASE_URL)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1406,4 +1409,5 @@ if __name__ == "__main__":
         )
     else:
         uvicorn.run("api.main:app", host=host, port=port, reload=False)
+
 
