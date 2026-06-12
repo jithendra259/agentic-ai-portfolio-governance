@@ -271,10 +271,19 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         base_url = os.getenv("ASHNA_BASE_URL")
         
         if api_key and base_url:
-            # Normalize base URL: remove /api suffix if present (should be just /v1)
-            base_url = base_url.rstrip("/")
-            if base_url.endswith("/api"):
-                base_url = base_url[:-4]  # Remove /api suffix
+            # Normalize base URL to an OpenAI-compatible root.
+            # Accept:
+            #   https://host
+            #   https://host/v1
+            #   https://host/api
+            #   https://host/v1/api
+            # and always convert to:
+            #   https://host/v1
+            base_url = base_url.strip().rstrip("/")
+            if base_url.endswith("/v1/api"):
+                base_url = base_url[:-4]
+            elif base_url.endswith("/api"):
+                base_url = base_url[:-4]
             if not base_url.endswith("/v1"):
                 base_url = base_url + "/v1"
             
