@@ -95,6 +95,12 @@ class IntentClassifier:
         "tell me",
     )
 
+    TICKER_STOPWORDS = {
+        "A", "AN", "AND", "ARE", "AS", "AT", "BY", "DID", "DO", "FOR", "FROM",
+        "HOW", "IN", "IS", "IT", "ME", "OF", "ON", "OR", "THE", "TO", "WAS",
+        "WHAT", "WHEN", "WHERE", "WHICH", "WHO", "WHY", "WITH",
+    }
+
     GREETING_PATTERNS = [
         r"^(?:hi|hello|hey|hiya)$",
         r"^good\s+(?:morning|afternoon|evening)$",
@@ -148,6 +154,10 @@ class IntentClassifier:
             r"\b(?:tell|show)\b.*\babout\s+(?P<universe>u\d{1,2})\b",
         ],
         IntentType.STOCK_SNAPSHOT: [
+            r"\b(?:what|which)\b.*\b(?:sector|industry|company|business|country|exchange|market|data|info|information|details)\b.*\b(?:is|for|about|on)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b",
+            r"\b(?:where)\b.*\b(?:is|are)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b.*\b(?:based|located|listed|headquartered|from)\b",
+            r"\b(?:who|what company)\b.*\b(?:is|are)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b",
+            r"\b(?:when)\b.*\b(?:did|was|were|is|are)\s+(?P<tickers>[a-z]{1,5}(?:\s*,\s*[a-z]{1,5})*)\b.*\b(?:founded|listed|stored|available|last updated|coverage|data)\b",
             r"\b(?:snapshot|data|info|information|details)\b.*\b(?:for|on|about)\s+(?P<tickers>[a-z,\s]+)$",
             r"\b(?:show|get|list)\b.*\b(?:all stored|database)\b.*\b(?:tickers|stocks|data)\b",
             r"\b(?:brief|tell me)\b.*\b(?:company|stock|firm)\b.*\b(?:about|for|on)\s+(?P<tickers>[a-z,\s]+)\b",
@@ -174,6 +184,7 @@ class IntentClassifier:
             r"\b(?:allocation|weights|exposure|governance|risk report)\b.*\b(?:for|on)\s+(?P<portfolio>.+?)\s+\b(?:for|on)\b\s+(?P<date>\d{4}-\d{2}-\d{2})\b",
         ],
         IntentType.INSTITUTIONAL_NETWORK: [
+            r"\b(?:who|which institutions?|which holders?|what institutions?)\b.*\b(?:holds?|own|owns|invested|invests|holder|holders|ownership)\b.*\b(?:in|of|for|on)?\s*(?P<subject>[A-Z]{1,5}(?:\s*,\s*[A-Z]{1,5})*)\b",
             r"\b(?:institutional|holder|ownership|overlap|network|contagion|interconnectedness)\b.*\b(?:analysis|graph|visualization|risk)\b(?:\s+for\s+(?P<subject>.+))?",
             r"\b(?:show|get|analyze|map)\b.*\b(?:institutions|holders|systemic risk)\b.*\b(?:for|in|on)\s+(?P<subject>.+)$",
             r"\b(?:shared institutions?|ownership overlap|institutional overlap|contagion structure|graph context)\b.*\b(?:for|between|in|on)\s+(?P<subject>.+)$",
@@ -207,7 +218,7 @@ class IntentClassifier:
         IntentType.METHODOLOGY_QUESTION: [
             r"\b(?:how|why|what is)\b.*\b(?:g-cvar|optimizer|governance framework|methodology|the math)\b.*\b(?:work|function|based on)\b",
             r"\b(?:explain|describe|break down)\b.*\b(?:architecture|methodology|algorithm|approach|system)\b",
-            r"\b(?:who|what|when|where|why|how)\b.*\b(?:paper|ssrn|study|research|author|authors|eda|exploratory data analysis|arima|garch|adf|stationarity|random forest|gradient boosting|pre-covid|post-covid|covid|volatility|correlation|skewness|kurtosis|outlier|missing values|data types|hitl|rag|cvar|g-cvar)\b",
+            r"\b(?:who|what|when|where|why|how)\b.*\b(?:paper|ssrn|study|research|author|authors|eda|exploratory data analysis|arima|garch|adf|stationarity|random forest|gradient boosting|pre-covid|post-covid|covid|data types|hitl|rag|cvar|g-cvar)\b",
             r"\b(?:explain|define|describe|summarize|break down)\b.*\b(?:eda|exploratory data analysis|arima|garch|adf|stationarity|random forest|gradient boosting|volatility|correlation|skewness|kurtosis|outlier|missing values|data types|hitl|rag|cvar|g-cvar)\b",
             r"\b(?:what|why|how)\b.*\b(?:use|uses|used|important|matter|needed)\b.*\b(?:eda|statistics|stationarity|correlation|volatility|garch|arima|hitl|rag)\b",
         ],
@@ -219,6 +230,8 @@ class IntentClassifier:
  
     CHART_PATTERNS = {
         IntentType.HISTORICAL_CHART: [
+            r"\b(?:how|why|when|what)\b.*\b(?:volatile|volatility|returns?|return spike|price spike|drawdown|peak|highest|lowest|trend|move|moved)\b.*\b(?:is|are|was|were|did|for|of|in|on)?\s*(?P<ticker>(?!SPIKE\b|TREND\b|MOVE\b|MOVED\b|PEAK\b)[A-Z]{1,5})\b",
+            r"\b(?:how|why|when|what)\b.*\b(?P<ticker>[A-Z]{1,5})\b.*\b(?:volatile|volatility|returns?|return spike|price spike|drawdown|peak|highest|lowest|trend|move|moved)\b",
             r"\b(?:plot|chart|graph|heatmap|visualize|draw|show)\b.*\b(?:correlation|volatility|returns|price|drawdown|distribution|rolling)\b",
             r"\b(?:show|get|visualize)\b.*\b(?:heatmap|box plot|violin plot|histogram|scatter)\b",
             r"\b(?:rolling)\b.*\b(?:volatility|correlation|mean|std)\b",
@@ -274,8 +287,8 @@ class IntentClassifier:
             self.DATA_LOOKUP_PATTERNS,
             self.GOVERNANCE_PATTERNS,
             self.BACKTEST_PATTERNS,
-            self.CONFIG_PATTERNS,
             self.CHART_PATTERNS,
+            self.CONFIG_PATTERNS,
             self.TECHNICAL_ANALYSIS_PATTERNS,
         ):
             for intent, patterns in intent_dict.items():
@@ -471,6 +484,9 @@ class IntentClassifier:
             if params["universes"]:
                 params["universe"] = params["universes"][0]
 
+        elif intent == IntentType.HISTORICAL_CHART:
+            params["tickers"] = self._parse_tickers(groups.get("ticker", query))
+
         elif intent in {IntentType.FULL_PIPELINE_RUN, IntentType.ROLLING_WINDOW_TEST}:
             params["scope"] = "batch"
 
@@ -480,6 +496,8 @@ class IntentClassifier:
         tickers = re.findall(r"\b([A-Z]{1,5})\b", str(text).upper())
         unique_tickers = []
         for ticker in tickers:
+            if ticker in self.TICKER_STOPWORDS:
+                continue
             if ticker.startswith("U") and ticker[1:].isdigit():
                 continue
             if ticker not in unique_tickers:

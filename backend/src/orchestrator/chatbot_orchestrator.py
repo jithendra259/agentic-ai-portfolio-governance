@@ -681,7 +681,11 @@ GOVERNANCE RULES:
 - Read the tool output carefully instead of inventing any values.
 
 METHODOLOGY RAG RULES:
-- If the user asks who, what, when, where, why, or how questions about the paper, EDA, statistics, ARIMA, GARCH, ADF, stationarity, forecasting models, data types, missing values, outliers, G-CVaR, HITL, RAG, methodology, or documentation details, use search_methodology_knowledge_base.
+- If the user asks who, what, when, where, why, or how questions about a stock ticker or company, prefer the stock tools below instead of search_methodology_knowledge_base.
+- Use get_stock_database_snapshot for company identity, sector, industry, country, exchange, stored data coverage, latest stored close, and business summaries.
+- Use get_price_series_for_analysis for stock volatility, returns, price movement, trend, drawdown, highest/lowest price, spikes, and period comparisons.
+- Use retrieve_graph_rag_context for stock ownership questions such as who holds, owns, invested in, or connects a ticker.
+- Use search_methodology_knowledge_base only when the question is about the paper, EDA method, statistics, ARIMA, GARCH, ADF, stationarity, forecasting models, data types, missing values, outliers, G-CVaR, HITL, RAG, methodology, or documentation details.
 - This tool returns grounded PDF/local knowledge chunks from the methodology knowledge base. Summarize those chunks instead of inventing explanations.
 - For "who wrote this", "what is this study", "when was it done", "where is the market context", "why use EDA", or "how does the method work", answer directly from the retrieved chunks.
 
