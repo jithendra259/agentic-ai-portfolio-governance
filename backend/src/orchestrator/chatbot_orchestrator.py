@@ -40,6 +40,7 @@ from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.providers.ashna_provider import normalize_ashna_base_url
 from src.rag.rag_tools import (
     compare_common_institutional_holders,
     retrieve_graph_rag_context,
@@ -271,21 +272,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         base_url = os.getenv("ASHNA_BASE_URL")
         
         if api_key and base_url:
-            # Normalize base URL to an OpenAI-compatible root.
-            # Accept:
-            #   https://host
-            #   https://host/v1
-            #   https://host/api
-            #   https://host/v1/api
-            # and always convert to:
-            #   https://host/v1
-            base_url = base_url.strip().rstrip("/")
-            if base_url.endswith("/v1/api"):
-                base_url = base_url[:-4]
-            elif base_url.endswith("/api"):
-                base_url = base_url[:-4]
-            if not base_url.endswith("/v1"):
-                base_url = base_url + "/v1"
+            base_url = normalize_ashna_base_url(base_url)
             
             actual_model = model_name
             if model_name.startswith("ashna/"):
@@ -375,6 +362,19 @@ def _is_ollama_unavailable_error(exc: Exception) -> bool:
 
 def _is_retryable_ollama_error(exc: Exception) -> bool:
     return _is_ollama_memory_error(exc) or _is_ollama_unavailable_error(exc)
+
+
+def _ashna_provider_error_message(exc: Exception, fallback_exc: Exception | None = None) -> AIMessage:
+    fallback_text = ""
+    if fallback_exc is not None:
+        fallback_text = f"\n\nThe configured fallback model also failed: {type(fallback_exc).__name__}."
+    return AIMessage(
+        content=(
+            "Ashna API returned an error before the model could answer. "
+            "Please verify `ASHNA_BASE_URL=https://api.ashna.ai/v1/api`, the API key, and the model id."
+            f"{fallback_text}"
+        )
+    )
 
 
 def _available_models_text() -> str:
@@ -468,6 +468,17 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     try:
         return active_llm.invoke(messages)
     except Exception as exc:
+        if is_ashna:
+            logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
+            if fallback_llm_with_tools is not None and FALLBACK_OLLAMA_MODEL != active_primary:
+                try:
+                    fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
+                    return fallback_llm_with_tools.invoke(fallback_messages)
+                except Exception as fallback_exc:
+                    logger.warning("Fallback model %s also failed after Ashna error: %s", FALLBACK_OLLAMA_MODEL, fallback_exc)
+                    return _ashna_provider_error_message(exc, fallback_exc)
+            return _ashna_provider_error_message(exc)
+
         if _is_ollama_model_not_found_error(exc) or _is_ollama_unavailable_error(exc):
             logger.warning("Primary Ollama model %s is not available. Error: %s", active_primary, exc)
             if fallback_llm_with_tools is None:

@@ -9,13 +9,14 @@ import sys
 from pathlib import Path
 
 # Add backend to path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+BACKEND_ROOT = Path(__file__).resolve().parent
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 from dotenv import load_dotenv
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(BACKEND_ROOT / ".env")
 load_dotenv()
+from src.providers.ashna_provider import normalize_ashna_base_url
 
 import logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -45,10 +46,8 @@ async def test_ashna_integration():
     
     # Test 2: URL format validation
     print("\n[2/4] Validating URL format...")
-    if "/api" in base_url:
-        print("⚠️  Warning: URL contains '/api' - code will remove it automatically")
-    if not base_url.endswith(("/v1", "/")):
-        print("ℹ️  URL will be normalized to include /v1")
+    if not base_url.rstrip("/").endswith("/v1/api"):
+        print("INFO: URL will be normalized to Ashna's OpenAI-compatible /v1/api root")
     print("✅ URL format acceptable")
     
     # Test 3: Import and initialize
@@ -56,12 +55,7 @@ async def test_ashna_integration():
     try:
         from langchain_openai import ChatOpenAI
         
-        # Normalize URL like the code does
-        normalized_url = base_url.rstrip("/")
-        if normalized_url.endswith("/api"):
-            normalized_url = normalized_url[:-4]
-        if not normalized_url.endswith("/v1"):
-            normalized_url = normalized_url + "/v1"
+        normalized_url = normalize_ashna_base_url(base_url)
         
         print(f"   Base URL (normalized): {normalized_url}")
         
@@ -94,7 +88,7 @@ async def test_ashna_integration():
         if "404" in error_msg or "not found" in error_msg:
             print("   • The API endpoint is not found")
             print("   • Check if ASHNA_BASE_URL is correct")
-            print("   • Try: ASHNA_BASE_URL=https://api.ashna.ai")
+            print("   • Try: ASHNA_BASE_URL=https://api.ashna.ai/v1/api")
         elif "401" in error_msg or "unauthorized" in error_msg or "authentication" in error_msg:
             print("   • API authentication failed")
             print("   • Check if ASHNA_API_KEY is valid and not expired")
@@ -167,7 +161,7 @@ To verify it's working with the orchestrator:
         print("""
 Please check:
 1. ASHNA_API_KEY is set correctly in backend/.env
-2. ASHNA_BASE_URL is set to: https://api.ashna.ai
+2. ASHNA_BASE_URL is set to: https://api.ashna.ai/v1/api
 3. Your internet connection is working
 4. The Ashna API service is online (https://api.ashna.ai)
 
