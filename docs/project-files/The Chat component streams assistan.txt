@@ -1,0 +1,4151 @@
+The Chat component streams assistant responses token-by-token. The adapter's sendMessage() method returns a ReadableStream<ChatMessageChunk | ChatStreamEnvelope>. The runtime reads this stream, processes each chunk, and updates the normalized store so that UI components re-render incrementally.
+
+Stream lifecycle
+
+Every stream must follow this lifecycle:
+
+start — Begin a new assistant message. The runtime creates the message shell and sets its status to 'streaming'.
+Content chunks — Text, reasoning, tool, source, file, or data chunks populate the message parts.
+finish or abort — Terminal chunk. finish marks the message as 'sent'; abort marks it as 'cancelled'.
+If the stream closes without a terminal chunk, the runtime treats it as a disconnect (see Error and disconnect handling below).
+
+Chunk types
+
+Lifecycle chunks
+
+Chunk type	Fields	Description
+start	messageId	Begin a new assistant message
+finish	messageId, finishReason?	Complete the assistant message
+abort	messageId	Cancel the assistant message
+Text chunks
+
+Chunk type	Fields	Description
+text-start	id	Begin a new text part
+text-delta	id, delta	Append text content
+text-end	id	Finalize the text part
+Text chunks create a ChatTextMessagePart in the message. Multiple text-delta chunks are batched according to streamFlushInterval before being applied to the store.
+
+Reasoning chunks
+
+Chunk type	Fields	Description
+reasoning-start	id	Begin a reasoning part
+reasoning-delta	id, delta	Append reasoning content
+reasoning-end	id	Finalize the reasoning part
+Reasoning chunks create a ChatReasoningMessagePart, useful for chain-of-thought or thinking trace displays.
+
+Tool chunks
+
+Chunk type	Fields	Description
+tool-input-start	toolCallId, toolName, dynamic?	Begin a tool invocation
+tool-input-delta	toolCallId, inputTextDelta	Stream tool input JSON
+tool-input-available	toolCallId, toolName, input	Tool input is fully available
+tool-input-error	toolCallId, errorText	Tool input parsing failed
+tool-approval-request	toolCallId, toolName, input, approvalId?	Request user approval
+tool-output-available	toolCallId, output, preliminary?	Tool output is available
+tool-output-error	toolCallId, errorText	Tool execution failed
+tool-output-denied	toolCallId, reason?	User denied the tool call
+The toolInvocation.state tracks the tool lifecycle: 'input-streaming' -> 'input-available' -> 'approval-requested' -> 'output-available' (or 'output-error' / 'output-denied').
+
+Source, file, and data chunks
+
+Chunk type	Fields	Description
+source-url	sourceId, url, title?	URL-based source
+source-document	sourceId, title?, text?	Document-based source
+file	mediaType, url, filename?, id?	Inline file
+data-*	type, data, id?, transient?	Custom data payload
+Data chunks use a type that matches the data-* pattern (for example, data-citations or data-summary). They create ChatDataMessagePart entries and also fire the onData callback. If transient is true, the part is not persisted in the message.
+
+Step boundary chunks
+
+Chunk type	Description
+start-step	Begin a new processing step
+finish-step	End the current step
+Step chunks create ChatStepStartMessagePart entries, useful for showing multi-step agentic processing in the UI.
+
+Building a stream
+
+When writing an adapter, construct a ReadableStream from an array of chunks:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'Hello!' });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+Or convert a server-sent event stream into chunks:
+
+async function fromSSE(
+  url: string,
+  signal: AbortSignal,
+): Promise<ReadableStream<ChatMessageChunk>> {
+  const response = await fetch(url, { signal });
+  const reader = response.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return new ReadableStream({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        controller.close();
+        return;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6).trim();
+          if (data && data !== '[DONE]') {
+            controller.enqueue(JSON.parse(data));
+          }
+        }
+      }
+    },
+  });
+}
+
+Copy
+Stream envelopes
+
+For deduplication and ordering, wrap chunks in a ChatStreamEnvelope:
+
+interface ChatStreamEnvelope {
+  eventId?: string; // unique event identifier for deduplication
+  sequence?: number; // monotonic ordering number
+  chunk: ChatMessageChunk;
+}
+
+Copy
+The runtime accepts both raw ChatMessageChunk objects and enveloped chunks in the same stream. Envelopes are useful for SSE-based transports where chunks might arrive out of order or be replayed.
+
+Flush interval
+
+Rapid text and reasoning deltas are batched before being applied to the store. The streamFlushInterval prop on ChatBox (or ChatProvider) controls the batching window. The default is 16 ms (approximately one frame at 60 fps).
+
+<ChatBox adapter={adapter} streamFlushInterval={32} />
+
+Copy
+Lower values mean faster visual updates but more store mutations. Higher values reduce mutation frequency at the cost of perceived latency.
+
+Stopping and cancelling streams
+
+The sendMessage input includes an AbortSignal that fires when the user clicks the stop button. Pass it to your fetch call so the HTTP request is cancelled automatically:
+
+async sendMessage({ message, signal }) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+    signal, // browser cancels the request when the user stops
+  });
+  return res.body!;
+},
+
+Copy
+If your backend requires explicit cancellation (for example, sending a separate cancel request), implement the optional stop() method on the adapter alongside the signal:
+
+stop() {
+  fetch('/api/chat/cancel', { method: 'POST' });
+},
+
+Copy
+You can also stop streaming programmatically using the useChat() hook:
+
+const { stopStreaming } = useChat();
+
+// Cancel the active stream
+stopStreaming();
+
+Copy
+Reconnecting to streams
+
+Implement the adapter's reconnectToStream() method to resume an interrupted stream — for example, when an SSE connection drops mid-response:
+
+async reconnectToStream({ conversationId, messageId, signal }) {
+  const res = await fetch('/api/chat/reconnect', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, messageId }),
+    signal,
+  });
+  if (res.status === 404) return null; // message no longer resumable
+  return res.body!;
+},
+
+Copy
+Return null if the interrupted message cannot be resumed. The runtime calls reconnectToStream() automatically after detecting a disconnected stream.
+
+Error and disconnect handling
+
+If the stream closes without a terminal chunk (finish or abort), the runtime:
+
+Records a recoverable stream error.
+Sets the message status to 'error'.
+Calls onError and onFinish with isDisconnect: true.
+If reconnectToStream() is implemented, attempts to resume.
+If the adapter's sendMessage() throws, the runtime records a send error and surfaces it through the error model. See Error handling for more details.
+
+How chunks become message parts
+
+The stream processor maps chunks to ChatMessagePart entries:
+
+text-start creates a new ChatTextMessagePart with state: 'streaming'.
+text-delta appends to the existing text part.
+text-end sets state: 'done'.
+Tool chunks follow a similar lifecycle, updating toolInvocation.state through each phase.
+Source, file, and data chunks each create their corresponding part type immediately.
+start-step creates a ChatStepStartMessagePart separator.
+The message's status field also updates through the stream:
+
+
+
+
+'sending' — set when the user message is optimistically added
+'streaming' — set when start arrives
+'sent' — set when finish arrives
+'cancelled' — set when abort arrives
+'error' — set when the stream fails
+See also
+
+Adapter for the adapter interface that produces streams.
+Error handling for error model and recovery.
+Scrolling for how auto-scroll follows streaming content.
+
+
+The attach button opens the browser file picker. Selected files are queued as draft attachments and previewed in the composer area before the message is sent.
+
+Enabling attachments
+
+Attachments are enabled by default. Hide the attach button entirely by setting the attachments feature flag to false:
+
+<ChatBox adapter={adapter} features={{ attachments: false }} />
+
+Copy
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+Material UI chat
+Styled with your active MUI theme
+
+MUI Assistant
+MUI Assistant
+Hello! I am styled using your active Material UI theme. Try sending a message.
+
+You
+You
+Great — the bubble colors come from palette.primary and the typography from the theme.
+
+Type a message
+
+Edit code
+'use client';
+import * as React from 'react';
+import { ChatBox } from '@mui/x-chat';
+import { createEchoAdapter } from 'docs/data/chat/material/examples/shared/demoUtils';
+import {
+  minimalConversation,
+  minimalMessages,
+} from 'docs/data/chat/material/examples/shared/demoData';
+
+const adapter = createEchoAdapter();
+
+export default function ComposerHiddenAttachButton() {
+  return (
+    <ChatBox
+      adapter={adapter}
+      initialActiveConversationId={minimalConversation.id}
+      initialConversations={[minimalConversation]}
+      initialMessages={minimalMessages}
+      features={{ attachments: false }}
+      sx={{
+        height: 400,
+        border: '1px solid',
+        borderColor: 'divider',
+        borderRadius: 1,
+      }}
+    />
+  );
+}
+'use client';
+import * as React from 'react';
+import { ChatBox } from '@mui/x-chat';
+import { createEchoAdapter } from 'docs/data/chat/material/examples/shared/demoUtils';
+import {
+  minimalConversation,
+  minimalMessages,
+} from 'docs/data/chat/material/examples/shared/demoData';
+
+const adapter = createEchoAdapter();
+
+export default function ComposerHiddenAttachButton() {
+  return (
+    <ChatBox
+      adapter={adapter}
+      initialActiveConversationId={minimalConversation.id}
+      initialConversations={[minimalConversation]}
+      initialMessages={minimalMessages}
+      features={{ attachments: false }}
+      sx={{
+        height: 400,
+        border: '1px solid',
+        borderColor: 'divider',
+        borderRadius: 1,
+      }}
+    />
+  );
+}
+Press Enter to start editing
+Auth0 - Up to 25k monthly active users, Secure Agentic AI workflows, Passwordless Auth, and so much more.
+ad by Carbon
+Attachment validation
+
+Pass a configuration object to the attachments feature flag to control which files are accepted:
+
+<ChatBox
+  adapter={adapter}
+  features={{
+    attachments: {
+      acceptedMimeTypes: ['image/*', 'application/pdf'],
+      maxFileCount: 5,
+      maxFileSize: 10 * 1024 * 1024, // 10 MB
+      onAttachmentReject: (rejections) => {
+        rejections.forEach(({ file, reason }) => {
+          console.warn(`Rejected ${file.name}: ${reason}`);
+        });
+      },
+    },
+  }}
+/>
+
+Copy
+ChatAttachmentsConfig
+
+Property	Type	Default	Description
+acceptedMimeTypes	string[]	undefined	Allowed MIME types. Supports exact types ('application/pdf') and wildcard subtypes ('image/*'). File extension patterns (for example, '.pdf') are not supported.
+maxFileCount	number	undefined	Maximum number of files per message.
+maxFileSize	number	undefined	Maximum size of each file in bytes.
+onAttachmentReject	(rejections: ChatAttachmentRejection[]) => void	undefined	Callback invoked when one or more files are rejected.
+Rejection reasons
+
+When a file is rejected, the ChatAttachmentRejection object contains:
+
+Property	Type	Description
+file	File	The browser File object
+reason	'mime-type' | 'file-size' | 'file-count'	Why the file was rejected
+The ChatDraftAttachment lifecycle
+
+Each file goes through a status lifecycle as it moves from selection to submission:
+
+queued  -->  uploading  -->  uploaded  -->  (sent with message)
+                  \
+                   -->  error
+
+Copy
+Status	Description
+queued	File has been selected and is waiting to be processed.
+uploading	File upload is in progress. The progress field tracks 0--100.
+uploaded	Upload completed. The file is ready to be sent with the message.
+error	Upload failed. The attachment can be removed or retried by the user.
+ChatDraftAttachment type
+
+Property	Type	Description
+localId	string	Unique identifier for this draft attachment
+file	File	The browser File object
+previewUrl	string | undefined	Object URL for image previews (auto-created)
+status	'queued' | 'uploading' | 'uploaded' | 'error'	Upload lifecycle status
+progress	number | undefined	Upload progress (0--100)
+Programmatic attachment management
+
+The useChatComposer() hook provides direct access to attachment state:
+
+import { useChatComposer } from '@mui/x-chat';
+
+function AttachmentManager() {
+  const composer = useChatComposer();
+
+  return (
+    <div>
+      <p>Attachments: {composer.attachments.length}</p>
+      <ul>
+        {composer.attachments.map((att) => (
+          <li key={att.localId}>
+            {att.file.name} ({att.status})
+            <button onClick={() => composer.removeAttachment(att.localId)}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+Copy
+Method	Type	Description
+attachments	ChatDraftAttachment[]	Queued file attachments
+addAttachment	(file: File) => void	Add a file to the draft
+removeAttachment	(localId: string) => void	Remove a queued attachment
+clear	() => void	Reset value and attachments
+Attachments in the adapter
+
+When the user submits a message with attachments, the adapter's sendMessage receives them in the input:
+
+async sendMessage({ message, attachments, signal }) {
+  const formData = new FormData();
+  formData.append('message', JSON.stringify(message));
+  attachments?.forEach((att) => {
+    formData.append('files', att.file);
+  });
+
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: formData,
+    signal,
+  });
+  return res.body!;
+},
+
+Copy
+See also
+
+Composer for the full composer component reference.
+Adapter for how attachments flow through sendMessage.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatComposerAttachButton />
+
+
+
+Chat - Suggestions
+Display prompt suggestions in the empty state to help users get started with a conversation.
+ads via Carbon
+Reliable Barcode & Document SDK. Scans damaged & tiny codes. Test for free!
+ads via Carbon
+
+Suggestions are clickable prompts that appear when the message list is empty. Clicking a suggestion pre-fills the composer with the suggestion text, giving users a starting point for the conversation.
+
+Basic usage
+
+Pass an array of strings to the suggestions prop on ChatBox:
+
+<ChatBox
+  adapter={adapter}
+  suggestions={[
+    'What can you help me with?',
+    'Summarize my latest report',
+    'Write a follow-up email',
+  ]}
+/>
+
+Copy
+Suggestions are hidden once the first message appears in the conversation.
+
+ChatSuggestion objects
+
+For more control, pass ChatSuggestion objects instead of plain strings. This lets you set a display label that differs from the value pre-filled into the composer:
+
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+Material UI chat
+Styled with your active MUI theme
+
+You
+You
+Help me write a professional email to my manager about taking PTO next week
+
+MUI Assistant
+MUI Assistant
+Assistant received "Help me write a professional email to my manager about taking PTO next week". Material UI styles applied automatically from the active theme.
+
+Type a message
+
+
+ChatSuggestion type
+
+Property	Type	Description
+value	string	The value to pre-fill into the composer when clicked.
+label	string	Optional display label. Falls back to value if omitted.
+You can mix strings and objects in the same array. Strings are internally normalized to { value: string }.
+
+Auto-submit
+
+By default, clicking a suggestion only pre-fills the composer so the user can review or edit before sending. Set suggestionsAutoSubmit to automatically submit the message when a suggestion is clicked:
+
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+Material UI chat
+Styled with your active MUI theme
+
+What can you help me with?
+Tell me a joke
+Type a message
+
+
+Disabling suggestions
+
+Even when the suggestions prop is provided, you can disable the feature through the features prop:
+
+<ChatBox
+  adapter={adapter}
+  suggestions={['What can you help me with?']}
+  features={{ suggestions: false }}
+/>
+
+Copy
+This is useful when you want to conditionally show suggestions based on application state without removing the prop itself.
+
+Dynamic suggestions
+
+Since suggestions is a standard React prop, you can compute it dynamically. The example below loads user-specific suggestions after sign-in and updates them once available:
+
+function App() {
+  const [suggestions, setSuggestions] = React.useState([
+    'Get started',
+    'View recent activity',
+  ]);
+
+  React.useEffect(() => {
+    fetchUserSuggestions().then((personalized) => {
+      setSuggestions(personalized);
+    });
+  }, []);
+
+  return <ChatBox adapter={adapter} suggestions={suggestions} />;
+}
+
+Copy
+Suggestions are only displayed in the empty state (when the message list has no messages), so dynamic updates only take effect before the first message is sent.
+
+The ChatSuggestions component
+
+When building a custom layout, use ChatSuggestions directly inside a ChatRoot provider:
+
+import { ChatSuggestions } from '@mui/x-chat';
+import { ChatRoot } from '@mui/x-chat/headless';
+
+<ChatRoot adapter={adapter}>
+  <ChatSuggestions suggestions={['Option A', 'Option B']} autoSubmit={false} />
+</ChatRoot>;
+
+Copy
+The component renders a role="group" container with aria-label derived from the locale text system. Each suggestion renders as a <button> element.
+
+Slots
+
+Slot	Default	Description
+root	'div'	The container element
+item	'button'	Each individual suggestion chip
+See also
+
+Composer for how the pre-filled value flows into the text area.
+Adapter for how submitted suggestions reach your backend.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatSuggestions />
+
+
+
+The message list automatically manages scroll position so that new messages and streaming content stay visible without user intervention, while still allowing the user to read earlier messages undisturbed.
+
+Auto-scrolling
+
+The message list automatically scrolls to the bottom when:
+
+The user sends a new message (always active, regardless of configuration).
+New messages arrive from the assistant while the user is near the bottom.
+Streaming content grows (token-by-token updates).
+The auto-scroll behavior is gated by a buffer — if the user has scrolled more than buffer pixels away from the bottom, automatic scrolling pauses so the user can read earlier messages without interruption.
+
+Configuration
+
+Control auto-scrolling through the features prop on ChatBox. The default buffer is 150 px.
+
+{
+  /* Custom 300 px buffer threshold */
+}
+<ChatBox adapter={adapter} features={{ autoScroll: { buffer: 300 } }} />;
+
+{
+  /* Disable auto-scroll entirely */
+}
+<ChatBox adapter={adapter} features={{ autoScroll: false }} />;
+
+Copy
+When auto-scroll is disabled, the user can still scroll to the bottom manually using the scroll-to-bottom affordance button.
+
+Auto-scroll
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+
+
+
+Edit code
+'use client';
+import * as React from 'react';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Switch from '@mui/material/Switch';
+import { ChatBox } from '@mui/x-chat';
+import { createEchoAdapter } from 'docs/data/chat/material/examples/shared/demoUtils';
+import {
+  minimalConversation,
+  minimalMessages,
+} from 'docs/data/chat/material/examples/shared/demoData';
+
+const adapter = createEchoAdapter();
+
+export default function AutoScrollConfig() {
+  const [autoScroll, setAutoScroll] = React.useState(true);
+
+  return (
+    <div>
+      <FormControlLabel
+        control={
+          <Switch
+            checked={autoScroll}
+            onChange={(event) => setAutoScroll(event.target.checked)}
+          />
+        }
+        label="Auto-scroll"
+      />
+      <ChatBox
+        adapter={adapter}
+        initialActiveConversationId={minimalConversation.id}
+        initialConversations={[minimalConversation]}
+        initialMessages={minimalMessages}
+        features={{ autoScroll }}
+        sx={{
+          height: 400,
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: 1,
+        }}
+      />
+    </div>
+  );
+}
+'use client';
+import * as React from 'react';
+import FormControlLabel from '@mui/material/FormControlLabel';
+import Switch from '@mui/material/Switch';
+import { ChatBox } from '@mui/x-chat';
+import { createEchoAdapter } from 'docs/data/chat/material/examples/shared/demoUtils';
+import {
+  minimalConversation,
+  minimalMessages,
+} from 'docs/data/chat/material/examples/shared/demoData';
+
+const adapter = createEchoAdapter();
+
+export default function AutoScrollConfig() {
+  const [autoScroll, setAutoScroll] = React.useState(true);
+
+  return (
+    <div>
+      <FormControlLabel
+        control={
+          <Switch
+            checked={autoScroll}
+            onChange={(event) => setAutoScroll(event.target.checked)}
+          />
+        }
+        label="Auto-scroll"
+      />
+      <ChatBox
+        adapter={adapter}
+        initialActiveConversationId={minimalConversation.id}
+        initialConversations={[minimalConversation]}
+        initialMessages={minimalMessages}
+        features={{ autoScroll }}
+        sx={{
+          height: 400,
+          border: '1px solid',
+          borderColor: 'divider',
+          borderRadius: 1,
+        }}
+      />
+    </div>
+  );
+}
+Press Enter to start editing
+Auth0 - Auth0 lets you focus on building by eliminating the security overhead for your agents, APIs, & users
+ad by Carbon
+Scrolling to the bottom when the user sends a message is always active regardless of the autoScroll setting.
+
+Scroll-to-bottom affordance
+
+A floating button appears when the user scrolls away from the bottom. Clicking it smoothly scrolls back to the latest message.
+
+The affordance is enabled by default. Disable it with:
+
+<ChatBox adapter={adapter} features={{ scrollToBottom: false }} />
+
+Copy
+The affordance also supports an unseen-message count badge and an aria-label that includes the unseen count when present.
+
+Imperative scrolling
+
+The ChatMessageList component exposes a ref handle for programmatic scroll control:
+
+import { ChatMessageList } from '@mui/x-chat';
+import type { MessageListRootHandle } from '@mui/x-chat/headless';
+
+const listRef = React.useRef<MessageListRootHandle>(null);
+
+// Scroll to bottom programmatically
+listRef.current?.scrollToBottom({ behavior: 'smooth' });
+
+<ChatMessageList ref={listRef} />;
+
+Copy
+MessageListContext
+
+Child components inside the message list can access scroll state via context:
+
+import { useMessageListContext } from '@mui/x-chat/headless';
+
+function CustomScrollIndicator() {
+  const { isAtBottom, unseenMessageCount, scrollToBottom } = useMessageListContext();
+
+  if (isAtBottom) return null;
+  return (
+    <button onClick={() => scrollToBottom({ behavior: 'smooth' })}>
+      {unseenMessageCount} new messages
+    </button>
+  );
+}
+
+Copy
+Property	Type	Description
+isAtBottom	boolean	Whether the scroll position is at the bottom
+unseenMessageCount	number	Messages added since the user scrolled away
+scrollToBottom	(options?) => void	Scroll to the latest message
+History loading
+
+When the user scrolls to the top of the message list, older messages are loaded automatically via the adapter's listMessages method. The message list preserves the current scroll position during prepend so the user doesn't lose their place.
+
+The adapter signals whether more history is available through the hasMore flag:
+
+async listMessages({ conversationId, cursor }) {
+  const res = await fetch(`/api/conversations/${conversationId}/messages?cursor=${cursor ?? ''}`);
+  const { messages, nextCursor, hasMore } = await res.json();
+  return { messages, cursor: nextCursor, hasMore };
+},
+
+Copy
+When hasMore is true, the message list continues to load older messages as the user scrolls up. When hasMore is false, scrolling to the top has no further effect.
+
+You can also check the history loading state programmatically:
+
+const { hasMoreHistory, loadMoreHistory } = useChat();
+
+// Trigger manually if needed
+await loadMoreHistory();
+
+Copy
+See also
+
+Message list for the full component reference including date dividers, grouping, and density.
+Streaming for how auto-scroll follows streaming content.
+Adapter for the listMessages method that powers history loading.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatMessageList />
+<ChatScrollToBottomAffordance />
+
+
+The chat runtime captures errors from adapters, streams, and history loading, and surfaces them through a unified error model. You do not need to catch errors inside adapter methods — the runtime handles them for you.
+
+The ChatError type
+
+Every error recorded by the runtime is represented as a ChatError:
+
+interface ChatError {
+  code: ChatErrorCode;
+  message: string;
+  source: ChatErrorSource;
+  recoverable: boolean;
+  retryable?: boolean;
+  details?: Record<string, unknown>;
+}
+
+Copy
+Error codes
+
+Code	Description
+SEND_ERROR	The adapter's sendMessage() threw an error.
+STREAM_ERROR	The stream failed or disconnected unexpectedly.
+HISTORY_ERROR	Loading message history failed.
+REALTIME_ERROR	The realtime subscription encountered an error.
+Error sources
+
+Source	Description
+'send'	Error during message send.
+'stream'	Error during stream processing.
+'history'	Error during history loading.
+'render'	Error during component rendering.
+'adapter'	Generic adapter error.
+recoverable vs retryable
+
+recoverable — The runtime can potentially recover from this error automatically (for example, by reconnecting a dropped stream via reconnectToStream()).
+retryable — The user can reasonably try the operation again (for example, re-sending a failed message).
+Error propagation
+
+When an adapter method throws, the runtime:
+
+Records a ChatError with the appropriate source and code.
+Surfaces it through ChatBox's built-in error UI, useChat().error, and the onError callback.
+Marks the error recoverable when applicable (for example, stream disconnects) and retryable when the user can try again.
+The onError callback
+
+Handle errors at the application level using the onError prop on ChatBox:
+
+<ChatBox
+  adapter={adapter}
+  onError={(error) => {
+    console.error(`[Chat error] ${error.source}: ${error.message}`);
+
+    // Report to your error tracking service
+    errorTracker.capture(error);
+  }}
+/>
+
+Copy
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+Material UI chat
+Styled with your active MUI theme
+
+MUI Assistant
+MUI Assistant
+Hello! I am styled using your active Material UI theme. Try sending a message.
+
+You
+You
+Great — the bubble colors come from palette.primary and the typography from the theme.
+
+hiii
+
+
+
+hiii
+Network error: Unable to reach the server. Please check your connection.
+
+
+
+Error: Network error: Unable to reach the server. Please check your connection.
+Accessing the error state
+
+The useChat() hook exposes the current error:
+
+import { useChat } from '@mui/x-chat/headless';
+
+function ErrorBanner() {
+  const { error, setError } = useChat();
+
+  if (!error) return null;
+
+  return (
+    <div role="alert">
+      <p>{error.message}</p>
+      <button onClick={() => setError(null)}>Dismiss</button>
+    </div>
+  );
+}
+
+Copy
+Retrying failed messages
+
+When sendMessage() fails, the user's message is still displayed in the thread (optimistic update) and the composer is re-enabled so the user can try again.
+
+The useChat() hook provides a retry method that re-sends the message associated with a given message ID:
+
+import { useChat } from '@mui/x-chat/headless';
+
+function RetryButton({ messageId }: { messageId: string }) {
+  const { retry } = useChat();
+
+  return <button onClick={() => retry(messageId)}>Retry</button>;
+}
+
+Copy
+retry() looks up the original user message by ID, re-submits it through the adapter's sendMessage(), and replaces any previous error state.
+
+Error from adapter methods
+
+You do not need to wrap adapter methods in try/catch — the runtime handles all thrown errors. If you want to transform or enrich an error before the runtime sees it, throw a plain Error with a custom message. The runtime wraps it in a ChatError with source 'adapter':
+
+async sendMessage({ message, signal }) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+    signal,
+  });
+
+  if (!res.ok) {
+    throw new Error(`Server responded with ${res.status}`);
+  }
+
+  return res.body!;
+},
+
+Copy
+Stream disconnect recovery
+
+If a stream closes without a terminal chunk (finish or abort), the runtime:
+
+Records a recoverable stream error.
+Sets the message status to 'error'.
+Calls onError and onFinish with isDisconnect: true.
+If reconnectToStream() is implemented on the adapter, attempts to resume the stream.
+See Streaming—Reconnecting to streams for implementation details.
+
+Message status and errors
+
+The message status field reflects error states:
+
+Status	Description
+'sending'	Message is being sent (optimistic update).
+'streaming'	Assistant response is streaming.
+'sent'	Message was sent and response completed.
+'error'	An error occurred during send or streaming.
+'cancelled'	The stream was aborted by the user.
+Components can use the status field to conditionally render error indicators:
+
+function MessageBubble({ message }: { message: ChatMessage }) {
+  return (
+    <div>
+      {message.parts.map((part) => /* render parts */)}
+      {message.status === 'error' && (
+        <span className="error-badge">Failed to send</span>
+      )}
+    </div>
+  );
+}
+
+Copy
+See also
+
+Streaming for stream lifecycle and disconnect handling.
+Adapter for the adapter interface and error propagation details.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatBox />
+
+
+Typing indicators show labels like "Alice is typing" or "Alice, Bob are typing" in the chat UI. The feature connects the adapter's setTyping() method (outbound) with realtime typing events (inbound) to provide a complete typing awareness loop.
+
+How typing indicators work
+
+Typing indicators involve two directions of communication:
+
+Outbound — When the local user types in the composer, your code calls the adapter's setTyping() method to notify your backend.
+Inbound — When other users type, your backend pushes typing events through the adapter's subscribe() method, and the runtime updates the store.
+Sending typing state
+
+Implement setTyping() on your adapter to send typing indicators to your backend. The runtime does not call setTyping() automatically — you must wire it up yourself, for example by listening to onChange on the composer text area:
+
+async setTyping({ conversationId, isTyping }) {
+  await fetch('/api/typing', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, isTyping }),
+  });
+},
+
+Copy
+Call adapter.setTyping({ conversationId, isTyping: true }) when the user starts typing, and adapter.setTyping({ conversationId, isTyping: false }) when they stop (for example, when the composer becomes empty or when they send the message).
+
+Receiving typing state
+
+To receive typing indicators from other users, implement subscribe() and emit typing events through the onEvent callback:
+
+subscribe({ onEvent }) {
+  const ws = new WebSocket('/api/ws');
+  ws.onmessage = (e) => {
+    const event = JSON.parse(e.data);
+    // event: { type: 'typing', conversationId, userId, isTyping }
+    onEvent(event);
+  };
+  return () => ws.close();
+},
+
+Copy
+The runtime tracks typing state per conversation in the store: typingByConversation[conversationId][userId].
+
+The TypingIndicator component
+
+The TypingIndicator primitive reads typing state for the active conversation and resolves display names from:
+
+Conversation participants
+Message authors already present in the thread
+Raw user IDs when no richer user data is available
+It renders a polite live region (aria-live="polite") and shows labels such as:
+
+"Alice is typing"
+"Alice, Bob are typing"
+Typical placement
+
+Place the indicator in the thread header or just above the composer:
+
+import { Indicators } from '@mui/x-chat/headless';
+
+<Indicators.TypingIndicator />;
+
+Copy
+When no users are typing, the component renders nothing.
+
+Typing timeout behavior
+
+The runtime does not include built-in timeout handling for stale typing state. When a typing event with isTyping: true is received, the store updates immediately. If no follow-up isTyping: false event arrives (for example, because a user closed the browser tab), the indicator will remain visible indefinitely.
+
+To prevent stale indicators, implement timeout logic yourself. A common pattern is to reset the typing state after a short idle period on the sender side:
+
+// In your composer onChange handler
+let typingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+function handleComposerChange(value: string) {
+  if (value !== '') {
+    adapter.setTyping({ conversationId, isTyping: true });
+
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+    }
+    typingTimeout = setTimeout(() => {
+      adapter.setTyping({ conversationId, isTyping: false });
+    }, 3000);
+  } else {
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+    }
+    adapter.setTyping({ conversationId, isTyping: false });
+  }
+}
+
+Copy
+Alternatively, handle cleanup server-side by expiring typing state after a timeout window.
+
+Customizing the indicator appearance
+
+The TypingIndicator primitive exposes a root slot for custom rendering. The slot receives owner state including the resolved typing users and count:
+
+import { Indicators } from '@mui/x-chat/headless';
+
+<Indicators.TypingIndicator
+  slots={{
+    root: ({ children, ...props }) => (
+      <div {...props} className="my-typing-indicator">
+        {children}
+      </div>
+    ),
+  }}
+/>;
+
+Copy
+Owner state
+
+Custom slots receive:
+
+Property	Type	Description
+users	string[]	Display names of users currently typing
+count	number	Number of users currently typing
+Using with ChatBox
+
+When using ChatBox, the typing indicator is integrated into the conversation header area. No additional setup is required beyond implementing setTyping() and subscribe() on your adapter.
+
+Standalone usage
+
+When building a custom layout with ChatRoot, place the TypingIndicator anywhere inside the provider tree:
+
+import { ChatRoot } from '@mui/x-chat';
+import { Indicators } from '@mui/x-chat/headless';
+
+<ChatRoot adapter={adapter}>
+  {/* Your custom message list */}
+  <Indicators.TypingIndicator />
+  {/* Your custom composer */}
+</ChatRoot>;
+
+Copy
+See also
+
+Adapter for the setTyping() and subscribe() methods.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatTypingIndicator />
+
+Tool calling lets an AI assistant invoke external functions during a conversation. The runtime handles the full tool lifecycle: streaming tool input, making the input available, executing the tool, and displaying the output — all through the streaming chunk protocol.
+
+ChatToolMessagePart
+
+When a tool is invoked during streaming, the runtime creates a ChatToolMessagePart on the assistant message:
+
+interface ChatToolMessagePart<
+  TToolName extends ChatKnownToolName = ChatKnownToolName,
+> {
+  type: 'tool';
+  toolInvocation: ChatToolInvocation<TToolName>;
+}
+
+Copy
+Each tool message part wraps a ChatToolInvocation that tracks the tool's lifecycle:
+
+interface ChatToolInvocation<
+  TToolName extends ChatKnownToolName = ChatKnownToolName,
+> {
+  toolCallId: string;
+  toolName: TToolName;
+  state: ChatToolInvocationState;
+  input?: ChatToolInput<TToolName>;
+  output?: ChatToolOutput<TToolName>;
+  errorText?: string;
+  approval?: ChatToolApproval;
+  providerExecuted?: boolean;
+  title?: string;
+  callProviderMetadata?: Record<string, unknown>;
+  preliminary?: boolean;
+}
+
+Copy
+Tool invocation states
+
+The toolInvocation.state field tracks the tool lifecycle through well-defined states:
+
+State	Description
+input-streaming	Tool input JSON is being streamed
+input-available	Tool input is fully available
+approval-requested	User approval is needed before execution
+approval-responded	User has responded to the approval request
+output-available	Tool output is ready
+output-error	Tool execution failed
+output-denied	User denied the tool call
+The typical progression is: input-streaming -> input-available -> output-available. When human-in-the-loop approval is required, the flow includes approval-requested -> approval-responded between input and output.
+
+Stream chunk protocol
+
+Tool chunks in the streaming protocol drive the state transitions:
+
+Chunk type	Fields	Description
+tool-input-start	toolCallId, toolName, dynamic?	Begin a tool invocation
+tool-input-delta	toolCallId, inputTextDelta	Stream tool input JSON
+tool-input-available	toolCallId, toolName, input	Tool input is fully available
+tool-input-error	toolCallId, errorText	Tool input parsing failed
+tool-output-available	toolCallId, output, preliminary?	Tool output is available
+tool-output-error	toolCallId, errorText	Tool execution failed
+tool-output-denied	toolCallId, reason?	User denied the tool call
+Tool input streaming
+
+Tool input is streamed incrementally as JSON. The tool-input-start chunk begins the invocation with the tool name, tool-input-delta chunks append partial JSON, and tool-input-available delivers the complete parsed input:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+
+        // Tool input streaming
+        controller.enqueue({
+          type: 'tool-input-start',
+          toolCallId: 'call-1',
+          toolName: 'get_weather',
+        });
+        controller.enqueue({
+          type: 'tool-input-delta',
+          toolCallId: 'call-1',
+          inputTextDelta: '{"city":',
+        });
+        controller.enqueue({
+          type: 'tool-input-delta',
+          toolCallId: 'call-1',
+          inputTextDelta: '"Paris"}',
+        });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'call-1',
+          toolName: 'get_weather',
+          input: { city: 'Paris' },
+        });
+
+        // Tool output
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'call-1',
+          output: { temperature: 22, condition: 'sunny' },
+        });
+
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+The onToolCall callback
+
+Register onToolCall on ChatProvider to observe every tool invocation state change during streaming:
+
+<ChatProvider
+  adapter={adapter}
+  onToolCall={({ toolCall }) => {
+    console.log(`Tool "${toolCall.toolName}" is now ${toolCall.state}`);
+
+    if (toolCall.state === 'output-available') {
+      // Drive side effects — update dashboards, trigger notifications, etc.
+    }
+  }}
+>
+  <MyChat />
+</ChatProvider>
+
+Copy
+The callback fires on every state change — not just when output is available. Use it for side effects outside the store: logging, analytics, and external API calls.
+
+The ChatOnToolCallPayload
+
+interface ChatOnToolCallPayload {
+  toolCall: ChatToolInvocation | ChatDynamicToolInvocation;
+}
+
+Copy
+The toolCall object includes toolCallId, toolName, state, input, output, errorText, and approval fields — all typed based on your ChatToolDefinitionMap augmentation.
+
+Tool type registry
+
+Use TypeScript module augmentation to register typed tool definitions. This gives you type-safe input and output on tool invocations:
+
+declare module '@mui/x-chat/types' {
+  interface ChatToolDefinitionMap {
+    get_weather: {
+      input: { city: string };
+      output: { temperature: number; condition: string };
+    };
+    search_docs: {
+      input: { query: string; limit?: number };
+      output: { results: Array<{ title: string; url: string }> };
+    };
+  }
+}
+
+Copy
+Once registered, ChatToolInvocation<'get_weather'> correctly types input as { city: string } and output as { temperature: number; condition: string }.
+
+Dynamic tools
+
+For tools that are not known at compile time, use ChatDynamicToolMessagePart with the dynamic: true flag on the tool-input-start chunk:
+
+controller.enqueue({
+  type: 'tool-input-start',
+  toolCallId: 'call-2',
+  toolName: 'user_defined_tool',
+  dynamic: true,
+});
+
+Copy
+Dynamic tool invocations use ChatDynamicToolInvocation with untyped input and output (unknown):
+
+interface ChatDynamicToolInvocation<TToolName extends string = string> {
+  toolCallId: string;
+  toolName: TToolName;
+  state: ChatToolInvocationState;
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+  approval?: ChatToolApproval;
+  callProviderMetadata?: Record<string, unknown>;
+}
+
+Copy
+Rendering tool parts
+
+Register custom renderers for tool parts through the partRenderers prop on ChatProvider:
+
+const renderers: ChatPartRendererMap = {
+  tool: ({ part, message, index }) => <ToolCard invocation={part.toolInvocation} />,
+};
+
+<ChatProvider adapter={adapter} partRenderers={renderers}>
+  <MyChat />
+</ChatProvider>;
+
+Copy
+Use useChatPartRenderer('tool') inside any component to look up the registered renderer:
+
+function MessagePart({ part, message, index }) {
+  const renderer = useChatPartRenderer(part.type);
+
+  if (renderer) {
+    return renderer({ part, message, index });
+  }
+
+  return null;
+}
+
+Copy
+See also
+
+Tool Approval for human-in-the-loop approval of tool calls.
+Streaming for the full stream chunk protocol reference.
+Step Tracking for multi-step agent progress tracking.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatMessageContent />
+
+ads via Carbon
+
+Tool calling lets an AI assistant invoke external functions during a conversation. The runtime handles the full tool lifecycle: streaming tool input, making the input available, executing the tool, and displaying the output — all through the streaming chunk protocol.
+
+ChatToolMessagePart
+
+When a tool is invoked during streaming, the runtime creates a ChatToolMessagePart on the assistant message:
+
+interface ChatToolMessagePart<
+  TToolName extends ChatKnownToolName = ChatKnownToolName,
+> {
+  type: 'tool';
+  toolInvocation: ChatToolInvocation<TToolName>;
+}
+
+Copy
+Each tool message part wraps a ChatToolInvocation that tracks the tool's lifecycle:
+
+interface ChatToolInvocation<
+  TToolName extends ChatKnownToolName = ChatKnownToolName,
+> {
+  toolCallId: string;
+  toolName: TToolName;
+  state: ChatToolInvocationState;
+  input?: ChatToolInput<TToolName>;
+  output?: ChatToolOutput<TToolName>;
+  errorText?: string;
+  approval?: ChatToolApproval;
+  providerExecuted?: boolean;
+  title?: string;
+  callProviderMetadata?: Record<string, unknown>;
+  preliminary?: boolean;
+}
+
+Copy
+Tool invocation states
+
+The toolInvocation.state field tracks the tool lifecycle through well-defined states:
+
+State	Description
+input-streaming	Tool input JSON is being streamed
+input-available	Tool input is fully available
+approval-requested	User approval is needed before execution
+approval-responded	User has responded to the approval request
+output-available	Tool output is ready
+output-error	Tool execution failed
+output-denied	User denied the tool call
+The typical progression is: input-streaming -> input-available -> output-available. When human-in-the-loop approval is required, the flow includes approval-requested -> approval-responded between input and output.
+
+Stream chunk protocol
+
+Tool chunks in the streaming protocol drive the state transitions:
+
+Chunk type	Fields	Description
+tool-input-start	toolCallId, toolName, dynamic?	Begin a tool invocation
+tool-input-delta	toolCallId, inputTextDelta	Stream tool input JSON
+tool-input-available	toolCallId, toolName, input	Tool input is fully available
+tool-input-error	toolCallId, errorText	Tool input parsing failed
+tool-output-available	toolCallId, output, preliminary?	Tool output is available
+tool-output-error	toolCallId, errorText	Tool execution failed
+tool-output-denied	toolCallId, reason?	User denied the tool call
+Tool input streaming
+
+Tool input is streamed incrementally as JSON. The tool-input-start chunk begins the invocation with the tool name, tool-input-delta chunks append partial JSON, and tool-input-available delivers the complete parsed input:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+
+        // Tool input streaming
+        controller.enqueue({
+          type: 'tool-input-start',
+          toolCallId: 'call-1',
+          toolName: 'get_weather',
+        });
+        controller.enqueue({
+          type: 'tool-input-delta',
+          toolCallId: 'call-1',
+          inputTextDelta: '{"city":',
+        });
+        controller.enqueue({
+          type: 'tool-input-delta',
+          toolCallId: 'call-1',
+          inputTextDelta: '"Paris"}',
+        });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'call-1',
+          toolName: 'get_weather',
+          input: { city: 'Paris' },
+        });
+
+        // Tool output
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'call-1',
+          output: { temperature: 22, condition: 'sunny' },
+        });
+
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+The onToolCall callback
+
+Register onToolCall on ChatProvider to observe every tool invocation state change during streaming:
+
+<ChatProvider
+  adapter={adapter}
+  onToolCall={({ toolCall }) => {
+    console.log(`Tool "${toolCall.toolName}" is now ${toolCall.state}`);
+
+    if (toolCall.state === 'output-available') {
+      // Drive side effects — update dashboards, trigger notifications, etc.
+    }
+  }}
+>
+  <MyChat />
+</ChatProvider>
+
+Copy
+The callback fires on every state change — not just when output is available. Use it for side effects outside the store: logging, analytics, and external API calls.
+
+The ChatOnToolCallPayload
+
+interface ChatOnToolCallPayload {
+  toolCall: ChatToolInvocation | ChatDynamicToolInvocation;
+}
+
+Copy
+The toolCall object includes toolCallId, toolName, state, input, output, errorText, and approval fields — all typed based on your ChatToolDefinitionMap augmentation.
+
+Tool type registry
+
+Use TypeScript module augmentation to register typed tool definitions. This gives you type-safe input and output on tool invocations:
+
+declare module '@mui/x-chat/types' {
+  interface ChatToolDefinitionMap {
+    get_weather: {
+      input: { city: string };
+      output: { temperature: number; condition: string };
+    };
+    search_docs: {
+      input: { query: string; limit?: number };
+      output: { results: Array<{ title: string; url: string }> };
+    };
+  }
+}
+
+Copy
+Once registered, ChatToolInvocation<'get_weather'> correctly types input as { city: string } and output as { temperature: number; condition: string }.
+
+Dynamic tools
+
+For tools that are not known at compile time, use ChatDynamicToolMessagePart with the dynamic: true flag on the tool-input-start chunk:
+
+controller.enqueue({
+  type: 'tool-input-start',
+  toolCallId: 'call-2',
+  toolName: 'user_defined_tool',
+  dynamic: true,
+});
+
+Copy
+Dynamic tool invocations use ChatDynamicToolInvocation with untyped input and output (unknown):
+
+interface ChatDynamicToolInvocation<TToolName extends string = string> {
+  toolCallId: string;
+  toolName: TToolName;
+  state: ChatToolInvocationState;
+  input?: unknown;
+  output?: unknown;
+  errorText?: string;
+  approval?: ChatToolApproval;
+  callProviderMetadata?: Record<string, unknown>;
+}
+
+Copy
+Rendering tool parts
+
+Register custom renderers for tool parts through the partRenderers prop on ChatProvider:
+
+const renderers: ChatPartRendererMap = {
+  tool: ({ part, message, index }) => <ToolCard invocation={part.toolInvocation} />,
+};
+
+<ChatProvider adapter={adapter} partRenderers={renderers}>
+  <MyChat />
+</ChatProvider>;
+
+Copy
+Use useChatPartRenderer('tool') inside any component to look up the registered renderer:
+
+function MessagePart({ part, message, index }) {
+  const renderer = useChatPartRenderer(part.type);
+
+  if (renderer) {
+    return renderer({ part, message, index });
+  }
+
+  return null;
+}
+
+Copy
+See also
+
+Tool Approval for human-in-the-loop approval of tool calls.
+Streaming for the full stream chunk protocol reference.
+Step Tracking for multi-step agent progress tracking.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatMessageContent />
+
+Tool approval lets you pause the agent when it requests a potentially dangerous action, present the user with an approve/deny interface, and resume or cancel the tool execution based on the user's decision.
+
+Approval workflow
+
+The approval lifecycle extends the standard tool invocation states with two additional phases:
+
+State	Description
+input-streaming	Tool input JSON is being streamed
+input-available	Tool input is fully available
+approval-requested	Stream pauses — user approval is needed
+approval-responded	User has responded, stream continues
+output-available	Tool output is ready (if approved)
+output-denied	User denied the tool call
+The stream pauses at approval-requested until your UI calls addToolApprovalResponse().
+
+Stream chunk: tool-approval-request
+
+When the backend determines a tool call needs user approval, it sends a tool-approval-request chunk:
+
+controller.enqueue({
+  type: 'tool-approval-request',
+  toolCallId: 'call-1',
+  toolName: 'delete_files',
+  input: { path: '/tmp/data', recursive: true },
+  approvalId: 'approval-1', // optional, defaults to toolCallId
+});
+
+Copy
+Field	Type	Description
+toolCallId	string	The tool invocation being gated
+toolName	string	Name of the tool requesting approval
+input	object	The tool's input, shown to the user
+approvalId	string | undefined	Optional distinct approval ID
+When this chunk arrives, the tool invocation moves to state: 'approval-requested'.
+
+The addToolApprovalResponse adapter method
+
+Implement addToolApprovalResponse on your adapter to send the user's decision to the backend:
+
+interface ChatAddToolApproveResponseInput {
+  id: string; // the approval request ID from the stream chunk
+  approved: boolean; // true = approved, false = denied
+  reason?: string; // optional reason surfaced to the model when denied
+}
+
+Copy
+async addToolApprovalResponse({ id, approved, reason }) {
+  await fetch('/api/tool-approval', {
+    method: 'POST',
+    body: JSON.stringify({ id, approved, reason }),
+  });
+},
+
+Copy
+Approve/deny flow in the UI
+
+Use useChat() to call addToolApprovalResponse from your component:
+
+const { addToolApprovalResponse } = useChat();
+
+// Approve
+await addToolApprovalResponse({
+  id: toolCall.toolCallId,
+  approved: true,
+});
+
+// Deny with reason
+await addToolApprovalResponse({
+  id: toolCall.toolCallId,
+  approved: false,
+  reason: 'User declined the operation',
+});
+
+Copy
+After responding, the tool invocation moves to state: 'approval-responded', and the stream continues. If approved, the tool proceeds to execution and eventually reaches output-available. If denied, the tool moves to output-denied.
+
+ChatConfirmation UI component
+
+ChatConfirmation renders a prominent warning card with a message and two action buttons for human-in-the-loop checkpoints:
+
+import { ChatConfirmation } from '@mui/x-chat';
+
+<ChatConfirmation
+  message="Are you sure you want to delete all files?"
+  onConfirm={() => agent.confirm()}
+  onCancel={() => agent.cancel()}
+/>;
+
+Copy
+Custom labels
+
+Use confirmLabel and cancelLabel to tailor the button text to the action:
+
+<ChatConfirmation
+  message="Send this email on your behalf?"
+  confirmLabel="Send email"
+  cancelLabel="Cancel"
+  onConfirm={handleConfirm}
+  onCancel={handleCancel}
+/>
+
+Copy
+Connecting to the adapter
+
+Hold the card visibility in React.useState. Show the card when the agent triggers a confirmation step, and hide it once the user responds:
+
+const [pendingConfirmation, setPendingConfirmation] = React.useState(false);
+
+const setConfirmRef = React.useRef(setPendingConfirmation);
+setConfirmRef.current = setPendingConfirmation;
+
+const adapter = React.useMemo(
+  () => ({
+    async sendMessage({ message }) {
+      // ... stream agent response ...
+      // Signal that a confirmation is needed:
+      setConfirmRef.current(true);
+      return responseStream;
+    },
+  }),
+  [],
+);
+
+// In your JSX:
+{
+  pendingConfirmation && (
+    <ChatConfirmation
+      message="Proceed with this action?"
+      onConfirm={() => {
+        setPendingConfirmation(false);
+        /* approve the tool */
+      }}
+      onCancel={() => setPendingConfirmation(false)}
+    />
+  );
+}
+
+Copy
+Relationship to tool-call approval
+
+The built-in tool part approval-requested state handles the narrow case of approving a specific tool call — it renders inside the collapsible tool widget. ChatConfirmation is a broader, more prominent pattern for any "human-in-the-loop" checkpoint that does not require a structured tool invocation.
+
+Use the stream-based tool-approval-request when:
+
+The approval is tied to a specific tool invocation
+You want the approval UI inline within the message
+The backend needs to resume the stream after approval
+Use ChatConfirmation when:
+
+You need a prominent, page-level confirmation dialog
+The confirmation is not tied to a specific tool call
+You want full control over the confirmation UI and flow
+Registering custom renderers for tool approval
+
+Register a renderer that handles the approval-requested state inside tool parts:
+
+const renderers: ChatPartRendererMap = {
+  tool: ({ part, message, index }) => {
+    const { toolInvocation } = part;
+
+    if (toolInvocation.state === 'approval-requested') {
+      return (
+        <ApprovalCard
+          toolName={toolInvocation.toolName}
+          input={toolInvocation.input}
+          onApprove={() =>
+            addToolApprovalResponse({
+              id: toolInvocation.toolCallId,
+              approved: true,
+            })
+          }
+          onDeny={(reason) =>
+            addToolApprovalResponse({
+              id: toolInvocation.toolCallId,
+              approved: false,
+              reason,
+            })
+          }
+        />
+      );
+    }
+
+    return <ToolCard invocation={toolInvocation} />;
+  },
+};
+
+<ChatProvider adapter={adapter} partRenderers={renderers}>
+  <MyChat />
+</ChatProvider>;
+
+Copy
+See also
+
+Tool Calling for the full tool invocation lifecycle and chunk protocol.
+Adapter for the addToolApprovalResponse() method reference.
+Streaming for the tool-approval-request chunk type.
+Reasoning for displaying LLM thinking alongside tool calls.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatConfirmation />
+
+
+
+Chat - Step Tracking
+Track multi-step agent progress using start-step and finish-step stream chunks that create visual delimiters in the message.
+ads via Carbon
+Fast Barcode & Document SDK. Ready-to-use UI. Fully offline. Try Free!
+ads via Carbon
+
+Agentic AI workflows often involve multiple processing steps — reasoning, tool calls, intermediate results, and a final answer. Step tracking lets you visually delimit these phases in the message stream so users can follow the agent's progress.
+
+Step boundary chunks
+
+The streaming protocol provides two chunks for step boundaries:
+
+Chunk type	Description
+start-step	Begin a new processing step
+finish-step	End the current step
+interface ChatStartStepChunk {
+  type: 'start-step';
+}
+
+interface ChatFinishStepChunk {
+  type: 'finish-step';
+}
+
+Copy
+ChatStepStartMessagePart
+
+When a start-step chunk arrives, the runtime creates a ChatStepStartMessagePart on the assistant message:
+
+interface ChatStepStartMessagePart {
+  type: 'step-start';
+}
+
+Copy
+The finish-step chunk signals the end of the current step but does not create a separate message part — it serves as a boundary marker in the stream.
+
+Streaming example
+
+A typical agentic loop might produce multiple steps, each containing reasoning, tool calls, or text:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+
+        // Step 1: Search for information
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({
+          type: 'tool-input-start',
+          toolCallId: 'call-1',
+          toolName: 'search',
+        });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'call-1',
+          toolName: 'search',
+          input: { query: 'MUI X Chat documentation' },
+        });
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'call-1',
+          output: { results: ['...'] },
+        });
+        controller.enqueue({ type: 'finish-step' });
+
+        // Step 2: Analyze results
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({
+          type: 'tool-input-start',
+          toolCallId: 'call-2',
+          toolName: 'analyze',
+        });
+        controller.enqueue({
+          type: 'tool-input-available',
+          toolCallId: 'call-2',
+          toolName: 'analyze',
+          input: { data: '...' },
+        });
+        controller.enqueue({
+          type: 'tool-output-available',
+          toolCallId: 'call-2',
+          output: { summary: '...' },
+        });
+        controller.enqueue({ type: 'finish-step' });
+
+        // Step 3: Final answer
+        controller.enqueue({ type: 'start-step' });
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({
+          type: 'text-delta',
+          id: 'text-1',
+          delta: 'Based on my research, here is the answer...',
+        });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish-step' });
+
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+Displaying step progress
+
+The step-start parts act as delimiters in the message's parts array. You can render them as visual separators, progress indicators, or collapsible sections.
+
+Step delimiter renderer
+
+Register a custom renderer for step-start parts:
+
+const renderers: ChatPartRendererMap = {
+  'step-start': ({ index, message }) => {
+    const stepNumber = message.parts
+      .slice(0, index + 1)
+      .filter((part) => part.type === 'step-start').length;
+    return (
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          margin: '8px 0',
+          color: 'gray',
+          fontSize: '0.8em',
+        }}
+      >
+        <div style={{ flex: 1, height: 1, background: 'lightgray' }} />
+        <span>Step {stepNumber}</span>
+        <div style={{ flex: 1, height: 1, background: 'lightgray' }} />
+      </div>
+    );
+  },
+};
+
+<ChatProvider adapter={adapter} partRenderers={renderers}>
+  <MyChat />
+</ChatProvider>;
+
+Copy
+Step progress with Material UI
+
+For a more polished UI, use Material UI components to show step progress:
+
+import Divider from '@mui/material/Divider';
+import Typography from '@mui/material/Typography';
+
+const renderers: ChatPartRendererMap = {
+  'step-start': ({ index, message }) => {
+    const stepNumber = message.parts
+      .slice(0, index + 1)
+      .filter((part) => part.type === 'step-start').length;
+    return (
+      <Divider sx={{ my: 1 }}>
+        <Typography variant="caption" color="text.secondary">
+          Step {stepNumber}
+        </Typography>
+      </Divider>
+    );
+  },
+};
+
+Copy
+Step structure in the parts array
+
+After streaming, the message's parts array contains step-start entries interleaved with the content parts for each step:
+
+// Example parts array after streaming
+[
+  { type: 'step-start' }, // Step 1 delimiter
+  {
+    type: 'tool',
+    toolInvocation: {
+      /* ... */
+    },
+  }, // Step 1 content
+  { type: 'step-start' }, // Step 2 delimiter
+  {
+    type: 'tool',
+    toolInvocation: {
+      /* ... */
+    },
+  }, // Step 2 content
+  { type: 'step-start' }, // Step 3 delimiter
+  { type: 'text', text: 'Final answer...' }, // Step 3 content
+];
+
+Copy
+This structure makes it straightforward to group parts by step when building custom renderers. Iterate through the parts and treat each step-start as a new group boundary.
+
+Steps with reasoning and tool calls
+
+Steps compose naturally with reasoning and tool calling. A single step can contain reasoning, one or more tool invocations, and text:
+
+// Step with reasoning + tool call
+controller.enqueue({ type: 'start-step' });
+controller.enqueue({ type: 'reasoning-start', id: 'r-1' });
+controller.enqueue({
+  type: 'reasoning-delta',
+  id: 'r-1',
+  delta: 'I need to look up the user data first.',
+});
+controller.enqueue({ type: 'reasoning-end', id: 'r-1' });
+controller.enqueue({
+  type: 'tool-input-start',
+  toolCallId: 'call-1',
+  toolName: 'get_user',
+});
+controller.enqueue({
+  type: 'tool-input-available',
+  toolCallId: 'call-1',
+  toolName: 'get_user',
+  input: { userId: '123' },
+});
+controller.enqueue({
+  type: 'tool-output-available',
+  toolCallId: 'call-1',
+  output: { name: 'Alice', email: 'alice@example.com' },
+});
+controller.enqueue({ type: 'finish-step' });
+
+Copy
+See also
+
+Tool Calling for the tool invocation lifecycle within steps.
+Reasoning for displaying LLM thinking traces.
+Streaming for the full chunk protocol reference including step boundary chunks.
+Tool Approval for human-in-the-loop checkpoints within agent steps.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatMessageContent />
+
+
+ChatBox renders a fully styled chat surface, but it knows nothing about your backend on its own. The adapter is the single object that bridges them. It receives user messages, communicates with your server, and returns a streaming response that the runtime turns into live UI updates.
+
+The ChatAdapter interface
+
+The full interface is generic over your pagination cursor type. The default cursor type is string, which covers the majority of REST and cursor-based APIs:
+
+import type { ChatAdapter } from '@mui/x-chat/headless';
+
+interface ChatAdapter<Cursor = string> {
+  // Required
+  sendMessage(
+    input: ChatSendMessageInput,
+  ): Promise<ReadableStream<ChatMessageChunk | ChatStreamEnvelope>>;
+
+  // Optional — implement as your feature set grows
+  listConversations?(
+    input?: ChatListConversationsInput<Cursor>,
+  ): Promise<ChatListConversationsResult<Cursor>>;
+  listMessages?(
+    input: ChatListMessagesInput<Cursor>,
+  ): Promise<ChatListMessagesResult<Cursor>>;
+  reconnectToStream?(
+    input: ChatReconnectToStreamInput,
+  ): Promise<ReadableStream<ChatMessageChunk | ChatStreamEnvelope> | null>;
+  setTyping?(input: ChatSetTypingInput): Promise<void>;
+  markRead?(input: ChatMarkReadInput): Promise<void>;
+  subscribe?(
+    input: ChatSubscribeInput,
+  ): Promise<ChatSubscriptionCleanup> | ChatSubscriptionCleanup;
+  addToolApprovalResponse?(input: ChatAddToolApproveResponseInput): Promise<void>;
+  stop?(): void;
+}
+
+Copy
+Only sendMessage is required. Every other method is optional and incrementally adopted — start with just sendMessage and add methods as your product grows.
+
+Required: sendMessage
+
+sendMessage is the heart of the adapter. It is called every time a user submits a message in the composer.
+
+interface ChatSendMessageInput {
+  conversationId?: string; // the active conversation ID
+  message: ChatMessage; // the user's message being sent
+  messages: ChatMessage[]; // full thread context for the model
+  attachments?: ChatDraftAttachment[]; // file attachments from the composer
+  metadata?: Record<string, unknown>; // arbitrary context from the composer
+  signal: AbortSignal; // connected to the stop button
+}
+
+Copy
+The method must return a Promise<ReadableStream<ChatMessageChunk | ChatStreamEnvelope>>. The runtime reads this stream, processes each chunk type, and updates the UI live.
+
+Streaming protocol
+
+The stream must begin with a start chunk and end with finish or abort. Text arrives in text-start / text-delta / text-end triplets:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'Hello!' });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+For the full chunk type reference, see Streaming.
+
+Abort signal
+
+input.signal is an AbortSignal that fires when the user clicks the stop button. Pass it to your fetch call so the HTTP request is cancelled automatically:
+
+async sendMessage({ message, signal }) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+    signal, // browser cancels the request when the user stops
+  });
+  return res.body!;
+},
+
+Copy
+If your backend requires explicit cancellation (for example, sending a separate cancel request), implement the optional stop() method alongside the signal.
+
+Optional methods
+
+The optional methods are listed roughly in the order you are likely to add them. None are required — the runtime detects which methods exist and activates the corresponding features automatically.
+
+listConversations(input?)
+
+Implement this to populate the conversation sidebar when ChatBox mounts. The runtime calls it once on startup, before any user interaction.
+
+interface ChatListConversationsInput<Cursor> {
+  cursor?: Cursor; // for paginated conversation lists
+  query?: string; // optional search query
+}
+
+interface ChatListConversationsResult<Cursor> {
+  conversations: ChatConversation[];
+  cursor?: Cursor; // next page cursor, if applicable
+  hasMore?: boolean; // whether additional pages exist
+}
+
+Copy
+listMessages(input)
+
+Implement this to load message history when the user opens a conversation. The runtime calls it whenever activeConversationId changes to a conversation that has no messages in the store yet.
+
+interface ChatListMessagesInput<Cursor> {
+  conversationId: string;
+  cursor?: Cursor;
+  direction?: 'forward' | 'backward'; // default: 'backward' (newest first)
+}
+
+interface ChatListMessagesResult<Cursor> {
+  messages: ChatMessage[];
+  cursor?: Cursor;
+  hasMore?: boolean;
+}
+
+Copy
+When hasMore is true, ChatBox shows a "Load earlier messages" control that calls listMessages again with the previous cursor.
+
+reconnectToStream(input)
+
+Implement this to resume an interrupted stream — for example, when an SSE connection drops mid-response. The runtime calls it automatically after detecting a disconnected stream.
+
+interface ChatReconnectToStreamInput {
+  conversationId?: string;
+  messageId?: string; // the message being streamed when the disconnect happened
+  signal: AbortSignal;
+}
+
+Copy
+Return null if the interrupted message cannot be resumed.
+
+setTyping(input)
+
+Implement this to send a typing indicator to your backend when the user is composing a message. The runtime calls it when the composer value changes from empty to non-empty (and vice versa).
+
+interface ChatSetTypingInput {
+  conversationId: string;
+  isTyping: boolean;
+}
+
+Copy
+To receive typing indicators from other users in the UI, implement subscribe() and emit typing events through the onEvent callback.
+
+markRead(input)
+
+Implement this to signal to your backend that the user has seen a conversation or a specific message. The runtime does not call this automatically — call adapter.markRead() directly from your own UI event handler.
+
+interface ChatMarkReadInput {
+  conversationId: string;
+  messageId?: string; // mark all messages up to this one as read
+}
+
+Copy
+subscribe(input)
+
+Implement this to receive real-time events pushed from your backend — new messages, typing indicators, read receipts, or conversation updates. The runtime calls subscribe() on mount and invokes the returned cleanup function on unmount.
+
+interface ChatSubscribeInput {
+  onEvent: (event: ChatRealtimeEvent) => void;
+}
+
+type ChatSubscriptionCleanup = () => void;
+
+Copy
+The cleanup function can also be returned from a Promise for async subscription setups.
+
+For the full list of realtime event types, see Real-Time Adapters.
+
+addToolApprovalResponse(input)
+
+Implement this when your backend supports human-in-the-loop tool confirmation. The runtime calls it when the user approves or denies a tool call that was flagged with a tool-approval-request stream chunk.
+
+interface ChatAddToolApproveResponseInput {
+  id: string; // the approval request ID from the stream chunk
+  approved: boolean; // true = approved, false = denied
+  reason?: string; // optional reason surfaced to the model when denied
+}
+
+Copy
+stop()
+
+Implement this when aborting the signal is not sufficient for server-side cleanup. The runtime calls stop() at the same moment the abort signal fires.
+
+stop() {
+  fetch('/api/chat/cancel', { method: 'POST' });
+},
+
+Copy
+Most adapters do not need stop() — passing signal to fetch is enough for HTTP-based transports.
+
+Cursor generics
+
+ChatAdapter<Cursor> is generic over the type used for pagination cursors. The default is string, which covers opaque server cursors, Base64 tokens, and ISO timestamps.
+
+If your API uses a structured cursor, provide the type at the call site:
+
+interface MyCursor {
+  page: number;
+  token: string;
+}
+
+const adapter: ChatAdapter<MyCursor> = {
+  async sendMessage(input) {
+    /* ... */
+  },
+
+  async listMessages({ cursor }) {
+    // cursor is typed as MyCursor | undefined here
+    const page = cursor?.page ?? 1;
+    const res = await fetch(`/api/messages?page=${page}`);
+    const { messages, nextPage, token } = await res.json();
+    return {
+      messages,
+      cursor: { page: nextPage, token },
+      hasMore: !!nextPage,
+    };
+  },
+};
+
+Copy
+The cursor type flows automatically through ChatBox, the store, hooks, and all adapter input and output types.
+
+Error handling
+
+You do not need to catch errors inside adapter methods — the runtime handles them for you.
+
+When an adapter method throws, the runtime:
+
+Records a ChatError with the appropriate source field ('send', 'stream', 'history', or 'adapter').
+Surfaces it through ChatBox's built-in error UI, useChat().error, and the onError callback on ChatBox.
+Marks the error recoverable when applicable (for example, stream disconnects) and retryable when the user can reasonably try again.
+If you want to transform or enrich an error before the runtime sees it, throw a plain Error with a custom message. The runtime wraps it in a ChatError with source 'adapter'.
+
+To handle errors at the application level, use the onError callback prop:
+
+<ChatBox
+  adapter={adapter}
+  onError={(error) => {
+    console.error('[Chat error]', error.source, error.message);
+  }}
+/>
+
+Copy
+See also
+
+Building an Adapter for a step-by-step tutorial.
+Real-Time Adapters for the event types used by subscribe().
+Streaming for the full stream chunk protocol reference.
+Hooks Reference to see which runtime actions trigger adapter methods.
+
+This page walks you through building a ChatAdapter from scratch. You will start with the minimum viable adapter (sendMessage only), then progressively add history loading and conversation management.
+
+Step 1: The minimal adapter
+
+The only required method is sendMessage. It receives the user's message and must return a ReadableStream of typed chunks.
+
+import { ChatBox } from '@mui/x-chat';
+import type { ChatAdapter } from '@mui/x-chat/headless';
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message, signal }) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+      signal,
+    });
+    return res.body!; // ReadableStream<ChatMessageChunk>
+  },
+};
+
+export default function App() {
+  return <ChatBox adapter={adapter} sx={{ height: 500 }} />;
+}
+
+Copy
+The runtime handles streaming, message normalization, error surfacing, and state updates. Your adapter only needs to know how to talk to your backend.
+
+Step 2: Implement streaming from scratch
+
+If your backend does not return a ReadableStream natively (for example, you are using a WebSocket or a custom protocol), you can construct the stream manually.
+
+The stream must begin with a start chunk and end with finish or abort. Text arrives in text-start / text-delta / text-end triplets:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message }) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue({ type: 'start', messageId: 'msg-1' });
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+        controller.enqueue({ type: 'text-delta', id: 'text-1', delta: 'Hello!' });
+        controller.enqueue({ type: 'text-end', id: 'text-1' });
+        controller.enqueue({ type: 'finish', messageId: 'msg-1' });
+        controller.close();
+      },
+    });
+  },
+};
+
+Copy
+For a real integration, you would typically read from your backend inside the start callback and enqueue chunks as they arrive:
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message, signal }) {
+    return new ReadableStream({
+      async start(controller) {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          body: JSON.stringify({
+            text: message.parts[0]?.type === 'text' ? message.parts[0].text : '',
+          }),
+          signal,
+        });
+
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        const messageId = `msg-${Date.now()}`;
+
+        controller.enqueue({ type: 'start', messageId });
+        controller.enqueue({ type: 'text-start', id: 'text-1' });
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const text = decoder.decode(value, { stream: true });
+            controller.enqueue({ type: 'text-delta', id: 'text-1', delta: text });
+          }
+          controller.enqueue({ type: 'text-end', id: 'text-1' });
+          controller.enqueue({ type: 'finish', messageId });
+        } catch (error) {
+          controller.enqueue({ type: 'text-end', id: 'text-1' });
+          controller.enqueue({ type: 'abort', messageId });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+  },
+};
+
+Copy
+Step 3: Wire up the abort signal
+
+input.signal is an AbortSignal that fires when the user clicks the stop button. Pass it to your fetch call so the HTTP request is cancelled automatically:
+
+async sendMessage({ message, signal }) {
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+    signal, // browser cancels the request when the user stops
+  });
+  return res.body!;
+},
+
+Copy
+If your backend requires explicit cancellation (for example, sending a separate cancel request), implement the optional stop() method alongside the signal:
+
+stop() {
+  fetch('/api/chat/cancel', { method: 'POST' });
+},
+
+Copy
+Step 4: Add message history with listMessages
+
+Implement listMessages to load history when the user opens a conversation. The runtime calls it whenever activeConversationId changes to a conversation that has no messages in the store yet.
+
+const adapter: ChatAdapter = {
+  async sendMessage(input) {
+    /* ... from Step 1 ... */
+  },
+
+  async listMessages({ conversationId, cursor }) {
+    const params = new URLSearchParams({ cursor: cursor ?? '' });
+    const res = await fetch(
+      `/api/conversations/${conversationId}/messages?${params}`,
+    );
+    const { messages, nextCursor, hasMore } = await res.json();
+    return { messages, cursor: nextCursor, hasMore };
+  },
+};
+
+Copy
+When hasMore is true, ChatBox shows a "Load earlier messages" control that calls listMessages again with the previous cursor.
+
+Step 5: Add conversation listing with listConversations
+
+Implement listConversations to populate the conversation sidebar when ChatBox mounts. The runtime calls it once on startup, before any user interaction.
+
+const adapter: ChatAdapter = {
+  async sendMessage(input) {
+    /* ... */
+  },
+
+  async listMessages(input) {
+    /* ... from Step 4 ... */
+  },
+
+  async listConversations() {
+    const res = await fetch('/api/conversations');
+    const { conversations } = await res.json();
+    return { conversations };
+  },
+};
+
+Copy
+For paginated conversation lists, return a cursor and hasMore:
+
+async listConversations({ cursor }) {
+  const params = new URLSearchParams();
+  if (cursor) params.set('cursor', cursor);
+  const res = await fetch(`/api/conversations?${params}`);
+  const { conversations, nextCursor, hasMore } = await res.json();
+  return { conversations, cursor: nextCursor, hasMore };
+},
+
+Copy
+Step 6: Handle stream reconnection
+
+Implement reconnectToStream to resume an interrupted stream — for example, when an SSE connection drops mid-response. The runtime calls it automatically after detecting a disconnected stream.
+
+async reconnectToStream({ conversationId, messageId, signal }) {
+  const params = new URLSearchParams();
+  if (conversationId) params.set('conversationId', conversationId);
+  if (messageId) params.set('messageId', messageId);
+  const res = await fetch('/api/chat/reconnect', {
+    method: 'POST',
+    body: params.toString(),
+    signal,
+  });
+  if (res.status === 404) return null; // message no longer resumable
+  return res.body!;
+},
+
+Copy
+Return null if the interrupted message cannot be resumed.
+
+Complete adapter
+
+Here is a complete adapter that combines all the steps:
+
+import type { ChatAdapter } from '@mui/x-chat/headless';
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message, signal }) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+      signal,
+    });
+    return res.body!;
+  },
+
+  async listMessages({ conversationId, cursor }) {
+    const params = new URLSearchParams({ cursor: cursor ?? '' });
+    const res = await fetch(
+      `/api/conversations/${conversationId}/messages?${params}`,
+    );
+    const { messages, nextCursor, hasMore } = await res.json();
+    return { messages, cursor: nextCursor, hasMore };
+  },
+
+  async listConversations() {
+    const res = await fetch('/api/conversations');
+    const { conversations } = await res.json();
+    return { conversations };
+  },
+
+  async reconnectToStream({ conversationId, messageId, signal }) {
+    const res = await fetch('/api/chat/reconnect', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, messageId }),
+      signal,
+    });
+    if (res.status === 404) return null;
+    return res.body!;
+  },
+};
+
+Copy
+Error handling
+
+You do not need to catch errors inside adapter methods — the runtime handles them for you.
+
+When an adapter method throws, the runtime records a ChatError, surfaces it through the built-in error UI and the onError callback, and marks the error recoverable or retryable when applicable.
+
+To handle errors at the application level:
+
+<ChatBox
+  adapter={adapter}
+  onError={(error) => {
+    console.error('[Chat error]', error.source, error.message);
+  }}
+/>
+
+Copy
+See also
+
+Adapters for the full interface reference.
+Streaming for the full stream chunk protocol reference.
+Real-Time Adapters for adding subscribe(), setTyping(), and markRead().
+
+The adapter's subscribe() method enables push-based updates from the backend. The runtime calls it on mount and cleans it up on unmount, keeping the subscription lifecycle fully managed.
+
+Subscription lifecycle
+
+When ChatProvider mounts and the adapter implements subscribe(), the runtime:
+
+Calls subscribe({ onEvent }) with a callback.
+Stores the returned cleanup function.
+On unmount, calls the cleanup function to close the connection.
+const adapter: ChatAdapter = {
+  async sendMessage(input) {
+    /* ... */
+  },
+
+  subscribe({ onEvent }) {
+    const ws = new WebSocket('/api/realtime');
+    ws.onmessage = (event) => onEvent(JSON.parse(event.data));
+    return () => ws.close();
+  },
+};
+
+Copy
+The cleanup function can be returned directly or from a resolved promise, supporting both synchronous and asynchronous setup:
+
+async subscribe({ onEvent }) {
+  const sub = await myClient.subscribe((event) => onEvent(event));
+  return () => sub.unsubscribe();
+},
+
+Copy
+Event types
+
+The onEvent callback receives ChatRealtimeEvent objects. There are nine event variants organized into five categories.
+
+Conversation events
+
+Event type	Payload	Store effect
+conversation-added	{ conversation }	Adds the conversation to the store
+conversation-updated	{ conversation }	Replaces the conversation record
+conversation-removed	{ conversationId }	Removes the conversation and resets active ID if it matched
+Message events
+
+Event type	Payload	Store effect
+message-added	{ message }	Adds the message to the store
+message-updated	{ message }	Replaces the message record
+message-removed	{ messageId, conversationId? }	Removes the message from the store
+Typing events
+
+Event type	Payload	Store effect
+typing	{ conversationId, userId, isTyping }	Updates the typing map for the conversation
+Presence events
+
+Event type	Payload	Store effect
+presence	{ userId, isOnline }	Updates isOnline on matching conversation participants
+Read events
+
+Event type	Payload	Store effect
+read	{ conversationId, messageId?, userId? }	Updates the conversation's read state
+Dispatching events from the backend
+
+Each event is a plain object with a type field. Here are the full shapes:
+
+// Conversation events
+{ type: 'conversation-added', conversation: ChatConversation }
+{ type: 'conversation-updated', conversation: ChatConversation }
+{ type: 'conversation-removed', conversationId: string }
+
+// Message events
+{ type: 'message-added', message: ChatMessage }
+{ type: 'message-updated', message: ChatMessage }
+{ type: 'message-removed', messageId: string, conversationId?: string }
+
+// Typing
+{ type: 'typing', conversationId: string, userId: string, isTyping: boolean }
+
+// Presence
+{ type: 'presence', userId: string, isOnline: boolean }
+
+// Read
+{ type: 'read', conversationId: string, messageId?: string, userId?: string }
+
+Copy
+The setTyping() method
+
+Implement setTyping() to send a typing indicator to your backend when the user is composing a message. The runtime calls it when the composer value changes from empty to non-empty (and vice versa).
+
+interface ChatSetTypingInput {
+  conversationId: string;
+  isTyping: boolean;
+}
+
+Copy
+async setTyping({ conversationId, isTyping }) {
+  await fetch('/api/typing', {
+    method: 'POST',
+    body: JSON.stringify({ conversationId, isTyping }),
+  });
+},
+
+Copy
+To receive typing indicators from other users in the UI, implement subscribe() and emit typing events through the onEvent callback.
+
+The markRead() method
+
+Implement markRead() to signal to your backend that the user has seen a conversation or a specific message. The runtime does not call this automatically — call adapter.markRead() directly from your own UI event handler.
+
+interface ChatMarkReadInput {
+  conversationId: string;
+  messageId?: string; // mark all messages up to this one as read
+}
+
+Copy
+Stream reconnection
+
+Implement reconnectToStream() to resume an interrupted stream — for example, when an SSE connection drops mid-response. The runtime calls it automatically after detecting a disconnected stream.
+
+interface ChatReconnectToStreamInput {
+  conversationId?: string;
+  messageId?: string; // the message being streamed when the disconnect happened
+  signal: AbortSignal;
+}
+
+Copy
+Return null if the interrupted message cannot be resumed:
+
+async reconnectToStream({ conversationId, messageId, signal }) {
+  const params = new URLSearchParams();
+  if (conversationId) params.set('conversationId', conversationId);
+  if (messageId) params.set('messageId', messageId);
+  const res = await fetch('/api/chat/reconnect', {
+    method: 'POST',
+    body: params.toString(),
+    signal,
+  });
+  if (res.status === 404) return null; // message no longer resumable
+  return res.body!;
+},
+
+Copy
+Consuming realtime state
+
+Typing indicators
+
+Use useChatStatus() to get the list of users currently typing:
+
+function TypingIndicator() {
+  const { typingUserIds } = useChatStatus();
+
+  if (typingUserIds.length === 0) return null;
+
+  return <span>{typingUserIds.length} user(s) typing...</span>;
+}
+
+Copy
+The typingUserIds selector returns user IDs for the active conversation by default. For a specific conversation, use chatSelectors.typingUserIds with a conversation ID argument.
+
+Presence
+
+Presence events update the isOnline field on ChatUser objects inside conversation participants. Use useConversation(id) or useConversations() to see participant presence.
+
+Read state
+
+Read events update the readState and unreadCount fields on ChatConversation. Use useConversation(id) to reflect read status in the UI.
+
+WebSocket integration example
+
+A complete adapter with WebSocket-based real-time events:
+
+import type { ChatAdapter } from '@mui/x-chat/headless';
+
+const adapter: ChatAdapter = {
+  async sendMessage({ message, signal }) {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+      signal,
+    });
+    return res.body!;
+  },
+
+  subscribe({ onEvent }) {
+    const ws = new WebSocket('/api/ws');
+    ws.onmessage = (e) => onEvent(JSON.parse(e.data));
+    return () => ws.close(); // cleanup on unmount
+  },
+
+  async setTyping({ conversationId, isTyping }) {
+    await fetch('/api/typing', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, isTyping }),
+    });
+  },
+
+  async markRead({ conversationId, messageId }) {
+    await fetch('/api/read', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, messageId }),
+    });
+  },
+};
+
+Copy
+See also
+
+Adapters for the full adapter interface including subscribe().
+Hooks Reference for useChatStatus() and the typing/presence consumption pattern.
+Selectors Reference for chatSelectors.typingUserIds and other store selectors.
+
+Every chat component reads its data — messages, conversations, composer state, streaming status — from a shared store provided by ChatProvider. ChatBox renders a ChatProvider internally, so in the simplest case you never interact with the provider directly.
+
+When you need more control — sharing state with components outside ChatBox, controlling the message list externally, or mounting multiple independent chat instances — you work with ChatProvider explicitly.
+
+Controlled and uncontrolled state
+
+ChatProvider supports both controlled and uncontrolled patterns for every piece of state. In uncontrolled mode, state lives entirely inside the store. In controlled mode, you own the state and the provider synchronizes it.
+
+Messages
+
+{/* Uncontrolled — internal store owns the messages */}
+<ChatProvider adapter={adapter} initialMessages={initialMessages}>
+
+{/* Controlled — you own the messages array */}
+<ChatProvider
+  adapter={adapter}
+  messages={messages}
+  onMessagesChange={setMessages}
+>
+
+Copy
+Conversations
+
+{/* Uncontrolled */}
+<ChatProvider
+  adapter={adapter}
+  initialConversations={conversations}
+  initialActiveConversationId="conv-1"
+>
+
+{/* Controlled */}
+<ChatProvider
+  adapter={adapter}
+  conversations={conversations}
+  onConversationsChange={setConversations}
+  activeConversationId={activeId}
+  onActiveConversationChange={setActiveId}
+>
+
+Copy
+Composer value
+
+{/* Uncontrolled */}
+<ChatProvider adapter={adapter} initialComposerValue="Hello">
+
+{/* Controlled */}
+<ChatProvider
+  adapter={adapter}
+  composerValue={composerValue}
+  onComposerValueChange={setComposerValue}
+>
+
+Copy
+Mixed mode
+
+You can mix controlled and uncontrolled state freely. For example, control the active conversation while letting messages be managed internally:
+
+<ChatProvider
+  adapter={adapter}
+  activeConversationId={activeId}
+  onActiveConversationChange={setActiveId}
+  initialMessages={[]}
+>
+
+Copy
+Start with initial* (uncontrolled) props during prototyping, then switch to controlled props when you need to sync with external state. You can switch modes at any time without changing the runtime model.
+
+State model reference
+
+Model	Controlled prop	Initial prop	Change callback
+Messages	messages	initialMessages	onMessagesChange
+Conversations	conversations	initialConversations	onConversationsChange
+Active conversation	activeConversationId	initialActiveConversationId	onActiveConversationChange
+Composer value	composerValue	initialComposerValue	onComposerValueChange
+Sharing context across the app
+
+Place ChatProvider higher in the tree to share chat state with components that live outside the chat surface:
+
+function App() {
+  return (
+    <ChatProvider adapter={adapter}>
+      <Header /> {/* can use hooks like useChatStatus */}
+      <Sidebar /> {/* can use useConversations */}
+      <MainContent /> {/* renders ChatBox or custom layout */}
+    </ChatProvider>
+  );
+}
+
+Copy
+ChatBox always creates its own internal ChatProvider. If you need to share state with external components, wrap them in a single ChatProvider and use the individual themed components (ChatMessageList, ChatComposer, etc.) instead of ChatBox.
+
+Syncing with a global state manager
+
+Use the controlled props with change callbacks to keep the chat store synchronized with your global state manager:
+
+function App() {
+  const dispatch = useAppDispatch();
+  const messages = useAppSelector(selectChatMessages);
+  const activeId = useAppSelector(selectActiveConversationId);
+
+  return (
+    <ChatProvider
+      adapter={adapter}
+      messages={messages}
+      onMessagesChange={(msgs) => dispatch(setChatMessages(msgs))}
+      activeConversationId={activeId}
+      onActiveConversationChange={(id) => dispatch(setActiveConversation(id))}
+    >
+      <MyChat />
+    </ChatProvider>
+  );
+}
+
+Copy
+The runtime still streams, normalizes, and derives selectors — you just own the source of truth.
+
+Multiple independent instances
+
+Each ChatProvider creates an isolated store. To render multiple independent chat surfaces, use separate ChatBox instances — each one creates its own provider internally.
+
+Provider props reference
+
+Prop	Type	Description
+adapter	ChatAdapter	Required. The backend adapter
+messages	ChatMessage[]	Controlled messages
+initialMessages	ChatMessage[]	Initial messages (uncontrolled)
+onMessagesChange	(messages) => void	Called when messages change
+conversations	ChatConversation[]	Controlled conversations
+initialConversations	ChatConversation[]	Initial conversations (uncontrolled)
+onConversationsChange	(conversations) => void	Called when conversations change
+activeConversationId	string	Controlled active conversation
+initialActiveConversationId	string	Initial active conversation (uncontrolled)
+onActiveConversationChange	(conversationId: string | undefined) => void	Called when active conversation changes
+composerValue	string	Controlled composer text
+initialComposerValue	string	Initial composer text (uncontrolled)
+onComposerValueChange	(value) => void	Called when composer value changes
+members	ChatUser[]	Participant metadata (avatars, names, roles)
+currentUser	ChatUser	The current user object
+onToolCall	ChatOnToolCall	Handler for tool call messages
+onFinish	ChatOnFinish	Called when a response finishes streaming
+onData	ChatOnData	Called for each streaming chunk
+onError	(error) => void	Called on adapter errors
+streamFlushInterval	number	Batching interval for streaming deltas (default: 16 ms)
+storeClass	ChatStoreConstructor	Custom store class (default: ChatStore)
+partRenderers	ChatPartRendererMap	Custom message part renderers
+See also
+
+Adapters for the backend adapter interface.
+Hooks Reference for reading state from the store.
+Events & Callbacks for onFinish, onToolCall, onData, and onError.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatBox />
+
+Every user-facing string in the chat UI — placeholders, button labels, status messages, timestamps — is defined in a locale text object. You can override any string by passing a partial localeText object to ChatBox.
+
+Default locale
+
+The default locale is English (US). It is exported as chatEnUS from @mui/x-chat/locales:
+
+import { chatEnUS } from '@mui/x-chat/locales';
+
+Copy
+This object contains all the default string values used by the chat components.
+
+Overriding locale strings
+
+Pass a partial localeText object to ChatBox or Chat.Root to override specific strings. Unspecified keys fall back to the defaults:
+
+<ChatBox
+  adapter={adapter}
+  localeText={{
+    composerInputPlaceholder: 'Escribe un mensaje',
+    composerSendButtonLabel: 'Enviar',
+    composerAttachButtonLabel: 'Adjuntar archivo',
+    scrollToBottomLabel: 'Ir al final',
+    threadNoMessagesLabel: 'Sin mensajes a\u00fan',
+  }}
+/>
+
+Copy
+The useChatLocaleText() hook
+
+Inside any descendant of ChatBox, use the useChatLocaleText() hook to read the current locale text:
+
+import { useChatLocaleText } from '@mui/x-chat/headless';
+
+function CustomSendButton() {
+  const localeText = useChatLocaleText();
+
+  return <button aria-label={localeText.composerSendButtonLabel}>Send</button>;
+}
+
+Copy
+This is useful when building custom slot components that need to access localized strings.
+
+Available locale keys
+
+Static string keys
+
+Key	Default value	Description
+composerInputPlaceholder	"Type a message"	Composer textarea placeholder
+composerInputAriaLabel	"Message"	Composer textarea aria-label
+composerSendButtonLabel	"Send message"	Send button aria-label
+composerAttachButtonLabel	"Add attachment"	Attach button aria-label
+messageCopyButtonLabel	"Copy"	Copy message button label
+messageCopyCodeButtonLabel	"Copy code"	Copy code block button label
+messageCopiedCodeButtonLabel	"Copied"	Copied confirmation label
+messageEditedLabel	"Edited"	Edited message indicator
+messageDeletedLabel	"Deleted"	Deleted message indicator
+messageReasoningLabel	"Reasoning"	Reasoning part label
+messageReasoningStreamingLabel	"Thinking..."	Reasoning part streaming label
+messageToolInputLabel	"Input"	Tool input label
+messageToolOutputLabel	"Output"	Tool output label
+messageToolApproveButtonLabel	"Approve"	Tool approval button
+messageToolDenyButtonLabel	"Deny"	Tool denial button
+conversationListNoConversationsLabel	"No conversations"	Empty conversation list
+conversationListSearchPlaceholder	"Search conversations"	Conversation search placeholder
+unreadMarkerLabel	"New messages"	Unread messages marker
+retryButtonLabel	"Retry"	Retry button label
+reconnectButtonLabel	"Reconnect"	Reconnect button label
+scrollToBottomLabel	"Scroll to bottom"	Scroll-to-bottom affordance label
+threadNoMessagesLabel	"No messages yet"	Empty thread state
+genericErrorLabel	"Something went wrong"	Generic error message
+loadingLabel	"Loading..."	Loading state label
+suggestionsLabel	"Suggested prompts"	Suggestions section label
+messageListLabel	"Message log"	Message list aria-label
+messageLabel	"Message"	Individual message aria-label
+Function keys
+
+These keys accept parameters and return formatted strings:
+
+Key	Signature	Default behavior
+messageStatusLabel	(status: ChatMessageStatus) => string	Maps status to human-readable label
+toolStateLabel	(state: ChatToolInvocationState) => string	Maps tool state to label (for example, "Running...", "Failed")
+messageTimestampLabel	(dateTime: string) => string	Formats to HH:MM using toLocaleTimeString
+conversationTimestampLabel	(dateTime: string) => string	Time for today, MMM DD for older dates
+typingIndicatorLabel	(users: ChatLocaleTypingUser[]) => string	"Alice is typing" or "Alice, Bob are typing"
+scrollToBottomWithCountLabel	(unseenCount: number) => string	"Scroll to bottom, N new messages"
+Message status labels
+
+The messageStatusLabel function maps from ChatMessageStatus:
+
+Status	Default label
+pending	"Pending"
+sending	"Sending"
+streaming	"Streaming"
+sent	"Sent"
+read	"Read"
+error	"Error"
+cancelled	"Cancelled"
+Tool state labels
+
+The toolStateLabel function maps from ChatToolInvocationState:
+
+State	Default label
+input-streaming	"Running..."
+input-available	"Running..."
+approval-requested	"Awaiting approval"
+approval-responded	"Running..."
+output-available	"Completed"
+output-error	"Failed"
+output-denied	"Denied"
+Full locale override example
+
+const frenchLocale = {
+  composerInputPlaceholder: 'Tapez un message',
+  composerSendButtonLabel: 'Envoyer',
+  composerAttachButtonLabel: 'Joindre un fichier',
+  scrollToBottomLabel: 'Aller en bas',
+  threadNoMessagesLabel: 'Aucun message',
+  genericErrorLabel: 'Une erreur est survenue',
+  loadingLabel: 'Chargement...',
+  retryButtonLabel: 'R\u00e9essayer',
+  unreadMarkerLabel: 'Nouveaux messages',
+  typingIndicatorLabel: (users) => {
+    const names = users.map((u) => u.displayName ?? u.id).join(', ');
+    if (users.length === 1) return `${names} \u00e9crit...`;
+    return `${names} \u00e9crivent...`;
+  },
+  messageTimestampLabel: (dateTime) => {
+    const d = new Date(dateTime);
+    return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  },
+};
+
+<ChatBox adapter={adapter} localeText={frenchLocale} />;
+
+Copy
+See also
+
+Styling for visual customization.
+Slots & Composition for replacing components that render localized text.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatRoot />
+
+
+The chat primitives ship structural components with zero built-in styles. Each component renders semantic HTML elements with data-* attributes that reflect component state, making them a natural fit for Tailwind CSS utility classes.
+
+Installation
+
+Install the package alongside Tailwind:
+
+npm
+pnpm
+yarn
+Copy
+npm install @mui/x-chat
+Namespace API
+
+Structural primitives are available as namespace exports for clean dot-notation usage:
+
+import {
+  Chat,
+  Composer,
+  Message,
+  MessageList,
+  Conversation,
+  ConversationList,
+  Indicators,
+} from '@mui/x-chat/headless';
+
+// Usage
+<Chat.Root>
+  <Chat.Layout>
+    <MessageList.Root renderItem={...} />
+    <Composer.Root>
+      <Composer.TextArea />
+      <Composer.Toolbar>
+        <Composer.AttachButton />
+        <Composer.SendButton />
+      </Composer.Toolbar>
+    </Composer.Root>
+  </Chat.Layout>
+</Chat.Root>
+
+Copy
+Applying Tailwind classes
+
+Pass className to any structural primitive:
+
+<Composer.Root className="flex flex-col gap-1 border-t border-gray-200 p-3 bg-white">
+  <Composer.TextArea
+    className="resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm
+               focus:outline-none focus:ring-2 focus:ring-blue-500"
+  />
+  <Composer.Toolbar className="flex items-center justify-end gap-2">
+    <Composer.AttachButton className="rounded p-1.5 text-gray-500 hover:bg-gray-100" />
+    <Composer.SendButton
+      className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white
+                 hover:bg-blue-700 disabled:opacity-40"
+    />
+  </Composer.Toolbar>
+</Composer.Root>
+
+Copy
+Data attributes
+
+Every structural primitive exposes data-* attributes that reflect its current state. Use Tailwind's attribute selectors to style state variations without JavaScript:
+
+{
+  /* The send button sets data-disabled when the composer has the disabled prop */
+}
+<Composer.SendButton className="bg-blue-600 text-white data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed" />;
+
+{
+  /* Message root sets data-role="user" or data-role="assistant" */
+}
+<Message.Root className="flex gap-3 data-[role=user]:flex-row-reverse" />;
+
+{
+  /* Typing indicator sets data-count when users are typing; returns null when count=0 */
+}
+<Indicators.TypingIndicator className="flex items-center gap-1 text-sm text-gray-500" />;
+
+Copy
+Common data attributes
+
+Component	Attribute	Values	Description
+Message.Root	data-role	"user", "assistant"	Message sender role
+Message.Root	data-status	"pending", "sending", "streaming", "sent", "read", "error", "cancelled"	Message delivery status
+Composer.SendButton	data-disabled	present / absent	Composer has the disabled prop
+Composer.Root	data-is-streaming	present / absent	Response in progress
+ConversationList.Item	data-selected	present / absent	Currently selected conversation
+Slot props for custom elements
+
+Use the slots and slotProps props to replace inner elements while keeping behavior intact:
+
+<MessageList.Root
+  slots={{
+    messageListContent: 'div',
+  }}
+  slotProps={{
+    messageListContent: {
+      className: 'flex flex-col gap-2 p-4',
+    },
+  }}
+  renderItem={({ id }) => <MyMessage key={id} id={id} />}
+/>
+
+Copy
+See also
+
+Styling for Material UI theme-based customization.
+Slots & Composition for replacing subcomponents entirely.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatRoot />
+
+ChatBox composes many themed subcomponents internally — message bubbles, the composer, the conversation list, date dividers, and more. The slots prop lets you swap any of them with your own component, while slotProps passes extra props to those components without replacing them.
+
+Basic replacement
+
+Pass a custom component to a named slot. Your component receives the same props that the default component would receive:
+
+const CustomMessageContent = React.forwardRef(
+  function CustomMessageContent(props, ref) {
+    return (
+      <ChatMessageContent
+        ref={ref}
+        {...props}
+        slots={{ ...props.slots, bubble: MyBubble }}
+      />
+    );
+  },
+);
+
+<ChatBox slots={{ messageContent: CustomMessageContent }} />;
+
+Copy
+Passing extra props with slotProps
+
+Use slotProps to pass additional props to either the default or a custom slot component without replacing them:
+
+<ChatBox
+  slotProps={{
+    conversationList: { 'aria-label': 'Chat threads' },
+    composerInput: { placeholder: 'Ask anything...' },
+    composerSendButton: { sx: { borderRadius: 6 } },
+  }}
+/>
+
+Copy
+Complete slot reference
+
+Layout slots
+
+Slot name	Default component	Element	Description
+root	div	<div>	Outermost container
+layout	div	<div>	Arranges conversation + thread panes
+conversationsPane	div	<div>	Conversations sidebar container
+threadPane	div	<div>	Thread (message list + composer) container
+Conversation slots
+
+Slot name	Default component	Element	Description
+conversationList	ChatConversationList	<div>	Conversation list
+conversationHeader	ChatConversationHeader	<header>	Header bar above the message list
+conversationTitle	ChatConversationTitle	<div>	Conversation name
+conversationSubtitle	ChatConversationSubtitle	<div>	Secondary line (participants, etc.)
+conversationHeaderActions	ChatConversationHeaderActions	<div>	Action buttons in the header
+Message list slots
+
+Slot name	Default component	Element	Description
+messageList	ChatMessageList	<div>	Scrollable message container
+messageRoot	ChatMessage	<div>	Individual message row
+messageAvatar	ChatMessageAvatar	<div>	Author avatar
+messageContent	ChatMessageContent	<div>	Message bubble
+messageMeta	ChatMessageMeta	<div>	Timestamp and delivery status
+messageActions	ChatMessageActions	<div>	Hover action menu
+messageGroup	ChatMessageGroup	<div>	Same-author message group
+dateDivider	ChatDateDivider	<div>	Date separator between groups
+Composer slots
+
+Slot name	Default component	Element	Description
+composerRoot	ChatComposer	<form>	Composer container
+composerInput	ChatComposerTextArea	<textarea>	Auto-resizing text area
+composerSendButton	ChatComposerSendButton	<button>	Submit button
+composerAttachButton	ChatComposerAttachButton	<button>	File attach trigger
+composerToolbar	ChatComposerToolbar	<div>	Button row
+composerHelperText	ChatComposerHelperText	<div>	Disclaimer or hint
+Indicator slots
+
+Slot name	Default component	Element	Description
+typingIndicator	ChatTypingIndicator	<div>	Animated dots while assistant responds
+unreadMarker	ChatUnreadMarker	<div>	"New messages" marker
+scrollToBottom	ChatScrollToBottomAffordance	<button>	Floating scroll-to-bottom button
+suggestions	ChatSuggestions	<div>	Prompt suggestion chips
+The typingIndicator, unreadMarker, and messageActions slots are defined in the type interface but are not currently consumed by ChatBox's internal composition. To customize these, use the standalone components directly in a custom layout with ChatProvider.
+
+Hiding a slot
+
+Return null from a slot to remove it entirely, or use the features prop for common show/hide needs:
+
+MUI Assistant
+Material UI chat
+Styled with your active MUI theme
+Mar 15
+MUI Assistant
+MUI Assistant
+Hello! I am styled using your active Material UI theme. Try sending a message.
+
+You
+You
+Great — the bubble colors come from palette.primary and the typography from the theme.
+
+hi
+
+MUI Assistant
+MUI Assistant
+Assistant received "hi". Material UI styles applied automatically from the active theme.
+
+
+
+Type a message
+
+Feature flags and slot rendering
+
+When a feature flag is set to false, the corresponding slot is not rendered at all — even if you provide a custom component via slots. The feature flag takes precedence:
+
+{/* The custom button does not render because the feature is disabled */}
+<ChatBox
+  adapter={adapter}
+  features={{ attachments: false }}
+  slots={{ composerAttachButton: MyCustomButton }}  {/* ignored */}
+/>
+
+Copy
+The autoScroll feature flag controls scroll behavior rather than slot visibility:
+
+<ChatBox
+  adapter={adapter}
+  features={{
+    autoScroll: { buffer: 300 }, // Custom threshold (default: 150px)
+    // autoScroll: false,        // Disable auto-scrolling entirely
+  }}
+/>
+
+Copy
+To conditionally show a custom component, keep the feature flag enabled and handle visibility in your slot component instead.
+
+slotProps reference
+
+Key	Type	Description
+root	SlotComponentProps<'div'>	Outermost div
+layout	SlotComponentProps<'div'>	Layout div
+conversationsPane	SlotComponentProps<'div'>	Conversations pane div
+threadPane	SlotComponentProps<'div'>	Thread pane div
+conversationList	Partial<ChatConversationListProps>	Conversation list
+conversationHeader	Partial<ChatConversationHeaderProps>	Thread header
+conversationTitle	Partial<ChatConversationTitleProps>	Thread title
+conversationSubtitle	Partial<ChatConversationSubtitleProps>	Thread subtitle
+messageList	Partial<ChatMessageListProps>	Message list
+messageRoot	Partial<ChatMessageProps>	Each message container
+messageAvatar	Partial<ChatMessageAvatarProps>	Message avatar
+messageContent	Partial<ChatMessageContentProps>	Message content/bubble
+messageMeta	Partial<ChatMessageMetaProps>	Message timestamp
+messageActions	Partial<ChatMessageActionsProps>	Message action menu
+messageGroup	Partial<ChatMessageGroupProps>	Message group container
+dateDivider	Partial<ChatDateDividerProps>	Date separator
+composerRoot	Partial<ChatComposerProps>	Composer form root
+composerInput	Partial<ChatComposerTextAreaProps>	Composer textarea
+composerSendButton	Partial<ChatComposerSendButtonProps>	Send button
+composerAttachButton	Partial<ChatComposerAttachButtonProps>	Attach button
+composerToolbar	Partial<ChatComposerToolbarProps>	Toolbar container
+composerHelperText	Partial<ChatComposerHelperTextProps>	Helper text below input
+typingIndicator	Partial<ChatTypingIndicatorProps>	Typing indicator
+unreadMarker	Partial<ChatUnreadMarkerProps>	Unread marker
+scrollToBottom	Partial<ChatScrollToBottomAffordanceProps>	Scroll to bottom button
+CSS classes
+
+The chatBoxClasses utility object provides class name constants for CSS targeting:
+
+import { chatBoxClasses } from '@mui/x-chat';
+
+// Available: chatBoxClasses.root, chatBoxClasses.layout,
+//            chatBoxClasses.conversationsPane, chatBoxClasses.threadPane
+
+Copy
+TypeScript
+
+Import the slot types for type-safe custom components:
+
+import type { ChatBoxSlots, ChatBoxSlotProps } from '@mui/x-chat';
+
+// Your custom slot component receives the same props as the default
+const MyMessageContent: ChatBoxSlots['messageContent'] = (props) => {
+  return <div className="custom-bubble" {...props} />;
+};
+
+// Type-safe slotProps
+const mySlotProps: ChatBoxSlotProps = {
+  composerInput: { placeholder: 'Type here...' },
+  messageList: { sx: { p: 2 } },
+};
+
+Copy
+Combining slots with theme overrides
+
+Slots replace the component entirely, while theme styleOverrides adjust the default component's styles. You can use both together — for example, swap the message content component via a slot while applying global border-radius tweaks through the theme.
+
+See also
+
+Styling for sx prop, theme overrides, and dark mode.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatBox />
+
+ChatBox covers most use cases out of the box, but sometimes you need to reach into chat state from components that live outside ChatBox — a page header that shows streaming status, a sidebar that renders conversation metadata, or a custom toolbar that controls the composer.
+
+The hook layer makes this possible. Every hook subscribes to a precise slice of the normalized store, so components only re-render when their own data changes.
+
+Import
+
+All hooks are exported from @mui/x-chat:
+
+import {
+  useChat,
+  useChatComposer,
+  useChatStatus,
+  useConversations,
+  useConversation,
+  useMessageIds,
+  useMessage,
+  useChatOnToolCall,
+  useChatPartRenderer,
+  useChatStore,
+} from '@mui/x-chat/headless';
+
+Copy
+Provider requirement
+
+Every hook listed on this page must be called inside a component that has a <ChatProvider> (or <ChatBox>) ancestor in the tree. Calling a hook outside a provider throws an error at development time.
+
+ChatBox renders a ChatProvider internally, so hooks work naturally inside any component rendered as a child or descendant of ChatBox:
+
+function MyStatusBadge() {
+  const { isStreaming } = useChatStatus(); // works — inside ChatBox's provider
+  return isStreaming ? <Chip label="Responding..." /> : null;
+}
+
+export default function App() {
+  return (
+    <ChatBox adapter={adapter}>
+      <MyStatusBadge />
+    </ChatBox>
+  );
+}
+
+Copy
+If you are building a custom layout without ChatBox, wrap your tree in <ChatProvider> and use hooks freely anywhere inside.
+
+State hooks
+
+State hooks give you read access to the normalized chat store. Use them to display data without triggering adapter calls.
+
+useChat()
+
+The all-in-one hook. It returns both the complete current state and every runtime action in a single object. Use it when you want the fastest path to something working, or when a small component needs a mix of state and actions.
+
+const {
+  // State
+  messages, // ChatMessage[] — all messages in the active conversation
+  conversations, // ChatConversation[]
+  activeConversationId, // string | undefined
+  isStreaming, // boolean
+  hasMoreHistory, // boolean
+  error, // ChatError | null
+
+  // Actions
+  sendMessage, // (input: UseChatSendMessageInput) => Promise<void>
+  stopStreaming, // () => void
+  loadMoreHistory, // () => Promise<void>
+  setActiveConversation, // (id: string | undefined) => Promise<void>
+  retry, // (messageId: string) => Promise<void>
+  setError, // (error: ChatError | null) => void
+  addToolApprovalResponse, // (input: ChatAddToolApproveResponseInput) => Promise<void>
+  reloadConversations, // () => Promise<void> — planned API stub, not yet implemented
+  reloadMessages, // (conversationId?: string) => Promise<void> — planned API stub, not yet implemented
+  reconnectRealtime, // () => Promise<void> — planned API stub, not yet implemented
+} = useChat();
+
+Copy
+Because useChat() subscribes to multiple store slices at once, it re-renders on any state change. For components that render long message lists or need fine-grained control over re-renders, prefer the narrower hooks below.
+
+function QuickChat() {
+  const { messages, sendMessage, isStreaming } = useChat();
+
+  return (
+    <>
+      {messages.map((msg) => (
+        <div key={msg.id}>{msg.parts.find((p) => p.type === 'text')?.text}</div>
+      ))}
+      <button
+        disabled={isStreaming}
+        onClick={() => sendMessage({ parts: [{ type: 'text', text: 'Hi' }] })}
+      >
+        Send
+      </button>
+    </>
+  );
+}
+
+Copy
+useChatStatus()
+
+A lightweight hook for status indicators. It subscribes only to isStreaming, hasMoreHistory, error, and typingUserIds — making it ideal for status bars, loading spinners, and error banners that sit outside the message list.
+
+const {
+  isStreaming, // boolean
+  hasMoreHistory, // boolean
+  error, // ChatError | null
+  typingUserIds, // string[] — users currently typing in the active conversation
+} = useChatStatus();
+
+Copy
+function StatusFooter() {
+  const { isStreaming, typingUserIds, error } = useChatStatus();
+
+  if (error) return <Alert severity="error">{error.message}</Alert>;
+  if (isStreaming) return <LinearProgress />;
+  if (typingUserIds.length > 0) {
+    return <Typography variant="caption">Someone is typing...</Typography>;
+  }
+  return null;
+}
+
+Copy
+Prefer useChatStatus() over useChat() whenever you only need streaming or error state. The component does not re-render when a new message is sent — only when the status fields themselves change.
+
+useConversations()
+
+Returns the full list of conversations. Use it to render a sidebar or drawer that shows all threads.
+
+const conversations: ChatConversation[] = useConversations();
+
+Copy
+function ConversationSidebar() {
+  const conversations = useConversations();
+  const { setActiveConversation } = useChat();
+
+  return (
+    <List>
+      {conversations.map((c) => (
+        <ListItemButton key={c.id} onClick={() => setActiveConversation(c.id)}>
+          {c.title}
+        </ListItemButton>
+      ))}
+    </List>
+  );
+}
+
+Copy
+useConversation(id)
+
+Returns a single conversation by ID, or null if it is not in the store. Use this inside a list item component so that each item only re-renders when its own conversation changes — not when an unrelated conversation is added or renamed.
+
+const conversation: ChatConversation | null = useConversation(id);
+
+Copy
+function ConversationItem({ id }: { id: string }) {
+  const conversation = useConversation(id);
+  if (!conversation) return null;
+
+  return <ListItem>{conversation.title}</ListItem>;
+}
+
+Copy
+useMessageIds()
+
+Returns the ordered array of message IDs for the active conversation. Pair it with useMessage(id) to implement efficient thread rendering where each message row subscribes to its own slice of state.
+
+const messageIds: string[] = useMessageIds();
+
+Copy
+When a message is being streamed, only the row for that message re-renders — the parent thread component and sibling rows stay untouched.
+
+useMessage(id)
+
+Returns a single message by ID, or null if it does not exist. This is the most granular subscription available: it re-renders only when the specific message changes.
+
+const message: ChatMessage | null = useMessage(id);
+
+Copy
+The recommended pattern for efficient thread rendering:
+
+function Thread() {
+  const messageIds = useMessageIds();
+
+  return (
+    <Stack spacing={1}>
+      {messageIds.map((id) => (
+        <MessageRow key={id} id={id} />
+      ))}
+    </Stack>
+  );
+}
+
+function MessageRow({ id }: { id: string }) {
+  const message = useMessage(id);
+  if (!message) return null;
+
+  const textPart = message.parts.find((p) => p.type === 'text');
+  return (
+    <Paper sx={{ p: 1.5 }}>{textPart?.type === 'text' ? textPart.text : null}</Paper>
+  );
+}
+
+Copy
+This pattern scales to threads with hundreds of messages because no unnecessary re-renders propagate up the tree.
+
+Input hook
+
+useChatComposer()
+
+Manages draft text, file attachments, and submission in a single object. Use it when you want to build a custom composer instead of using the one built into ChatBox.
+
+const {
+  value, // string — current draft text
+  setValue, // (value: string) => void
+  attachments, // ChatDraftAttachment[]
+  addAttachment, // (file: File) => void
+  removeAttachment, // (localId: string) => void
+  clear, // () => void — clears text and attachments
+  submit, // () => Promise<void> — sends the composed message
+  isSubmitting, // boolean — true while a stream is active
+} = useChatComposer();
+
+Copy
+The hook handles several details automatically:
+
+Object URL lifecycle — preview URLs for image attachments are created on add and revoked on remove or unmount.
+IME safety — submit is a no-op during an active IME composition session (relevant for East Asian input methods).
+Double-send prevention — submit is blocked when isSubmitting is true.
+function CustomComposer() {
+  const { value, setValue, submit, isSubmitting, addAttachment } = useChatComposer();
+
+  return (
+    <Stack direction="row" spacing={1}>
+      <TextField
+        fullWidth
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder="Type a message..."
+      />
+      <IconButton component="label">
+        <AttachFileIcon />
+        <input
+          type="file"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) addAttachment(file);
+          }}
+        />
+      </IconButton>
+      <Button variant="contained" onClick={submit} disabled={isSubmitting}>
+        Send
+      </Button>
+    </Stack>
+  );
+}
+
+Copy
+Config hooks
+
+Config hooks read configuration registered on the ChatProvider rather than runtime state. They are most useful inside custom message part renderers and custom message components.
+
+useChatOnToolCall()
+
+Returns the onToolCall callback registered on the provider, or undefined if none was registered. Use it inside a custom tool message part to invoke the same callback that ChatBox uses internally — keeping behavior consistent even when you replace message rendering entirely.
+
+const onToolCall: ChatOnToolCall | undefined = useChatOnToolCall();
+
+Copy
+function ToolMessagePart({ invocation }: { invocation: ChatToolInvocation }) {
+  const onToolCall = useChatOnToolCall();
+
+  React.useEffect(() => {
+    if (invocation.state === 'output-available') {
+      onToolCall?.({ toolCall: invocation });
+    }
+  }, [invocation.id, invocation.state, onToolCall]);
+
+  return <ToolCard invocation={invocation} />;
+}
+
+Copy
+useChatPartRenderer(partType)
+
+Looks up a renderer registered in the partRenderers map on ChatProvider. Returns the renderer function, or null if none is registered for the given part type.
+
+function useChatPartRenderer<TPartType extends ChatMessagePart['type']>(
+  partType: TPartType,
+): ChatPartRenderer<Extract<ChatMessagePart, { type: TPartType }>> | null;
+
+Copy
+Renderers are registered through the partRenderers prop on ChatBox:
+
+<ChatBox
+  adapter={adapter}
+  partRenderers={{
+    'ticket-summary': ({ part }) => <TicketCard ticketId={part.ticketId} />,
+  }}
+/>
+
+Copy
+Then any component in the tree can look up and invoke a renderer:
+
+function UnknownPart({ part, message, index }) {
+  const renderer = useChatPartRenderer(part.type);
+
+  if (renderer) {
+    return renderer({ part, message, index });
+  }
+
+  return <Typography color="text.secondary">Unknown part: {part.type}</Typography>;
+}
+
+Copy
+Advanced: useChatStore()
+
+Returns the underlying ChatStore<Cursor> instance directly. This is the escape hatch for cases that none of the dedicated hooks cover — writing custom selectors, subscribing to store updates outside React render, or integrating with Redux or Zustand.
+
+const store: ChatStore<Cursor> = useChatStore();
+
+Copy
+Use the store's built-in use() method to create a reactive subscription with a custom selector:
+
+import { useChatStore, chatSelectors } from '@mui/x-chat/headless';
+
+function MessageCounter() {
+  const store = useChatStore();
+  const count = store.use(chatSelectors.messageCount);
+
+  return <Chip label={`${count} messages`} />;
+}
+
+Copy
+useChatStore() gives you access to all selectors in chatSelectors and the full store mutation API.
+
+Use it sparingly — the dedicated hooks above are simpler, better typed, and remain stable across minor versions. Direct store access is considered advanced API and is more likely to require changes during upgrades.
+
+Choosing the right hook
+
+Goal	Hook
+Prototype or component that needs both state and actions	useChat()
+Status chip, typing indicator, or error banner	useChatStatus()
+Conversation list or sidebar	useConversations() / useConversation(id)
+Thread with many messages (efficient rendering)	useMessageIds() + useMessage(id)
+Custom composer with text and attachments	useChatComposer()
+Custom tool part that respects provider callbacks	useChatOnToolCall()
+Custom part renderer lookup	useChatPartRenderer(partType)
+Custom selector or store subscription	useChatStore() + chatSelectors
+See also
+
+Adapters for the interface that the actions in these hooks call into.
+Selectors Reference for the full chatSelectors map used with useChatStore().
+Controlled State for ChatProvider props and the controlled/uncontrolled model.
+Events & Callbacks for onFinish, onToolCall, onData, and onError.
+API
+
+
+chatSelectors is a collection of memoized selectors that read from the normalized chat store. They power the built-in hooks and can also be used directly with useChatStore() for advanced subscriptions.
+
+import { chatSelectors, useChatStore } from '@mui/x-chat/headless';
+
+Copy
+Direct state selectors
+
+These selectors read a single field from the store and return it directly:
+
+Selector	Return type	Description
+messageIds	string[]	Ordered message IDs
+messagesById	Record<string, ChatMessage>	Message map by ID
+conversationIds	string[]	Ordered conversation IDs
+conversationsById	Record<string, ChatConversation>	Conversation map by ID
+activeConversationId	string | undefined	Active conversation ID
+isStreaming	boolean	Whether a stream is active
+hasMoreHistory	boolean	Whether more history can be loaded
+error	ChatError | null	Current runtime error
+composerValue	string	Current draft text
+composerAttachments	ChatDraftAttachment[]	Draft attachments
+Derived selectors
+
+These selectors combine multiple store fields and memoize the result:
+
+Selector	Return type	Description
+messages	ChatMessage[]	All messages as an array (derived from IDs + map)
+conversations	ChatConversation[]	All conversations as an array
+activeConversation	ChatConversation | undefined	The active conversation record
+messageCount	number	Number of messages
+conversationCount	number	Number of conversations
+Parameterized selectors
+
+Selector	Signature	Description
+message	(state, id: string) => ChatMessage | undefined	Single message by ID
+conversation	(state, id: string) => ChatConversation | undefined	Single conversation by ID
+typingUserIds	(state, conversationId?: string) => string[]	User IDs typing in a conversation (defaults to active)
+Using selectors with useChatStore()
+
+The hooks useMessageIds(), useMessage(id), and others are convenience wrappers around useChatStore() + chatSelectors. When you need a custom derived value, use the store directly:
+
+import { useChatStore, chatSelectors } from '@mui/x-chat/headless';
+import { useStore } from '@mui/x-internals/store';
+
+function MessageCounter() {
+  const store = useChatStore();
+  const count = useStore(store, chatSelectors.messageCount);
+
+  return <span>{count} messages</span>;
+}
+
+Copy
+Parameterized selectors
+
+For selectors that take an argument, pass a selector function:
+
+function ConversationTitle({ id }: { id: string }) {
+  const store = useChatStore();
+  const conversation = useStore(store, chatSelectors.conversation, id);
+
+  return <span>{conversation?.title ?? 'Untitled'}</span>;
+}
+
+Copy
+Why normalization matters
+
+The store keeps messages and conversations in a normalized shape (ids + byId maps) rather than flat arrays. This design has three benefits:
+
+Point updates — Updating a single message during streaming does not rebuild the message array. Only the messagesById record changes.
+Stable references — The messageIds array only changes when messages are added or removed, not when their content updates. useMessageIds() stays stable during streaming.
+Memoized derivation — The messages selector rebuilds the array only when either messageIds or messagesById changes, and the result is reference-equal when inputs are unchanged.
+This is why the useMessageIds() + useMessage(id) pattern performs well for large threads — the ID list stays stable while individual rows subscribe to their own message record.
+
+API
+
+See also
+
+Hooks Reference for the hook API that wraps these selectors.
+Controlled State for the internal state shape and controlled/uncontrolled models.
+Performance for rendering strategies with large message lists.
+
+
+ChatProvider (and by extension ChatBox) exposes four callback props that fire at key moments in the chat lifecycle. Use them for logging, analytics, side effects, and error handling without modifying the adapter.
+
+Callback overview
+
+Prop	When it fires	Typical use case
+onFinish	When a stream reaches a terminal state	Analytics, persistence, follow-up UI
+onToolCall	When a tool invocation state changes	Logging, triggering external workflows
+onData	When a data-* chunk arrives during streaming	Transient data, app-level side effects
+onError	When any runtime error surfaces	Error reporting, toast notifications
+onFinish
+
+Fires when a stream finishes, aborts, disconnects, or errors. This is the primary callback for post-stream side effects.
+
+interface ChatOnFinishPayload {
+  message: ChatMessage; // the assistant message
+  messages: ChatMessage[]; // all messages after the stream
+  isAbort: boolean; // user stopped the stream
+  isDisconnect: boolean; // stream disconnected unexpectedly
+  isError: boolean; // stream ended with an error
+  finishReason?: string; // backend-provided reason
+}
+
+Copy
+<ChatBox
+  adapter={adapter}
+  onFinish={({ message, messages, isAbort }) => {
+    if (!isAbort) {
+      // Persist the completed conversation
+      saveConversation(messages);
+    }
+    // Log completion analytics
+    analytics.track('chat_response_complete', {
+      messageId: message.id,
+      partCount: message.parts.length,
+    });
+  }}
+/>
+
+Copy
+Terminal states
+
+The onFinish callback fires in four scenarios:
+
+Scenario	isAbort	isDisconnect	isError	Description
+Success	false	false	false	Stream completed normally
+User abort	true	false	false	User clicked the stop button
+Disconnect	false	true	false	Connection dropped mid-stream
+Error	false	false	true	Stream ended with an error
+onToolCall
+
+Fires when a tool invocation state changes during streaming. Use it for side effects outside the message list — logging, analytics, or triggering external workflows.
+
+interface ChatOnToolCallPayload {
+  toolCall: ChatToolInvocation | ChatDynamicToolInvocation;
+}
+
+Copy
+<ChatBox
+  adapter={adapter}
+  onToolCall={({ toolCall }) => {
+    console.log(`Tool ${toolCall.toolName}: ${toolCall.state}`);
+
+    if (toolCall.state === 'output-available') {
+      // Tool execution completed — trigger follow-up
+      analytics.track('tool_executed', { tool: toolCall.toolName });
+    }
+  }}
+/>
+
+Copy
+Tool invocation states
+
+State	Description
+input-streaming	Tool input is being streamed
+input-available	Tool input is fully available
+approval-requested	Waiting for human-in-the-loop approval
+approval-responded	User has approved or denied
+output-available	Tool execution completed with output
+output-error	Tool execution failed
+output-denied	User denied the tool execution
+onData
+
+Fires when a data-* chunk arrives during streaming. Use it for transient data that should trigger app-level side effects without being persisted in the message.
+
+type ChatOnData = (part: ChatDataMessagePart) => void;
+
+Copy
+<ChatBox
+  adapter={adapter}
+  onData={(part) => {
+    if (part.type === 'progress') {
+      setProgressPercent(part.data.percent);
+    }
+  }}
+/>
+
+Copy
+This callback is useful for backend-driven UI updates that are transient — progress bars, status indicators, or notifications that should not be stored as message parts.
+
+onError
+
+Fires when any runtime error surfaces — from adapter methods, stream processing, or rendering.
+
+type ChatOnError = (error: ChatError) => void;
+
+Copy
+<ChatBox
+  adapter={adapter}
+  onError={(error) => {
+    console.error('[Chat error]', error.source, error.message);
+
+    // Show a toast notification
+    toast.error(error.message);
+
+    // Report to error tracking
+    Sentry.captureException(new Error(error.message), {
+      tags: { source: error.source },
+    });
+  }}
+/>
+
+Copy
+The ChatError type
+
+type ChatErrorCode =
+  | 'HISTORY_ERROR'
+  | 'SEND_ERROR'
+  | 'STREAM_ERROR'
+  | 'REALTIME_ERROR';
+
+interface ChatError {
+  code: ChatErrorCode; // machine-readable error code
+  message: string; // human-readable description
+  source: ChatErrorSource; // where the error originated
+  recoverable: boolean; // whether the runtime can continue
+  retryable?: boolean; // whether the failed operation can be retried
+  details?: Record<string, unknown>; // additional context
+}
+
+type ChatErrorSource = 'send' | 'stream' | 'history' | 'render' | 'adapter';
+
+Copy
+Error sources
+
+Source	When it fires
+send	sendMessage() rejected
+stream	Stream processing encountered an error
+history	listMessages() or listConversations() rejected
+render	A rendering error occurred in the message list
+adapter	A generic adapter method threw
+Reading errors in components
+
+Errors also surface through hooks, so you can display them in custom UI:
+
+// Via useChat()
+const { error } = useChat();
+
+// Via useChatStatus() — lighter weight, no message subscriptions
+const { error } = useChatStatus();
+
+Copy
+Registration
+
+All callbacks are registered as props on ChatBox or ChatProvider:
+
+// On ChatBox (all-in-one)
+<ChatBox
+  adapter={adapter}
+  onFinish={handleFinish}
+  onToolCall={handleToolCall}
+  onData={handleData}
+  onError={handleError}
+/>
+
+// On ChatProvider (custom layout)
+<ChatProvider
+  adapter={adapter}
+  onFinish={handleFinish}
+  onToolCall={handleToolCall}
+  onData={handleData}
+  onError={handleError}
+>
+  <MyCustomLayout />
+</ChatProvider>
+
+Copy
+See also
+
+Adapters for the adapter interface that produces these events.
+Controlled State for the full ChatProvider props reference.
+Hooks Reference for useChatStatus() and reading error state in components.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatBox />
+
+streamFlushInterval tuning
+
+During streaming, the runtime batches incoming text deltas before flushing them to the store. The streamFlushInterval prop controls the batching window in milliseconds:
+
+<ChatBox
+  adapter={adapter}
+  streamFlushInterval={16} // default: 16ms (~60fps)
+/>
+
+Copy
+Value	Effect
+16	Default. Flushes at ~60fps for smooth character-level animation.
+32-50	Reduces store update frequency. Good for lower-end devices or when streaming is visually less important.
+100+	Chunks arrive in larger batches. Text appears to "jump" forward. Useful when minimizing re-renders matters more than streaming smoothness.
+0	No batching — every delta triggers a store update immediately. Only use for debugging.
+The optimal value depends on your UI complexity and target devices. Start with the default and increase it if profiling shows excessive re-renders during streaming.
+
+Efficient rendering with useMessageIds() + useMessage()
+
+The single most important pattern for performance is separating the message list from individual message rendering:
+
+function Thread() {
+  const messageIds = useMessageIds();
+
+  return (
+    <Stack spacing={1}>
+      {messageIds.map((id) => (
+        <MessageRow key={id} id={id} />
+      ))}
+    </Stack>
+  );
+}
+
+function MessageRow({ id }: { id: string }) {
+  const message = useMessage(id);
+  if (!message) return null;
+
+  const textPart = message.parts.find((p) => p.type === 'text');
+  return (
+    <Paper sx={{ p: 1.5 }}>{textPart?.type === 'text' ? textPart.text : null}</Paper>
+  );
+}
+
+Copy
+This pattern works because of how the normalized store is structured:
+
+useMessageIds() subscribes to the messageIds array, which only changes when messages are added or removed — not when their content updates during streaming.
+useMessage(id) subscribes to a single message record. During streaming, only the row for the message being streamed re-renders.
+The result: sibling message rows and the parent thread component stay untouched during streaming. This scales to threads with hundreds of messages.
+
+Why useChat() is less efficient for lists
+
+useChat() subscribes to multiple store slices at once and returns the full messages array. Any state change — including text deltas on a single message — causes the entire component to re-render. For a thread with many messages, this means re-rendering every row on every delta.
+
+Use useChat() for small prototypes and components that need both state and actions. Use useMessageIds() + useMessage(id) for production message lists.
+
+Memoization strategies
+
+Memoize message row components
+
+Wrap row components in React.memo to prevent re-renders when props have not changed:
+
+const MessageRow = React.memo(function MessageRow({ id }: { id: string }) {
+  const message = useMessage(id);
+  if (!message) return null;
+
+  return <Paper sx={{ p: 1.5 }}>{/* render message */}</Paper>;
+});
+
+Copy
+Because useMessage(id) only triggers a re-render when the specific message changes, the memo boundary is effective — the component only re-renders when its own data updates.
+
+Stable callback references
+
+When passing callbacks to message rows (for example, action handlers), use useCallback to prevent the callback from changing on every parent render:
+
+function Thread() {
+  const messageIds = useMessageIds();
+  const { retry } = useChat();
+
+  const handleRetry = React.useCallback(
+    (messageId: string) => retry(messageId),
+    [retry],
+  );
+
+  return (
+    <>
+      {messageIds.map((id) => (
+        <MessageRow key={id} id={id} onRetry={handleRetry} />
+      ))}
+    </>
+  );
+}
+
+Copy
+Why normalization matters
+
+The store keeps messages and conversations in a normalized shape (ids + byId maps) rather than flat arrays. This design has three benefits:
+
+Point updates — Updating a single message during streaming does not rebuild the message array. Only the messagesById record changes.
+Stable references — The messageIds array only changes when messages are added or removed, not when their content updates. useMessageIds() stays stable during streaming.
+Memoized derivation — The messages selector rebuilds the array only when either messageIds or messagesById changes, and the result is reference-equal when inputs are unchanged.
+Handling large message lists
+
+Scroll behavior
+
+ChatBox handles scroll behavior automatically:
+
+Auto-scrolls to the bottom when new messages arrive (if the user is already near the bottom).
+Shows a scroll-to-bottom affordance when the user scrolls up.
+Loads earlier messages with a "Load earlier messages" control when listMessages returns hasMore: true.
+The autoScroll feature flag allows tuning the scroll threshold:
+
+<ChatBox
+  adapter={adapter}
+  features={{
+    autoScroll: { buffer: 300 }, // custom threshold (default: 150px)
+  }}
+/>
+
+Copy
+Many messages
+
+The chat UI is tested with large message counts (30+ messages) to verify:
+
+Scrollable message list with proper scroll positioning
+Auto-scroll to the latest message on load
+Scroll-to-bottom affordance when scrolled up
+Message grouping by author
+Performance with many DOM nodes
+Long messages
+
+The chat UI handles various edge cases in message content:
+
+Long text wrapping within bubble constraints
+Word-break behavior with unbreakable strings
+Special characters and emoji rendering
+Mixed short and long messages
+Code block formatting in messages
+Profiling tips
+
+React DevTools Profiler — Record a profiling session while streaming a response. Look for components that re-render on every delta but should not.
+Highlight updates — Enable "Highlight updates when components render" in React DevTools to visually see which components re-render during streaming.
+Check subscription granularity — If a component uses useChat() but only reads isStreaming, switch to useChatStatus() to avoid unnecessary message-triggered re-renders.
+See also
+
+Hooks Reference for the useMessageIds() + useMessage(id) pattern.
+Selectors Reference for the normalized store design and custom selectors.
+Controlled State for streamFlushInterval and other provider configuration.
+API
+
+See the documentation below for a complete reference to all of the props and classes available to the components mentioned here.
+
+<ChatBox />
+
+Demos
+For examples and details on the usage of this React component, visit the component demo pages:
+
+Chat - Composer
+Import
+Copy
+import { ChatComposerAttachmentList } from '@mui/x-chat/ChatComposer';
+// or
+import { ChatComposerAttachmentList } from '@mui/x-chat';
+Learn about the difference by reading this guide on minimizing bundle size.
+
+Props
+Name	Type	Description
+The component cannot hold a ref.
+CSS classes
+These class names are useful for styling with CSS. They are applied to the component's slots when specific states are triggered.
+
+Class name	Rule name	Description
+.Mui-disabled		Styles applied to the root element when disabled.
+.MuiChatComposerAttachmentList-attachButton	attachButton	Styles applied to the attach button element.
+.MuiChatComposerAttachmentList-attachmentList	attachmentList	Styles applied to the attachment list element.
+.MuiChatComposerAttachmentList-helperText	helperText	Styles applied to the helper text element.
+.MuiChatComposerAttachmentList-label	label	Styles applied to the input label element.
+.MuiChatComposerAttachmentList-root	root	Styles applied to the input root element.
+.MuiChatComposerAttachmentList-sendButton	sendButton	Styles applied to the send button element.
+.MuiChatComposerAttachmentList-textArea	textArea	Styles applied to the textarea element.
+.MuiChatComposerAttachmentList-toolbar	toolbar	Styles applied to the toolbar element.
+.MuiChatComposerAttachmentList-variantCompact	variantCompact	Styles applied to the root element when variant="compact".
+
+You can override the style of the component using one of these customization options:
+
+With a global class name.
+With a rule name as part of the component's styleOverrides property in a custom theme.
+Source code
+If you did not find the information in this page, consider having a look at the implementation of the component for more detail.
+
+
+
