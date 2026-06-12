@@ -4,12 +4,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+except Exception:  # pragma: no cover - optional in Render web service
+    matplotlib = None
+    plt = None
+    sns = None
+
 import networkx as nx
 import pandas as pd
-import seaborn as sns
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
@@ -51,6 +57,14 @@ PALETTE = [
 ]
 
 
+def _require_plotting_backend() -> None:
+    if plt is None or sns is None:
+        raise RuntimeError(
+            "Plot rendering dependencies are not installed in this deployment. "
+            "Use the frontend MUI charts or install the optional plotting extras in a local/research environment."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -71,6 +85,7 @@ def _slugify(value: str) -> str:
 
 
 def _apply_dark_theme() -> None:
+    _require_plotting_backend()
     plt.style.use("dark_background")
     sns.set_theme(style="darkgrid", palette="crest")
     plt.rcParams.update(
@@ -88,6 +103,7 @@ def _apply_dark_theme() -> None:
 
 
 def _save_current_plot(title: str, plot_type: str) -> str:
+    _require_plotting_backend()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"{_slugify(plot_type)}_{_slugify(title)}_{timestamp}.png"
