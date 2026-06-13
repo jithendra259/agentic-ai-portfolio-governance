@@ -52,6 +52,48 @@ class CalculationScratchpadTests(unittest.TestCase):
             "annualized_volatility",
         )
 
+    def test_save_financial_metric_tool_records_exact_value(self):
+        blackboard = BlackboardState("req-1", "Compute beta")
+        executor = object.__new__(AgenticTaskExecutor)
+
+        observation = executor._save_financial_metric(
+            {
+                "tool": "save_financial_metric",
+                "parameters": {
+                    "metric_name": "tech_portfolio_beta",
+                    "exact_value": "1.247",
+                    "context": "CAPM beta from covariance / benchmark variance",
+                    "formula": "cov(portfolio, benchmark) / var(benchmark)",
+                },
+            },
+            blackboard,
+        )
+
+        self.assertEqual(observation["status"], "success")
+        self.assertEqual(observation["metric_name"], "tech_portfolio_beta")
+        self.assertEqual(
+            blackboard.calculation_scratchpad.get("calc_001")["result"],
+            "1.247",
+        )
+
+    def test_generate_thought_injects_exact_scratchpad_rules(self):
+        blackboard = BlackboardState("req-1", "Compute required return")
+        blackboard.record_calculation(
+            label="tech_portfolio_beta",
+            formula="cov(portfolio, benchmark) / var(benchmark)",
+            inputs={"portfolio": "TECH_U1", "benchmark": "SPY"},
+            result="1.247",
+            source="save_financial_metric",
+        )
+        task = type("Task", (), {"name": "required_return"})()
+        executor = object.__new__(AgenticTaskExecutor)
+
+        thought = executor._generate_thought(task, blackboard)
+
+        self.assertIn("tech_portfolio_beta", thought)
+        self.assertIn("1.247", thought)
+        self.assertIn("Before calculating any metric, check the Scratchpad", thought)
+
 
 if __name__ == "__main__":
     unittest.main()

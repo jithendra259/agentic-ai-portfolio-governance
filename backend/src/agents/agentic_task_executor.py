@@ -870,7 +870,8 @@ class AgenticTaskExecutor:
         self.llm_client = llm_client
         self.allowed_tools = allowed_tools or {
             "web_search", "data_fetcher", "text_synthesizer",
-            "code_executor", "file_reader", "api_caller"
+            "code_executor", "file_reader", "api_caller",
+            "save_financial_metric",
         }
         
         # Initialize components
@@ -1295,8 +1296,13 @@ class AgenticTaskExecutor:
     
     def _generate_thought(self, task: TaskNode, blackboard: BlackboardState) -> str:
         """Generate reasoning thought for current step."""
+        scratchpad_context = self._format_scratchpad_for_prompt(blackboard)
         # In production, use LLM
-        return f"Analyzing task: {task.name}. Current progress: {len(blackboard.completed_tasks)}/{len(blackboard.tasks)} tasks completed."
+        return (
+            f"Analyzing task: {task.name}. Current progress: "
+            f"{len(blackboard.completed_tasks)}/{len(blackboard.tasks)} tasks completed.\n\n"
+            f"{scratchpad_context}"
+        )
     
     def _decide_action(
         self, 
@@ -1324,6 +1330,9 @@ class AgenticTaskExecutor:
         params = action['parameters']
         
         logger.info(f"Executing tool: {tool_name} with params: {params}")
+
+        if tool_name == "save_financial_metric":
+            return self._save_financial_metric(action, blackboard)
         
         # In production, actually call the tool
         # For now, simulate execution
@@ -1334,6 +1343,62 @@ class AgenticTaskExecutor:
             'data': f"Result from {tool_name}",
             'timestamp': datetime.utcnow().isoformat(),
         }
+
+    def _save_financial_metric(
+        self,
+        action: Dict[str, Any],
+        blackboard: BlackboardState,
+    ) -> Dict[str, Any]:
+        params = action.get('parameters', {})
+        metric_name = str(params.get('metric_name') or params.get('label') or "").strip()
+        if not metric_name:
+            return {
+                'status': 'error',
+                'error': 'metric_name is required',
+                'tool': 'save_financial_metric',
+            }
+
+        exact_value = params.get('exact_value', params.get('value'))
+        formula = str(params.get('formula') or params.get('context') or "user_verified_metric")
+        record = blackboard.record_calculation(
+            label=metric_name,
+            formula=formula,
+            inputs=params.get('inputs') or {},
+            result=exact_value,
+            source='save_financial_metric',
+            metadata={'context': params.get('context')},
+        )
+        return {
+            'status': 'success',
+            'tool': 'save_financial_metric',
+            'metric_name': metric_name,
+            'exact_value': record.get('result'),
+            'calculation_id': record.get('calculation_id'),
+            'message': f"Saved exact financial metric {metric_name} to scratchpad.",
+        }
+
+    def _format_scratchpad_for_prompt(self, blackboard: BlackboardState) -> str:
+        records = blackboard.calculation_scratchpad.compact_summary()
+        lines = [
+            "Scratchpad exact financial metrics:",
+            "Before calculating any metric, check the Scratchpad. If the required value exists, use that exact number and do not recalculate it.",
+            "Whenever Python, a financial API, or another tool calculates a critical metric, immediately call save_financial_metric with the exact output.",
+        ]
+        if not records:
+            lines.append("- No saved financial metrics yet.")
+            return "\n".join(lines)
+
+        for record in records:
+            lines.append(
+                "- {calculation_id} | {label} = {result} | formula: {formula} | source: {source}".format(
+                    calculation_id=record.get('calculation_id'),
+                    label=record.get('label'),
+                    result=record.get('result'),
+                    formula=record.get('formula'),
+                    source=record.get('source'),
+                )
+            )
+        return "\n".join(lines)
     
     def _is_task_complete(self, task: TaskNode, observation: Any) -> bool:
         """Check if task is complete based on observation."""
