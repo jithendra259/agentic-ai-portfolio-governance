@@ -1,15 +1,32 @@
-import { useState, useEffect } from 'react';
+import { useReducer, useEffect } from 'react';
 import { BACKEND_BASE } from '../config/api';
 
-function useTabAnalytics(endpoint, tickers, startDate, endDate) {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+const initialAnalyticsState = {
+  data: null,
+  loading: true,
+  error: '',
+};
+
+function analyticsReducer(state, action) {
+  switch (action.type) {
+    case 'loading':
+      return { ...state, loading: true, error: '' };
+    case 'success':
+      return { data: action.data, loading: false, error: '' };
+    case 'error':
+      return { ...state, loading: false, error: action.error || 'Data retrieval failed' };
+    default:
+      return state;
+  }
+}
+
+function useTabAnalytics(endpoint, tickers, startDate, endDate, refreshKey = 0) {
+  const [state, dispatch] = useReducer(analyticsReducer, initialAnalyticsState);
 
   useEffect(() => {
     let isMounted = true;
-    setLoading(true);
-    setError('');
+    const controller = new AbortController();
+    dispatch({ type: 'loading' });
     const formattedTickers = Array.isArray(tickers) ? tickers.join(',') : tickers;
     const url = `${BACKEND_BASE}/api/analytics/${endpoint}?tickers=${encodeURIComponent(formattedTickers)}&start_date=${startDate}&end_date=${endDate}`;
     const token = localStorage.getItem('portfolio-governance-auth-token');
@@ -18,7 +35,7 @@ function useTabAnalytics(endpoint, tickers, startDate, endDate) {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    fetch(url, { headers })
+    fetch(url, { headers, signal: controller.signal })
       .then(async res => {
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -28,52 +45,54 @@ function useTabAnalytics(endpoint, tickers, startDate, endDate) {
       })
       .then(result => {
         if (isMounted) {
-          setData(result);
-          setLoading(false);
+          dispatch({ type: 'success', data: result });
         }
       })
       .catch(err => {
+        if (err.name === 'AbortError') return;
         console.error(`Error loading analytics tab [${endpoint}]:`, err);
         if (isMounted) {
-          setError(err.message || 'Data retrieval failed');
-          setLoading(false);
+          dispatch({ type: 'error', error: err.message });
         }
       });
 
-    return () => { isMounted = false; };
-  }, [endpoint, tickers, startDate, endDate]);
+    return () => {
+      isMounted = false;
+      controller.abort();
+    };
+  }, [endpoint, tickers, startDate, endDate, refreshKey]);
 
-  return { data, loading, error };
+  return state;
 }
 
-export function useEdaAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('eda', tickers, startDate, endDate);
+export function useEdaAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('eda', tickers, startDate, endDate, refreshKey);
 }
 
-export function useInstabilityAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('instability', tickers, startDate, endDate);
+export function useInstabilityAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('instability', tickers, startDate, endDate, refreshKey);
 }
 
-export function useAdvisoryAllocationAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('advisory-allocation', tickers, startDate, endDate);
+export function useAdvisoryAllocationAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('advisory-allocation', tickers, startDate, endDate, refreshKey);
 }
 
-export function useDiversificationAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('diversification', tickers, startDate, endDate);
+export function useDiversificationAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('diversification', tickers, startDate, endDate, refreshKey);
 }
 
-export function useRiskGovernanceAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('risk-governance', tickers, startDate, endDate);
+export function useRiskGovernanceAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('risk-governance', tickers, startDate, endDate, refreshKey);
 }
 
-export function useContagionAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('contagion', tickers, startDate, endDate);
+export function useContagionAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('contagion', tickers, startDate, endDate, refreshKey);
 }
 
-export function useAgentGovernanceAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('agent-governance', tickers, startDate, endDate);
+export function useAgentGovernanceAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('agent-governance', tickers, startDate, endDate, refreshKey);
 }
 
-export function useBacktestingAnalytics(tickers, startDate, endDate) {
-  return useTabAnalytics('backtesting', tickers, startDate, endDate);
+export function useBacktestingAnalytics(tickers, startDate, endDate, refreshKey) {
+  return useTabAnalytics('backtesting', tickers, startDate, endDate, refreshKey);
 }

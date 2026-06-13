@@ -1,6 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { Box, Typography, Tabs, Tab, FormControl, InputLabel, Select, MenuItem, Stack, Button, Card, CardContent, Divider, Stepper, Step, StepLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper } from '@mui/material';
-import { ArrowLeft, RefreshCw, BarChart2, ShieldAlert } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Box, Typography, Stack, Chip, Divider, Stepper, Step, StepLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper } from '@mui/material';
 import { LineChart } from '@mui/x-charts/LineChart';
 import { BarChart } from '@mui/x-charts/BarChart';
 import { PieChart } from '@mui/x-charts/PieChart';
@@ -23,15 +22,16 @@ import PlotCard from './PlotCard';
 import AnalyticsTabLayout from './AnalyticsTabLayout';
 import MetricSummaryCards from './MetricSummaryCards';
 import { HeatmapChart, NetworkGraphChart, TimelineChart, BoxplotLikeChart } from './CustomCharts';
-
-// Pre-defined universes
-const UNIVERSES = {
-  "U1": ["AAPL", "MSFT", "NVDA", "AMZN", "JPM"],
-  "U2": ["BAC", "GS", "WFC", "BLK", "AXP"],
-  "U3": ["JNJ", "PFE", "UNH", "MRK", "ABBV"],
-  "U4": ["TSLA", "MCD", "NKE", "SBUX", "DAL"],
-  "U5": ["GE", "HON", "CAT", "BA", "LMT"],
-};
+import AnalyticsDashboardHeader from './analyticsDashboard/AnalyticsDashboardHeader';
+import AnalyticsDashboardTabs from './analyticsDashboard/AnalyticsDashboardTabs';
+import {
+  buildLineSeries,
+  getActiveRegime,
+  getDates,
+  getDateRangeForPreset,
+  getSeriesDataArray,
+  getUniverseTickers,
+} from './analyticsDashboard/analyticsDashboardModel';
 
 export default function AnalyticsDashboard({ setView }) {
   const [activeTab, setActiveTab] = useState(0);
@@ -43,23 +43,20 @@ export default function AnalyticsDashboard({ setView }) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   // Active tickers computed from universe selection
-  const tickers = useMemo(() => UNIVERSES[universe] || UNIVERSES["U1"], [universe]);
+  const tickers = useMemo(() => getUniverseTickers(universe), [universe]);
   
   // Date range computed from preset
-  const { startDate, endDate } = useMemo(() => {
-    if (datePreset === "2023") return { startDate: "2023-01-01", endDate: "2023-12-31" };
-    return { startDate: "2024-01-01", endDate: "2024-12-31" };
-  }, [datePreset]);
+  const { startDate, endDate } = useMemo(() => getDateRangeForPreset(datePreset), [datePreset]);
 
   // Fetch grouped data for each hook
-  const eda = useEdaAnalytics(tickers, startDate, endDate);
-  const instability = useInstabilityAnalytics(tickers, startDate, endDate);
-  const allocation = useAdvisoryAllocationAnalytics(tickers, startDate, endDate);
-  const diversification = useDiversificationAnalytics(tickers, startDate, endDate);
-  const risk = useRiskGovernanceAnalytics(tickers, startDate, endDate);
-  const contagion = useContagionAnalytics(tickers, startDate, endDate);
-  const agentGov = useAgentGovernanceAnalytics(tickers, startDate, endDate);
-  const backtest = useBacktestingAnalytics(tickers, startDate, endDate);
+  const eda = useEdaAnalytics(tickers, startDate, endDate, refreshKey);
+  const instability = useInstabilityAnalytics(tickers, startDate, endDate, refreshKey);
+  const allocation = useAdvisoryAllocationAnalytics(tickers, startDate, endDate, refreshKey);
+  const diversification = useDiversificationAnalytics(tickers, startDate, endDate, refreshKey);
+  const risk = useRiskGovernanceAnalytics(tickers, startDate, endDate, refreshKey);
+  const contagion = useContagionAnalytics(tickers, startDate, endDate, refreshKey);
+  const agentGov = useAgentGovernanceAnalytics(tickers, startDate, endDate, refreshKey);
+  const backtest = useBacktestingAnalytics(tickers, startDate, endDate, refreshKey);
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
@@ -69,159 +66,23 @@ export default function AnalyticsDashboard({ setView }) {
     setRefreshKey(prev => prev + 1);
   };
 
-  // Safe data extraction helpers
-  const getDates = (seriesData) => {
-    if (!seriesData || !Array.isArray(seriesData) || seriesData.length === 0) return [];
-    return seriesData.map(item => new Date(item.date));
-  };
-
-  const getSeriesDataArray = (seriesData, key) => {
-    if (!seriesData || !Array.isArray(seriesData) || seriesData.length === 0) return [];
-    return seriesData.map(item => item[key] !== undefined ? item[key] : 0.0);
-  };
-
-  const buildLineSeries = (seriesData, keys, valueFormat = 'none') => {
-    if (!seriesData || !Array.isArray(seriesData) || seriesData.length === 0) return [];
-    return keys.map(key => ({
-      data: seriesData.map(item => item[key] !== undefined ? item[key] : 0.0),
-      label: key,
-      showMark: false
-    }));
-  };
-
   // Determine current active regime from timeline to display dynamically
-  const activeRegime = useMemo(() => {
-    if (instability.data?.regime_timeline && instability.data.regime_timeline.length > 0) {
-      return instability.data.regime_timeline[instability.data.regime_timeline.length - 1].regime;
-    }
-    return "Calm";
-  }, [instability.data]);
+  const activeRegime = useMemo(() => getActiveRegime(instability.data), [instability.data]);
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', bgcolor: '#0D0D0D', color: '#ECECEC', overflow: 'hidden' }}>
-      {/* Top Header Selector Bar */}
-      <Box sx={{ minHeight: '64px', borderBottom: '1px solid #262626', display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 3, bgcolor: '#121212', flexShrink: 0 }}>
-        <Stack direction="row" spacing={2} alignItems="center">
-          <Button
-            startIcon={<ArrowLeft size={16} />}
-            onClick={() => setView('chat')}
-            sx={{
-              color: '#B4B4B4',
-              borderColor: '#262626',
-              textTransform: 'none',
-              fontWeight: 600,
-              fontSize: '0.85rem',
-              '&:hover': {
-                color: '#ffffff',
-                bgcolor: 'rgba(255,255,255,0.05)'
-              }
-            }}
-            variant="outlined"
-            size="small"
-          >
-            Advisory Chat
-          </Button>
-          <Divider orientation="vertical" flexItem sx={{ bgcolor: '#262626' }} />
-          <Typography variant="subtitle1" sx={{ fontWeight: 800, color: '#ffffff', letterSpacing: '-0.02em', display: 'flex', alignItems: 'center', gap: 1 }}>
-            <BarChart2 size={18} color="#f59e0b" />
-            Advisory Portfolio Governance & Diversification System
-          </Typography>
-        </Stack>
+      <AnalyticsDashboardHeader
+        datePreset={datePreset}
+        onDatePresetChange={setDatePreset}
+        onRefresh={handleRefresh}
+        onStrategyChange={setStrategy}
+        onUniverseChange={setUniverse}
+        setView={setView}
+        strategy={strategy}
+        universe={universe}
+      />
 
-        {/* Global Selectors */}
-        <Stack direction="row" spacing={2} alignItems="center">
-          <FormControl size="small" variant="outlined" sx={{ minWidth: 120 }}>
-            <InputLabel id="universe-label" sx={{ color: '#B4B4B4', fontSize: '0.8rem' }}>Stock Universe</InputLabel>
-            <Select
-              labelId="universe-label"
-              value={universe}
-              onChange={(e) => setUniverse(e.target.value)}
-              label="Stock Universe"
-              sx={{ color: '#ffffff', fontSize: '0.8rem', '.MuiOutlinedInput-notchedOutline': { borderColor: '#262626' } }}
-            >
-              <MenuItem value="U1">U1: Tech Mix (AAPL, MSFT...)</MenuItem>
-              <MenuItem value="U2">U2: Financials (BAC, GS...)</MenuItem>
-              <MenuItem value="U3">U3: Healthcare (JNJ, PFE...)</MenuItem>
-              <MenuItem value="U4">U4: Consumer (TSLA, MCD...)</MenuItem>
-              <MenuItem value="U5">U5: Industrials (GE, HON...)</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" variant="outlined" sx={{ minWidth: 110 }}>
-            <InputLabel id="dates-label" sx={{ color: '#B4B4B4', fontSize: '0.8rem' }}>Date Range</InputLabel>
-            <Select
-              labelId="dates-label"
-              value={datePreset}
-              onChange={(e) => setDatePreset(e.target.value)}
-              label="Date Range"
-              sx={{ color: '#ffffff', fontSize: '0.8rem', '.MuiOutlinedInput-notchedOutline': { borderColor: '#262626' } }}
-            >
-              <MenuItem value="2024">Year 2024 (Stress)</MenuItem>
-              <MenuItem value="2023">Year 2023 (Calm)</MenuItem>
-            </Select>
-          </FormControl>
-
-          <FormControl size="small" variant="outlined" sx={{ minWidth: 110 }}>
-            <InputLabel id="strategy-label" sx={{ color: '#B4B4B4', fontSize: '0.8rem' }}>Strategy</InputLabel>
-            <Select
-              labelId="strategy-label"
-              value={strategy}
-              onChange={(e) => setStrategy(e.target.value)}
-              label="Strategy"
-              sx={{ color: '#ffffff', fontSize: '0.8rem', '.MuiOutlinedInput-notchedOutline': { borderColor: '#262626' } }}
-            >
-              <MenuItem value="G-CVaR">G-CVaR Model</MenuItem>
-              <MenuItem value="Standard-CVaR">Standard CVaR</MenuItem>
-              <MenuItem value="EqualWeight">Equal Weight</MenuItem>
-            </Select>
-          </FormControl>
-
-          <Button
-            size="small"
-            onClick={handleRefresh}
-            sx={{ color: '#B4B4B4', minWidth: '40px', p: 1, border: '1px solid #262626', '&:hover': { bgcolor: 'rgba(255,255,255,0.05)' } }}
-          >
-            <RefreshCw size={16} />
-          </Button>
-        </Stack>
-      </Box>
-
-      {/* Tabs List */}
-      <Box sx={{ borderBottom: '1px solid #262626', bgcolor: '#121212', flexShrink: 0 }}>
-        <Tabs
-          value={activeTab}
-          onChange={handleTabChange}
-          variant="scrollable"
-          scrollButtons="auto"
-          sx={{
-            minHeight: '48px',
-            '& .MuiTab-root': {
-              color: '#B4B4B4',
-              textTransform: 'none',
-              fontWeight: 600,
-              fontSize: '0.85rem',
-              minHeight: '48px',
-              px: 2.5,
-              '&.Mui-selected': {
-                color: '#f59e0b'
-              }
-            },
-            '& .MuiTabs-indicator': {
-              bgcolor: '#f59e0b'
-            }
-          }}
-        >
-          <Tab label="Data EDA" />
-          <Tab label="Correlation & Covariance" />
-          <Tab label="Instability Monitor" />
-          <Tab label="Advisory Diversification" />
-          <Tab label="Diversification Diagnostics" />
-          <Tab label="Risk Governance" />
-          <Tab label="Contagion Graph Analysis" />
-          <Tab label="Agent Governance & HITL" />
-          <Tab label="Evaluation & Backtesting" />
-        </Tabs>
-      </Box>
+      <AnalyticsDashboardTabs activeTab={activeTab} onTabChange={handleTabChange} />
 
       {/* Dashboard View Panels */}
       <Box sx={{ flexGrow: 1, overflowY: 'auto', p: 3, bgcolor: '#0D0D0D' }}>
@@ -434,7 +295,7 @@ export default function AnalyticsDashboard({ setView }) {
                 const outlierData = eda.data.outliers || [];
                 return (
                   <ScatterChart
-                    series={tickers.map((t, idx) => ({
+                    series={tickers.map((t) => ({
                       data: outlierData.filter(d => d.ticker === t).map(d => ({ x: new Date(d.date), y: d.logReturn, id: d.date })),
                       label: t
                     }))}
