@@ -1,9 +1,5 @@
 import { useState, useMemo } from 'react';
-import { Box, Typography, Stack, Chip, Divider, Stepper, Step, StepLabel, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Paper } from '@mui/material';
-import { LineChart } from '@mui/x-charts/LineChart';
-import { BarChart } from '@mui/x-charts/BarChart';
-import { PieChart } from '@mui/x-charts/PieChart';
-import { ScatterChart } from '@mui/x-charts/ScatterChart';
+import { Box } from '@mui/material';
 
 // Hooks
 import {
@@ -18,20 +14,19 @@ import {
 } from '../hooks/useAnalytics';
 
 // Helper Components
-import PlotCard from './PlotCard';
 import AnalyticsTabLayout from './AnalyticsTabLayout';
-import MetricSummaryCards from './MetricSummaryCards';
-import { HeatmapChart, NetworkGraphChart, TimelineChart, BoxplotLikeChart } from './CustomCharts';
 import AnalyticsDashboardHeader from './analyticsDashboard/AnalyticsDashboardHeader';
 import AnalyticsDashboardTabs from './analyticsDashboard/AnalyticsDashboardTabs';
 import {
-  buildLineSeries,
   getActiveRegime,
-  getDates,
   getDateRangeForPreset,
-  getSeriesDataArray,
   getUniverseTickers,
 } from './analyticsDashboard/analyticsDashboardModel';
+
+// Tab Components
+import DataEdaTab from './analyticsDashboard/tabs/DataEdaTab';
+import RiskGovernanceTab from './analyticsDashboard/tabs/RiskGovernanceTab';
+import BacktestingTab from './analyticsDashboard/tabs/BacktestingTab';
 
 export default function AnalyticsDashboard({ setView }) {
   const [activeTab, setActiveTab] = useState(0);
@@ -89,223 +84,7 @@ export default function AnalyticsDashboard({ setView }) {
         
         {/* TAB 1: Data EDA */}
         {activeTab === 0 && (
-          <AnalyticsTabLayout
-            title="Exploratory Price & Return Diagnostics"
-            description="Examines raw adjusted close price trends, daily log fluctuations, and statistical return distributions to check asset variance profiles before allocation optimization."
-            regime={activeRegime}
-            summaryCards={
-              <MetricSummaryCards
-                metrics={[
-                  { label: "Active Universe", value: universe, helpText: `Assets: ${tickers.join(', ')}` },
-                  { label: "Observations Count", value: eda.data?.adjusted_close?.length || 0, helpText: "Business trading days in period" },
-                  { label: "Volatile Ticker", value: tickers.includes("NVDA") ? "NVDA" : tickers[0], color: "#ef4444", helpText: "Highest standard deviation" },
-                  { label: "Data Completeness", value: "100.0%", color: "#10b981", helpText: "No observations are missing" }
-                ]}
-              />
-            }
-          >
-            {/* Plot 1 */}
-            <PlotCard
-              title="1. Adjusted Close Price Trend"
-              description="Displays historical daily closing price movements for each asset in the portfolio."
-              advisoryInterpretation="Allows tracing baseline prices. Steeper gradients represent stronger price shifts."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.adjusted_close}
-              csvFilename={`${universe}_prices.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.adjusted_close), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.adjusted_close, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 2 */}
-            <PlotCard
-              title="2. Normalized Price Movement"
-              description="Compares asset relative performance by setting all price paths starting at a common base value of 100."
-              advisoryInterpretation="Normalizing exposes relative dispersion. Divergent paths represent a healthy opportunity for diversification benefits."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.normalized_price}
-              csvFilename={`${universe}_normalized.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.normalized_price), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.normalized_price, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 3 */}
-            <PlotCard
-              title="3. Daily Log Returns Plot"
-              description="Renders percentage return fluctuations calculated as ln(P_t / P_{t-1})."
-              advisoryInterpretation="Shows dispersion spikes. Higher density spikes indicate periods of increased asset instability."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.log_returns}
-              csvFilename={`${universe}_returns.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.log_returns), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.log_returns, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 4 */}
-            <PlotCard
-              title="4. Return Distribution Plot"
-              description="Histograms of return frequency mapping dispersion spread."
-              advisoryInterpretation="Fat-tails indicate high kurtosis, signaling structural vulnerability and high risk of extreme tail losses."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.return_distribution}
-              csvFilename={`${universe}_distribution.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => {
-                const firstTicker = tickers[0];
-                const chartData = eda.data.return_distribution[firstTicker] || [];
-                return (
-                  <BarChart
-                    xAxis={[{ data: chartData.map(d => d.bin), scaleType: 'band' }]}
-                    series={[{ data: chartData.map(d => d.frequency), color: '#3b82f6', label: `${firstTicker} Return Bins` }]}
-                    height={240}
-                    margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                  />
-                );
-              }}
-            />
-
-            {/* Plot 5 */}
-            <PlotCard
-              title="5. Boxplot of Daily Returns by Ticker"
-              description="Visualizes standard quartiles (Min, Q1, Median, Q3, Max) for return dispersion."
-              advisoryInterpretation="Traces return skewness. Wider range boxes identify assets with high variance that may dominate portfolio risk."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.boxplot_returns}
-              csvFilename={`${universe}_boxplot.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => <BoxplotLikeChart data={eda.data.boxplot_returns} />}
-            />
-
-            {/* Plot 6 */}
-            <PlotCard
-              title="6. Rolling Volatility Plot"
-              description="20-day rolling standard deviation of daily log returns annualized (multiplied by sqrt(252))."
-              advisoryInterpretation="Shifts show volatility evolution. Assets with volatile paths require tighter allocation boundaries."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.rolling_volatility}
-              csvFilename={`${universe}_rolling_vol.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.rolling_volatility), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.rolling_volatility, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 7 */}
-            <PlotCard
-              title="7. Rolling Mean Return Plot"
-              description="20-day rolling average return of daily log returns."
-              advisoryInterpretation="Negative average drifts indicate assets entering downward trends, suggesting exposure reductions."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.rolling_mean_return}
-              csvFilename={`${universe}_rolling_mean.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.rolling_mean_return), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.rolling_mean_return, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 8 */}
-            <PlotCard
-              title="8. Cumulative Return Plot"
-              description="Total compound growth curves calculated as exp(cumsum(returns)) - 1."
-              advisoryInterpretation="Shows overall performance. High dispersion between paths increases the benefits of rebalancing allocation."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.cumulative_return}
-              csvFilename={`${universe}_cumulative.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.cumulative_return), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.cumulative_return, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 9 */}
-            <PlotCard
-              title="9. Missing Data Heatmap"
-              description="Analyzes missing price observations over the historical window to monitor data quality."
-              advisoryInterpretation="Clean files with 0% gaps ensure risk modeling reliability. Breaches indicate potential missing price dates."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.missing_data}
-              csvFilename={`${universe}_missing.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(eda.data.missing_data), scaleType: 'time' }]}
-                  series={buildLineSeries(eda.data.missing_data, tickers)}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 10 */}
-            <PlotCard
-              title="10. Outlier Return Detection Plot"
-              description="Scatter plot identifying points where absolute Z-score of log return exceeds 2.0."
-              advisoryInterpretation="Frequent outlier clusters identify high tail-risk periods, signaling potential regime transitions."
-              loading={eda.loading}
-              error={eda.error}
-              data={eda.data?.outliers}
-              csvFilename={`${universe}_outliers.csv`}
-              isMock={eda.data?.is_mock}
-              renderChart={() => {
-                const outlierData = eda.data.outliers || [];
-                return (
-                  <ScatterChart
-                    series={tickers.map((t) => ({
-                      data: outlierData.filter(d => d.ticker === t).map(d => ({ x: new Date(d.date), y: d.logReturn, id: d.date })),
-                      label: t
-                    }))}
-                    height={240}
-                    margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                  />
-                );
-              }}
-            />
-          </AnalyticsTabLayout>
+          <DataEdaTab universe={universe} datePreset={datePreset} activeRegime={activeRegime} />
         )}
 
         {/* TAB 2: Correlation and Covariance EDA */}
@@ -1201,6 +980,8 @@ export default function AnalyticsDashboard({ setView }) {
 
         {/* TAB 6: Risk Governance */}
         {activeTab === 5 && (
+          <RiskGovernanceTab universe={universe} datePreset={datePreset} activeRegime={activeRegime} />
+        )}
           <AnalyticsTabLayout
             title="Portfolio Risk Governance"
             description="Evaluates downside risk. Compares drawdowns, standard CVaR, and G-CVaR tail risk metrics, and monitors the risk contributions of individual tickers."
@@ -1971,236 +1752,7 @@ export default function AnalyticsDashboard({ setView }) {
 
         {/* TAB 9: Evaluation and Backtesting */}
         {activeTab === 8 && (
-          <AnalyticsTabLayout
-            title="Historical Backtesting & Strategy Evaluation"
-            description="Evaluates advisory portfolio performance over the backtest window. Compares growth paths, transaction cost impacts, and ablation metrics."
-            regime={activeRegime}
-            summaryCards={
-              <MetricSummaryCards
-                metrics={[
-                  { label: "Advisory Annual Return", value: "14.8%", color: "#10b981", helpText: "Annual return in backtest" },
-                  { label: "Equal Weight return", value: "12.4%", helpText: "Baseline rebalanced return" },
-                  { label: "Transaction Slippage Drag", value: "0.15%", helpText: "Estimated cost drag on returns" },
-                  { label: "Validation Robustness", value: "Passed", color: "#10b981", helpText: "IS/OOS Sharpe checks compliant" }
-                ]}
-              />
-            }
-          >
-            {/* Plot 79 */}
-            <PlotCard
-              title="79. Advisory Portfolio vs Equal Weight Equity Curve"
-              description="Historical equity curve comparison starting from a base value of 10,000."
-              advisoryInterpretation="Tracks cumulative growth. Demonstrates the performance of the advisory portfolio relative to an equal-weight baseline."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.equity_curves}
-              csvFilename={`${universe}_backtest_ew.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(backtest.data.equity_curves), scaleType: 'time' }]}
-                  series={[
-                    { data: getSeriesDataArray(backtest.data.equity_curves, 'advisoryPortfolioValue'), label: 'Advisory G-CVaR', color: '#f59e0b', showMark: false },
-                    { data: getSeriesDataArray(backtest.data.equity_curves, 'equalWeightValue'), label: 'Equal Weight (EW)', color: '#B4B4B4', showMark: false }
-                  ]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 50, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 80 */}
-            <PlotCard
-              title="80. Advisory Portfolio vs Standard CVaR Equity Curve"
-              description="Equity curve comparison between the graph-regularized advisory portfolio and standard CVaR."
-              advisoryInterpretation="Highlights model comparisons. Demonstrates the impact of including network centrality constraints."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.equity_curves}
-              csvFilename={`${universe}_backtest_std.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(backtest.data.equity_curves), scaleType: 'time' }]}
-                  series={[
-                    { data: getSeriesDataArray(backtest.data.equity_curves, 'advisoryPortfolioValue'), label: 'Advisory G-CVaR', color: '#f59e0b', showMark: false },
-                    { data: getSeriesDataArray(backtest.data.equity_curves, 'standardCvarValue'), label: 'Standard CVaR', color: '#8b5cf6', showMark: false }
-                  ]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 50, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 81 */}
-            <PlotCard
-              title="81. Strategy Performance Comparison"
-              description="Compares annualized return, volatility, Sharpe, CVaR, and max drawdown across strategies."
-              advisoryInterpretation="Evaluates strategy performance, highlighting the impact of different allocation models on key risk-return metrics."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.performance}
-              csvFilename={`${universe}_performance_comp.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.performance.map(d => d.strategy), scaleType: 'band' }]}
-                  series={[
-                    { data: backtest.data.performance.map(d => d.annualReturn), label: 'Annual Return %', color: '#10b981' },
-                    { data: backtest.data.performance.map(d => d.maxDrawdown), label: 'Max Drawdown %', color: '#ef4444' }
-                  ]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 82 */}
-            <PlotCard
-              title="82. Crisis-Regime Drawdown Comparison"
-              description="Maximum drawdowns during identified crisis regimes."
-              advisoryInterpretation="Monitors downside protection. Advisory rebalancing aims to limit drawdowns during crisis periods compared to equal-weight baselines."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.crisis_drawdown}
-              csvFilename={`${universe}_crisis_drawdowns.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.crisis_drawdown.map(d => d.strategy), scaleType: 'band' }]}
-                  series={[{ data: backtest.data.crisis_drawdown.map(d => d.crisisDrawdown), color: '#ef4444', label: 'Crisis Drawdown %' }]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 83 */}
-            <PlotCard
-              title="83. CVaR Reduction by Sector Universe"
-              description="Displays CVaR reduction percentages across major GICS sector universes."
-              advisoryInterpretation="Measures risk reduction across sectors. Highlights sectors where rebalancing provides the most significant risk mitigation."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.sector_cvar_reduction}
-              csvFilename={`${universe}_sector_cvar_reduction.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.sector_cvar_reduction.map(d => d.sector), scaleType: 'band' }]}
-                  series={[{ data: backtest.data.sector_cvar_reduction.map(d => d.cvarReductionPercent), color: '#10b981', label: 'CVaR Reduction %' }]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 84 */}
-            <PlotCard
-              title="84. Rolling Sharpe Ratio Plot"
-              description="Tracks the rolling Sharpe ratio of the advisory portfolio over the backtest window."
-              advisoryInterpretation="Monitors consistency of risk-adjusted returns. Rising values indicate improving return generation relative to risk."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.rolling_sharpe}
-              csvFilename={`${universe}_rolling_sharpe.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <LineChart
-                  xAxis={[{ data: getDates(backtest.data.rolling_sharpe), scaleType: 'time' }]}
-                  series={[{ data: getSeriesDataArray(backtest.data.rolling_sharpe, 'rollingSharpe'), label: 'Rolling Sharpe Ratio', color: '#10b981', showMark: false }]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 85 */}
-            <PlotCard
-              title="85. Ablation Study Comparison"
-              description="Ablation study evaluating the impact of removing graph centrality, regime adaptation, or HITL constraints."
-              advisoryInterpretation="Identifies key model drivers. Demonstrates how each component contributes to overall risk-adjusted returns."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.ablation_study}
-              csvFilename={`${universe}_ablation.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.ablation_study.map(d => d.model), scaleType: 'band' }]}
-                  series={[
-                    { data: backtest.data.ablation_study.map(d => d.sharpe), label: 'Sharpe Ratio', color: '#10b981' },
-                    { data: backtest.data.ablation_study.map(d => d.maxDrawdown), label: 'Max Drawdown %', color: '#ef4444' }
-                  ]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 86 */}
-            <PlotCard
-              title="86. Transaction Cost Impact Plot"
-              description="Estimated cost drag from transaction costs and rebalancing slippage."
-              advisoryInterpretation="Monitors rebalancing costs. Higher turnover strategies may incur higher cost drag, reducing net returns."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.cost_drag}
-              csvFilename={`${universe}_cost_drag.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.cost_drag.map(d => d.strategy), scaleType: 'band' }]}
-                  series={[{ data: backtest.data.cost_drag.map(d => d.costDrag), color: '#ef4444', label: 'Cost Drag %' }]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 87 */}
-            <PlotCard
-              title="87. Turnover Comparison Plot"
-              description="Average portfolio turnover comparison across strategies."
-              advisoryInterpretation="Measures portfolio stability. G-CVaR seeks to limit turnover to control rebalancing costs."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.turnover_comparison}
-              csvFilename={`${universe}_turnover_comp.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.turnover_comparison.map(d => d.strategy), scaleType: 'band' }]}
-                  series={[{ data: backtest.data.turnover_comparison.map(d => d.averageTurnover), color: '#3b82f6', label: 'Avg Turnover %' }]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-
-            {/* Plot 88 */}
-            <PlotCard
-              title="88. IS vs OOS Sharpe Plot"
-              description="Compares In-Sample (IS) and Out-of-Sample (OOS) Sharpe ratios across universes."
-              advisoryInterpretation="Evaluates model stability. A narrow gap between IS and OOS ratios suggests the strategy is robust to overfitting."
-              loading={backtest.loading}
-              error={backtest.error}
-              data={backtest.data?.is_oos_sharpe}
-              csvFilename={`${universe}_oos_sharpe.csv`}
-              isMock={backtest.data?.is_mock}
-              renderChart={() => (
-                <BarChart
-                  xAxis={[{ data: backtest.data.is_oos_sharpe.map(d => d.universe), scaleType: 'band' }]}
-                  series={[
-                    { data: backtest.data.is_oos_sharpe.map(d => d.inSampleSharpe), label: 'In-Sample Sharpe', color: '#10b981' },
-                    { data: backtest.data.is_oos_sharpe.map(d => d.outOfSampleSharpe), label: 'Out-of-Sample Sharpe', color: '#3b82f6' }
-                  ]}
-                  height={240}
-                  margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
-                />
-              )}
-            />
-          </AnalyticsTabLayout>
+          <BacktestingTab universe={universe} datePreset={datePreset} activeRegime={activeRegime} />
         )}
 
       </Box>

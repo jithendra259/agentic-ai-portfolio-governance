@@ -1,45 +1,86 @@
+# Dependencies
+node_modules/
 
-# Ignore local secrets
-.env
-.env.*
+# Build artifacts
+dist/
+build/
+target/
 
-# Ignore virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# Ignore Python cache/build output
+# Python
 __pycache__/
-*.py[cod]
+*.pyc
 *.pyo
 *.pyd
-*.so
+*.py.class
+.Python
+env/
+venv/
+.venv/
+.venv.bak/
+pip-log.txt
+pip-selfcheck.json
 .pytest_cache/
 .mypy_cache/
-.ruff_cache/
 .coverage
-.coverage.*
 htmlcov/
-build/
-dist/
-*.egg-info/
 
-# Ignore logs and OS/editor files
+# Logs
 *.log
-.DS_Store
-Thumbs.db
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# IDE
 .vscode/
 .idea/
-outputs/
+*.swp
+*.swo
+*.tmp
 
-# Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
+# OS
+.DS_Store
+Thumbs.db
 
-# Ignore local chrome profile
-chrome_dev_profile/
+# Coverage
+coverage/
+htmlcov/
+*.coverage
 
-# Ignore local git worktrees
-.worktrees
-.worktrees/
+# Compressed files
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 
+# Gradle
+.gradle/
+
+# Compiled
+*.class
+*.o
+*.obj
+*.out
+*.dll
+*.so
+*.a
+*.exe
