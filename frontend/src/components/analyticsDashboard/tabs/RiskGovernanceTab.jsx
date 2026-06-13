@@ -1,27 +1,16 @@
-import { useMemo } from 'react';
-import { Box, BarChart, LineChart } from '@mui/x-charts';
-
-// Hooks
-import { useRiskGovernanceAnalytics } from '../../hooks/useAnalytics';
+import { BarChart } from '@mui/x-charts/BarChart';
+import { LineChart } from '@mui/x-charts/LineChart';
 
 // Helper Components
-import PlotCard from '../PlotCard';
-import AnalyticsTabLayout from '../AnalyticsTabLayout';
-import MetricSummaryCards from '../MetricSummaryCards';
+import PlotCard from '../../PlotCard';
+import AnalyticsTabLayout from '../../AnalyticsTabLayout';
+import MetricSummaryCards from '../../MetricSummaryCards';
 import {
-  buildLineSeries,
   getDates,
-  getDateRangeForPreset,
-  getUniverseTickers,
   getSeriesDataArray,
-} from './analyticsDashboardModel';
+} from '../analyticsDashboardModel';
 
-export default function RiskGovernanceTab({ universe, datePreset, activeRegime }) {
-  const tickers = useMemo(() => getUniverseTickers(universe), [universe]);
-  const { startDate, endDate } = useMemo(() => getDateRangeForPreset(datePreset), [datePreset]);
-  
-  const risk = useRiskGovernanceAnalytics(tickers, startDate, endDate, 0);
-
+export default function RiskGovernanceTab({ activeRegime, risk, universe }) {
   return (
     <AnalyticsTabLayout
       title="Portfolio Risk Governance"

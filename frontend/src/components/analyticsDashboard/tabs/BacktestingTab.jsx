@@ -1,26 +1,16 @@
-import { useMemo } from 'react';
-import { BarChart, LineChart } from '@mui/x-charts';
-
-// Hooks
-import { useBacktestingAnalytics } from '../../hooks/useAnalytics';
+import { BarChart } from '@mui/x-charts/BarChart';
+import { LineChart } from '@mui/x-charts/LineChart';
 
 // Helper Components
-import PlotCard from '../PlotCard';
-import AnalyticsTabLayout from '../AnalyticsTabLayout';
-import MetricSummaryCards from '../MetricSummaryCards';
+import PlotCard from '../../PlotCard';
+import AnalyticsTabLayout from '../../AnalyticsTabLayout';
+import MetricSummaryCards from '../../MetricSummaryCards';
 import {
   getDates,
-  getDateRangeForPreset,
-  getUniverseTickers,
   getSeriesDataArray,
-} from './analyticsDashboardModel';
+} from '../analyticsDashboardModel';
 
-export default function BacktestingTab({ universe, datePreset, activeRegime }) {
-  const tickers = useMemo(() => getUniverseTickers(universe), [universe]);
-  const { startDate, endDate } = useMemo(() => getDateRangeForPreset(datePreset), [datePreset]);
-  
-  const backtest = useBacktestingAnalytics(tickers, startDate, endDate, 0);
-
+export default function BacktestingTab({ activeRegime, backtest, universe }) {
   return (
     <AnalyticsTabLayout
       title="Historical Backtesting & Strategy Evaluation"
