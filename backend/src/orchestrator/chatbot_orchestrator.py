@@ -286,8 +286,8 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                     "api_key": api_key,
                     "base_url": base_url,
                     "tags": ["orchestrator_llm"],
-                    "streaming": True,
-                    "timeout": 30,
+                    "streaming": False,
+                    "timeout": 60,
                     "max_retries": 2,
                 }
                 if num_predict is not None:
