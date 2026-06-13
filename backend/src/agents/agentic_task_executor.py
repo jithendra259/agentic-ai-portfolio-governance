@@ -27,6 +27,10 @@ from uuid import uuid4
 from langgraph.graph import END, StateGraph
 from pymongo import MongoClient
 
+from src.guardrails.loop_detector import SemanticLoopDetector
+from src.memory.audit_log import GLOBAL_AUDIT_LOGGER
+from src.memory.calculation_scratchpad import CalculationScratchpad
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,9 +202,12 @@ class BlackboardState:
         # Shared context and results
         self.context: Dict[str, Any] = {}
         self.results: Dict[str, Any] = {}
+        self.calculation_scratchpad = CalculationScratchpad()
         
         # Error tracking for loop detection
         self.action_history: deque = deque(maxlen=100)  # Last 100 actions
+        self.loop_detected: bool = False
+        self.loop_events: List[Dict[str, Any]] = []
         
         # Memory references
         self.retrieved_memories: List[EpisodicMemory] = []
@@ -269,6 +276,34 @@ class BlackboardState:
             'action': action,
             'timestamp': datetime.utcnow(),
         })
+
+    def add_loop_event(self, event: Dict[str, Any]) -> None:
+        """Record a semantic loop detection event for audit/debugging."""
+        self.loop_detected = True
+        self.loop_events.append({
+            **event,
+            'timestamp': datetime.utcnow().isoformat(),
+        })
+
+    def record_calculation(
+        self,
+        *,
+        label: str,
+        formula: str,
+        inputs: Dict[str, Any] | None = None,
+        result: Any = None,
+        source: str | None = None,
+        metadata: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Persist exact calculation details outside compressed chat context."""
+        return self.calculation_scratchpad.record(
+            label=label,
+            formula=formula,
+            inputs=inputs,
+            result=result,
+            source=source,
+            metadata=metadata,
+        )
     
     def detect_loop(self) -> bool:
         """
@@ -323,6 +358,7 @@ class BlackboardState:
             'react_summary': react_summary,
             'recent_react_steps': [s.to_dict() for s in recent_react],
             'retrieved_memories': [m.to_dict() for m in self.retrieved_memories[:3]],  # Top 3
+            'calculation_scratchpad': self.calculation_scratchpad.compact_summary(),
         }
     
     def to_dict(self) -> Dict[str, Any]:
@@ -345,6 +381,9 @@ class BlackboardState:
             'context': self.context,
             'results': self.results,
             'action_history': list(self.action_history)[-20:],  # Last 20 for debugging
+            'loop_detected': self.loop_detected,
+            'loop_events': self.loop_events[-20:],
+            'calculation_scratchpad': self.calculation_scratchpad.to_list(),
             'pending_human_inputs': self.pending_human_inputs,
         }
 
@@ -838,6 +877,7 @@ class AgenticTaskExecutor:
         self.vector_memory = VectorMemoryStore(mongo_uri)
         self.htn_planner = HTNPlanner(llm_client)
         self.guardrails = SafetyGuardrails()
+        self.semantic_loop_detector = SemanticLoopDetector()
         
         # Build LangGraph state machine
         self.graph = self._build_graph()
@@ -1024,6 +1064,45 @@ class AgenticTaskExecutor:
                 task.error = f"Schema validation failed: {error}"
                 blackboard.failed_tasks.add(task_id)
                 break
+
+            loop_result = self.semantic_loop_detector.detect_loop(
+                action,
+                blackboard.action_history,
+            )
+            if loop_result.detected:
+                logger.warning(
+                    "Semantic loop detected for tool %s with similarity %.3f",
+                    loop_result.tool,
+                    loop_result.max_similarity,
+                )
+                observation = self._build_loop_recovery_observation(action, loop_result)
+                blackboard.add_loop_event(
+                    {
+                        'task_id': task_id,
+                        'tool': loop_result.tool,
+                        'similarity': loop_result.max_similarity,
+                        'recovery_strategy': observation['recovery_strategy'],
+                        'current_action': action,
+                        'matched_action': loop_result.matched_action,
+                    }
+                )
+                GLOBAL_AUDIT_LOGGER.log(
+                    {
+                        'session_id': blackboard.request_id,
+                        'user_message': blackboard.goal,
+                        'intent': 'semantic_loop_detection',
+                        'tool_called': loop_result.tool,
+                        'status': 'blocked',
+                        'failure_reason': observation['message'],
+                    }
+                )
+                react_step.action = action
+                react_step.observation = observation
+                blackboard.add_react_step(react_step)
+                task.status = TaskStatus.FAILED
+                task.error = observation['message']
+                blackboard.failed_tasks.add(task_id)
+                break
             
             # Record action for loop detection
             blackboard.add_action_to_history(action)
@@ -1160,6 +1239,14 @@ class AgenticTaskExecutor:
         bb.skipped_tasks = set(data.get('skipped_tasks', []))
         bb.context = data.get('context', {})
         bb.results = data.get('results', {})
+        bb.loop_detected = bool(data.get('loop_detected', False))
+        bb.loop_events = data.get('loop_events', [])
+        bb.calculation_scratchpad = CalculationScratchpad.from_list(
+            data.get('calculation_scratchpad', [])
+        )
+        for item in data.get('action_history', []):
+            if isinstance(item, dict) and 'action' in item:
+                bb.action_history.append(item)
         
         # Reconstruct tasks
         for task_id, task_data in data.get('tasks', {}).items():
@@ -1186,6 +1273,25 @@ class AgenticTaskExecutor:
         bb.task_order = data.get('task_order', [])
         
         return bb
+
+    def _build_loop_recovery_observation(
+        self,
+        action: Dict[str, Any],
+        loop_result,
+    ) -> Dict[str, Any]:
+        return {
+            'status': 'loop_detected',
+            'tool': loop_result.tool,
+            'similarity': round(loop_result.max_similarity, 4),
+            'recovery_strategy': 'strategy_shift',
+            'message': (
+                f"Semantic loop detected for {loop_result.tool}. "
+                "Stop repeating similar parameters and switch strategy, decompose the task, "
+                "or ask the user for clarification."
+            ),
+            'blocked_action': action,
+            'matched_action': loop_result.matched_action,
+        }
     
     def _generate_thought(self, task: TaskNode, blackboard: BlackboardState) -> str:
         """Generate reasoning thought for current step."""
