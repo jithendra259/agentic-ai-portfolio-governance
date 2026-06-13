@@ -43,10 +43,47 @@ import { useAuth } from '../context/AuthContext';
 
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
+const SESSION_INDEX_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
 
 function createSessionId() {
   const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
   return `portfolio-chat-${randomPart}`;
+}
+
+function readStoredSessionIds() {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SESSION_INDEX_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeStoredSessionIds(sessionIds) {
+  const unique = [];
+  for (const sessionId of sessionIds || []) {
+    const value = String(sessionId || '').trim();
+    if (value && !unique.includes(value)) unique.push(value);
+  }
+  window.localStorage.setItem(SESSION_INDEX_STORAGE_KEY, JSON.stringify(unique.slice(0, 100)));
+}
+
+function rememberSessionIds(sessionIds) {
+  writeStoredSessionIds([...readStoredSessionIds(), ...(sessionIds || [])]);
+}
+
+function rememberSessionId(sessionId) {
+  rememberSessionIds([sessionId]);
+}
+
+function forgetSessionId(sessionId) {
+  writeStoredSessionIds(readStoredSessionIds().filter((item) => item !== sessionId));
+}
+
+function isKnownBrowserSession(sessionId) {
+  return readStoredSessionIds().includes(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,11 +560,13 @@ export default function ChatInterface({ setView }) {
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
     if (existing) {
+      rememberSessionId(existing);
       return existing;
     }
 
     const nextSessionId = createSessionId();
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    rememberSessionId(nextSessionId);
     return nextSessionId;
   });
 
@@ -547,7 +586,12 @@ export default function ChatInterface({ setView }) {
   const activeStreamControllerRef = useRef(null);
 
   const loadSessionMessages = useCallback((targetSessionId) => {
-    return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?limit=200`, {
+    const params = new URLSearchParams({ limit: '200' });
+    if (isKnownBrowserSession(targetSessionId)) {
+      params.set('include_legacy', 'true');
+    }
+
+    return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?${params.toString()}`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -567,7 +611,13 @@ export default function ChatInterface({ setView }) {
   loadSessionMessagesRef.current = loadSessionMessages;
 
   const refreshSessions = useCallback(() => {
-    return fetch(`${BACKEND_BASE}/chat/sessions?limit=50`, {
+    const legacySessionIds = [...readStoredSessionIds(), sessionId].filter(Boolean);
+    const params = new URLSearchParams({ limit: '50' });
+    if (legacySessionIds.length) {
+      params.set('legacy_session_ids', [...new Set(legacySessionIds)].join(','));
+    }
+
+    return fetch(`${BACKEND_BASE}/chat/sessions?${params.toString()}`, {
       headers: {
         'Authorization': `Bearer ${token}`
       }
@@ -577,13 +627,15 @@ export default function ChatInterface({ setView }) {
         return res.json();
       })
       .then((data) => {
-        setChatSessions(data?.sessions || []);
+        const sessions = data?.sessions || [];
+        rememberSessionIds([sessionId, ...sessions.map((item) => item.session_id)]);
+        setChatSessions(sessions);
       })
       .catch((err) => {
         console.error('Failed to load chat sessions:', err);
         setChatSessions([]);
       });
-  }, [token]);
+  }, [sessionId, token]);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -745,6 +797,7 @@ export default function ChatInterface({ setView }) {
     const nextMessages = [makeWelcomeMessage(nextSessionId)];
 
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
+    rememberSessionId(nextSessionId);
 
     setSessionId(nextSessionId);
     setActiveConversationId(nextSessionId);
@@ -757,6 +810,7 @@ export default function ChatInterface({ setView }) {
     if (!nextId || nextId === activeConversationId) return;
 
     window.localStorage.setItem(SESSION_STORAGE_KEY, nextId);
+    rememberSessionId(nextId);
     setSessionId(nextId);
     setActiveConversationId(nextId);
   }, [activeConversationId]);
@@ -774,6 +828,7 @@ export default function ChatInterface({ setView }) {
       });
       if (!response.ok) throw new Error('Failed to delete chat');
 
+      forgetSessionId(targetSessionId);
       setChatSessions((current) => current.filter((item) => item.session_id !== targetSessionId));
 
       if (targetSessionId === sessionId) {

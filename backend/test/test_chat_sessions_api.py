@@ -21,13 +21,24 @@ fake_orchestrator.streaming_portfolio_assistant = None
 sys.modules["src.orchestrator.chatbot_orchestrator"] = fake_orchestrator
 
 from api.main import app
+from src.utils.crypto_utils import create_auth_token
 
 
 class FakeMemoryManager:
     pg_pool = object()
-    deleted_session_id = None
+    
+    def __init__(self):
+        self.deleted_session_id = None
+        self.deleted_user_id = None
+        self.last_list_user_id = None
+        self.last_legacy_session_ids = None
+        self.last_messages_user_id = None
+        self.last_include_legacy_unowned = None
+        self.append_calls = []
 
-    def list_chat_sessions(self, limit=50):
+    def list_chat_sessions(self, limit=50, user_id=None, legacy_session_ids=None):
+        self.last_list_user_id = user_id
+        self.last_legacy_session_ids = legacy_session_ids
         return [
             {
                 "session_id": "session-1",
@@ -38,14 +49,26 @@ class FakeMemoryManager:
             }
         ]
 
-    def delete_chat_session(self, session_id):
+    def delete_chat_session(self, session_id, user_id=None):
         self.deleted_session_id = session_id
+        self.deleted_user_id = user_id
         return 2
 
-    def append_chat_message(self, session_id, role, content, metadata=None):
+    def append_chat_message(self, session_id, role, content, metadata=None, user_id=None):
+        self.append_calls.append(
+            {
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "metadata": metadata or {},
+                "user_id": user_id,
+            }
+        )
         return None
 
-    def list_chat_messages(self, session_id, limit=200):
+    def list_chat_messages(self, session_id, limit=200, user_id=None, include_legacy_unowned=False):
+        self.last_messages_user_id = user_id
+        self.last_include_legacy_unowned = include_legacy_unowned
         return []
 
 
@@ -53,8 +76,9 @@ class ChatSessionsApiTests(unittest.TestCase):
     def test_chat_sessions_endpoint_returns_summaries(self):
         import api.main as main
 
+        fake_memory = FakeMemoryManager()
         original_memory_manager = main.memory_manager
-        main.memory_manager = FakeMemoryManager()
+        main.memory_manager = fake_memory
         try:
             client = TestClient(app)
             response = client.get("/chat/sessions?limit=25")
@@ -76,6 +100,48 @@ class ChatSessionsApiTests(unittest.TestCase):
                 ]
             },
         )
+        self.assertIsNone(fake_memory.last_list_user_id)
+        self.assertEqual(fake_memory.last_legacy_session_ids, [])
+
+    def test_chat_sessions_endpoint_passes_authenticated_user_and_legacy_ids(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/chat/sessions?limit=25&legacy_session_ids=session-legacy,current-session",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_memory.last_list_user_id, "user-1")
+        self.assertEqual(fake_memory.last_legacy_session_ids, ["session-legacy", "current-session"])
+
+    def test_chat_messages_endpoint_can_include_browser_known_legacy_rows(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/chat/session-legacy/messages?include_legacy=true",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_memory.last_messages_user_id, "user-1")
+        self.assertTrue(fake_memory.last_include_legacy_unowned)
 
     def test_delete_chat_session_endpoint_deletes_history(self):
         import api.main as main
@@ -94,18 +160,22 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"session_id": "session-1", "deleted_count": 2})
         self.assertEqual(fake_memory.deleted_session_id, "session-1")
+        self.assertIsNone(fake_memory.deleted_user_id)
         self.assertEqual(main.session_memory_store.get_last_messages("session-1"), [])
 
     def test_chat_stream_chunks_fast_path_responses(self):
         import api.main as main
 
+        token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
+        fake_memory = FakeMemoryManager()
         original_memory_manager = main.memory_manager
-        main.memory_manager = FakeMemoryManager()
+        main.memory_manager = fake_memory
         try:
             client = TestClient(app)
             with client.stream(
                 "POST",
                 "/chat/stream",
+                headers={"Authorization": f"Bearer {token}"},
                 json={
                     "session_id": "stream-session-1",
                     "user_message": "Run APG-Bench Test 1: Data Quality.",
@@ -127,6 +197,9 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(statuses[0].get("stage"), "data_access")
         self.assertGreater(len(deltas), 3)
         self.assertTrue(all(len(event.get("delta", "")) <= 18 for event in deltas[:3]))
+        self.assertTrue(fake_memory.append_calls)
+        self.assertTrue(all(call["user_id"] == "user-1" for call in fake_memory.append_calls))
+        self.assertEqual(fake_memory.last_messages_user_id, "user-1")
 
     def test_plot_line_fixture_returns_mui_line_spec(self):
         client = TestClient(app)

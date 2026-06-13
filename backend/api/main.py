@@ -129,6 +129,16 @@ def get_current_user_id(request: Request) -> str | None:
     user = payload.get("user", {})
     return user.get("id") or user.get("email")
 
+
+def _parse_legacy_session_ids(raw_session_ids: str | None) -> list[str]:
+    cleaned = []
+    for item in str(raw_session_ids or "").split(","):
+        value = item.strip()
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return cleaned[:50]
+
+
 def _sync_legacy_outputs() -> None:
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     if not LEGACY_OUTPUTS_DIR.exists():
@@ -529,20 +539,34 @@ def health_check() -> dict:
 
 
 @app.get("/chat/sessions", response_model=ChatSessionsResponse)
-def chat_sessions(request: Request, limit: int = 50) -> ChatSessionsResponse:
+def chat_sessions(request: Request, limit: int = 50, legacy_session_ids: str | None = None) -> ChatSessionsResponse:
     user_id = get_current_user_id(request)
     safe_limit = max(1, min(int(limit or 50), 100))
-    sessions = memory_manager.list_chat_sessions(limit=safe_limit, user_id=user_id)
+    sessions = memory_manager.list_chat_sessions(
+        limit=safe_limit,
+        user_id=user_id,
+        legacy_session_ids=_parse_legacy_session_ids(legacy_session_ids),
+    )
     return ChatSessionsResponse(sessions=sessions)
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
-def chat_messages(session_id: str, request: Request, limit: int = 200) -> ChatHistoryResponse:
+def chat_messages(
+    session_id: str,
+    request: Request,
+    limit: int = 200,
+    include_legacy: bool = False,
+) -> ChatHistoryResponse:
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
     user_id = get_current_user_id(request)
-    rows = memory_manager.list_chat_messages(session_id, limit=limit, user_id=user_id)
+    rows = memory_manager.list_chat_messages(
+        session_id,
+        limit=limit,
+        user_id=user_id,
+        include_legacy_unowned=include_legacy,
+    )
     return ChatHistoryResponse(session_id=session_id, messages=rows)
 
 
@@ -618,12 +642,14 @@ def recent_audit_records(limit: int = 100) -> dict[str, Any]:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     if not request.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
+
+    user_id = get_current_user_id(http_request)
 
     try:
         logger.info("Processing chat request for session_id=%s", request.session_id)
@@ -632,8 +658,9 @@ def chat(request: ChatRequest) -> ChatResponse:
             "user",
             request.user_message,
             metadata={"model": request.model, "transport": "rest"},
+            user_id=user_id,
         )
-        resolved_memory = _resolve_chat_memory(request.session_id, request.user_message)
+        resolved_memory = _resolve_chat_memory(request.session_id, request.user_message, user_id=user_id)
 
         pending_execution_response = build_pending_execution_response(resolved_memory)
         if pending_execution_response is not None:
@@ -647,6 +674,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 pending_execution_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "pending_action"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=pending_execution_response)
 
@@ -662,6 +690,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 direct_context_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "direct_context"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=direct_context_response)
 
@@ -672,6 +701,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 missing_input_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "memory_missing_input"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=missing_input_response)
 
@@ -682,6 +712,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 benchmark_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "apg_bench"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=benchmark_response)
 
@@ -692,6 +723,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 full_stock_eda_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "stock_eda_full"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=full_stock_eda_response)
 
@@ -702,6 +734,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 plot_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "plot_prompt"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=plot_response)
 
@@ -724,6 +757,7 @@ def chat(request: ChatRequest) -> ChatResponse:
                 regime_response,
                 resolved_memory,
                 metadata={"model": request.model, "transport": "rest", "router_fast_path": "regime_only"},
+                user_id=user_id,
             )
             return ChatResponse(session_id=request.session_id, response=regime_response)
 
@@ -744,6 +778,7 @@ def chat(request: ChatRequest) -> ChatResponse:
             response_text,
             resolved_memory,
             metadata={"model": request.model, "transport": "rest"},
+            user_id=user_id,
         )
         return ChatResponse(session_id=request.session_id, response=response_text)
 
@@ -765,12 +800,14 @@ def get_plot_data(session_id: str):
 
 
 @app.post("/chat/stream")
-async def chat_stream(request: ChatRequest) -> StreamingResponse:
+async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingResponse:
     if not request.session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
+
+    user_id = get_current_user_id(http_request)
 
     async def event_generator():
         import uuid
@@ -800,6 +837,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 "user",
                 request.user_message,
                 metadata={"model": request.model, "transport": "stream"},
+                user_id=user_id,
             )
             yield _stream_event({
                 "type": "status",
@@ -810,6 +848,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 _resolve_chat_memory,
                 request.session_id,
                 request.user_message,
+                user_id,
             )
             yield _stream_event({
                 "type": "status",
@@ -840,6 +879,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "pending_action",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -867,6 +907,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "direct_context",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -888,6 +929,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "memory_missing_input",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -909,6 +951,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "apg_bench",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -930,6 +973,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "stock_eda_full",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -951,6 +995,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "plot_prompt",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -984,6 +1029,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                         "router_fast_path": "regime_only",
                         "plot_ids": [],
                     },
+                    user_id=user_id,
                 )
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
@@ -1100,6 +1146,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                     "tool_names": sorted(tool_names_run),
                     "plot_ids": plot_ids or [],
                 },
+                user_id=user_id,
             )
             yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
 

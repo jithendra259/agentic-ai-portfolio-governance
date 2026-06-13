@@ -606,7 +606,21 @@ class MongoMemoryManager:
             return normalized
         return f"{normalized[:61].rstrip()}..."
 
-    def list_chat_messages(self, session_id: str, limit: int = 200, user_id: str | None = None) -> list[dict[str, Any]]:
+    def _clean_session_ids(self, session_ids: list[str] | tuple[str, ...] | None) -> list[str]:
+        cleaned = []
+        for session_id in session_ids or []:
+            value = str(session_id or "").strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    def list_chat_messages(
+        self,
+        session_id: str,
+        limit: int = 200,
+        user_id: str | None = None,
+        include_legacy_unowned: bool = False,
+    ) -> list[dict[str, Any]]:
         """Return persisted chat messages in chronological order."""
         clean_session_id = str(session_id or "").strip()
         if not clean_session_id:
@@ -619,19 +633,23 @@ class MongoMemoryManager:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
                         if user_id:
+                            ownership_clause = "metadata->>'user_id' = %s"
+                            params: tuple[Any, ...] = (clean_session_id, str(user_id), safe_limit)
+                            if include_legacy_unowned:
+                                ownership_clause = "(metadata->>'user_id' = %s OR NOT (metadata ? 'user_id'))"
                             cur.execute(
-                                """
+                                f"""
                                 SELECT id, role, content, metadata, created_at
                                 FROM (
                                     SELECT id, role, content, metadata, created_at
                                     FROM chat_messages
-                                    WHERE session_id = %s AND (metadata->>'user_id' = %s)
+                                    WHERE session_id = %s AND {ownership_clause}
                                     ORDER BY created_at DESC, id DESC
                                     LIMIT %s
                                 ) AS recent_messages
                                 ORDER BY created_at ASC, id ASC;
                                 """,
-                                (clean_session_id, str(user_id), safe_limit),
+                                params,
                             )
                         else:
                             cur.execute(
@@ -682,7 +700,17 @@ class MongoMemoryManager:
             
             query = {"session_id": clean_session_id}
             if user_id:
-                query["$or"] = [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+                owner_filters = [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+                if include_legacy_unowned:
+                    owner_filters.append(
+                        {
+                            "$and": [
+                                {"user_id": {"$exists": False}},
+                                {"metadata.user_id": {"$exists": False}},
+                            ]
+                        }
+                    )
+                query["$or"] = owner_filters
 
             cursor = chat_col.find(query).sort(
                 [("created_at", DESCENDING), ("_id", DESCENDING)]
@@ -704,17 +732,32 @@ class MongoMemoryManager:
             logger.warning("Failed to list chat messages for session %s: %s", clean_session_id, exc)
             return []
 
-    def list_chat_sessions(self, limit: int = 50, user_id: str | None = None) -> list[dict[str, Any]]:
+    def list_chat_sessions(
+        self,
+        limit: int = 50,
+        user_id: str | None = None,
+        legacy_session_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> list[dict[str, Any]]:
         """Return persisted chat sessions sorted by most recent activity."""
         safe_limit = max(1, min(int(limit or 50), 100))
+        clean_legacy_session_ids = self._clean_session_ids(legacy_session_ids)
 
         if self.pg_pool:
             try:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
                         if user_id:
+                            legacy_clause = ""
+                            params: list[Any] = [str(user_id)]
+                            if clean_legacy_session_ids:
+                                placeholders = ", ".join(["%s"] * len(clean_legacy_session_ids))
+                                legacy_clause = (
+                                    f" OR (session_id IN ({placeholders}) AND NOT (metadata ? 'user_id'))"
+                                )
+                                params.extend(clean_legacy_session_ids)
+                            params.append(safe_limit)
                             cur.execute(
-                                """
+                                f"""
                                 WITH ranked_messages AS (
                                     SELECT
                                         session_id,
@@ -726,7 +769,7 @@ class MongoMemoryManager:
                                             ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
                                         ) AS title_rank
                                     FROM chat_messages
-                                    WHERE metadata->>'user_id' = %s
+                                    WHERE metadata->>'user_id' = %s{legacy_clause}
                                 )
                                 SELECT
                                     session_id,
@@ -739,7 +782,7 @@ class MongoMemoryManager:
                                 ORDER BY updated_at DESC
                                 LIMIT %s;
                                 """,
-                                (str(user_id), safe_limit),
+                                tuple(params),
                             )
                         else:
                             cur.execute(
@@ -793,11 +836,18 @@ class MongoMemoryManager:
                 return []
             pipeline = []
             if user_id:
-                pipeline.append({
-                    "$match": {
-                        "$or": [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
-                    }
-                })
+                owner_filters = [{"user_id": str(user_id)}, {"metadata.user_id": str(user_id)}]
+                if clean_legacy_session_ids:
+                    owner_filters.append(
+                        {
+                            "$and": [
+                                {"session_id": {"$in": clean_legacy_session_ids}},
+                                {"user_id": {"$exists": False}},
+                                {"metadata.user_id": {"$exists": False}},
+                            ]
+                        }
+                    )
+                pipeline.append({"$match": {"$or": owner_filters}})
             pipeline.extend([
                 {
                     "$addFields": {
