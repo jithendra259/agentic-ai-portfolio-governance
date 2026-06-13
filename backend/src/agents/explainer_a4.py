@@ -1,6 +1,7 @@
 import os
 from langchain_core.prompts import PromptTemplate
 from langchain_ollama import ChatOllama
+from src.providers.ashna_provider import normalize_ashna_base_url
 
 
 class GenerativeExplainerAgent:
@@ -20,12 +21,7 @@ class GenerativeExplainerAgent:
             base_url = os.getenv("ASHNA_BASE_URL")
             
             if api_key and base_url:
-                # Normalize base URL: remove /api suffix if present (should be just /v1)
-                base_url = base_url.rstrip("/")
-                if base_url.endswith("/api"):
-                    base_url = base_url[:-4]  # Remove /api suffix
-                if not base_url.endswith("/v1"):
-                    base_url = base_url + "/v1"
+                base_url = normalize_ashna_base_url(base_url)
                 
                 try:
                     from langchain_openai import ChatOpenAI

@@ -29,7 +29,11 @@ def _get_graph_rag() -> GraphContextRAG:
 def search_methodology_knowledge_base(question: str, top_k: int = 3) -> str:
     """
     Search the PDF methodology knowledge base and return the most relevant grounded chunks.
-    Use this for architecture, methodology, HITL, statistical framing, and paper-style explanation questions.
+    Use this for who/what/when/where/how/why questions about the paper, EDA, statistics,
+    ARIMA, GARCH, ADF, forecasting models, architecture, methodology, HITL, RAG,
+    statistical framing, and paper-style explanation questions.
+    For ticker/company identity, ownership, volatility, returns, price moves, and other
+    stock-specific questions, use the stock snapshot, graph RAG, or price-series tools instead.
     """
     return _get_methodology_rag().render_markdown(query=question, top_k=top_k)
 

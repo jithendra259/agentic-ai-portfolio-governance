@@ -16,6 +16,7 @@ MAIN_INTENTS = {
 SUB_INTENTS = {
     "unknown",
     "data_quality",
+    "stock_eda_full",
     "eda",
     "correlation_covariance",
     "instability_regime",

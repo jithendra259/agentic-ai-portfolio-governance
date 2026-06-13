@@ -40,6 +40,7 @@ from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.providers.ashna_provider import normalize_ashna_base_url
 from src.rag.rag_tools import (
     compare_common_institutional_holders,
     retrieve_graph_rag_context,
@@ -271,7 +272,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         base_url = os.getenv("ASHNA_BASE_URL")
         
         if api_key and base_url:
-            base_url = base_url.rstrip("/")
+            base_url = normalize_ashna_base_url(base_url)
             
             actual_model = model_name
             if model_name.startswith("ashna/"):
@@ -361,6 +362,19 @@ def _is_ollama_unavailable_error(exc: Exception) -> bool:
 
 def _is_retryable_ollama_error(exc: Exception) -> bool:
     return _is_ollama_memory_error(exc) or _is_ollama_unavailable_error(exc)
+
+
+def _ashna_provider_error_message(exc: Exception, fallback_exc: Exception | None = None) -> AIMessage:
+    fallback_text = ""
+    if fallback_exc is not None:
+        fallback_text = f"\n\nThe configured fallback model also failed: {type(fallback_exc).__name__}."
+    return AIMessage(
+        content=(
+            "Ashna API returned an error before the model could answer. "
+            "Please verify `ASHNA_BASE_URL=https://api.ashna.ai/v1/api`, the API key, and the model id."
+            f"{fallback_text}"
+        )
+    )
 
 
 def _available_models_text() -> str:
@@ -454,6 +468,17 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     try:
         return active_llm.invoke(messages)
     except Exception as exc:
+        if is_ashna:
+            logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
+            if fallback_llm_with_tools is not None and FALLBACK_OLLAMA_MODEL != active_primary:
+                try:
+                    fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
+                    return fallback_llm_with_tools.invoke(fallback_messages)
+                except Exception as fallback_exc:
+                    logger.warning("Fallback model %s also failed after Ashna error: %s", FALLBACK_OLLAMA_MODEL, fallback_exc)
+                    return _ashna_provider_error_message(exc, fallback_exc)
+            return _ashna_provider_error_message(exc)
+
         if _is_ollama_model_not_found_error(exc) or _is_ollama_unavailable_error(exc):
             logger.warning("Primary Ollama model %s is not available. Error: %s", active_primary, exc)
             if fallback_llm_with_tools is None:
@@ -667,8 +692,13 @@ GOVERNANCE RULES:
 - Read the tool output carefully instead of inventing any values.
 
 METHODOLOGY RAG RULES:
-- If the user asks how the framework works, how I_t is computed, how HITL works, why a result is statistically insignificant, or asks for methodology/documentation details, use search_methodology_knowledge_base.
-- This tool returns grounded PDF chunks from the local methodology knowledge base. Quote or summarize those chunks instead of inventing explanations.
+- If the user asks who, what, when, where, why, or how questions about a stock ticker or company, prefer the stock tools below instead of search_methodology_knowledge_base.
+- Use get_stock_database_snapshot for company identity, sector, industry, country, exchange, stored data coverage, latest stored close, and business summaries.
+- Use get_price_series_for_analysis for stock volatility, returns, price movement, trend, drawdown, highest/lowest price, spikes, and period comparisons.
+- Use retrieve_graph_rag_context for stock ownership questions such as who holds, owns, invested in, or connects a ticker.
+- Use search_methodology_knowledge_base only when the question is about the paper, EDA method, statistics, ARIMA, GARCH, ADF, stationarity, forecasting models, data types, missing values, outliers, G-CVaR, HITL, RAG, methodology, or documentation details.
+- This tool returns grounded PDF/local knowledge chunks from the methodology knowledge base. Summarize those chunks instead of inventing explanations.
+- For "who wrote this", "what is this study", "when was it done", "where is the market context", "why use EDA", or "how does the method work", answer directly from the retrieved chunks.
 
 GRAPH RAG RULES:
 - If the user asks which institutions connect two stocks, asks about ownership overlap, contagion structure, or wants graph context for a ticker set or a universe, use retrieve_graph_rag_context.

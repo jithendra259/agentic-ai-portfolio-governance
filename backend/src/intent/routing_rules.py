@@ -18,6 +18,7 @@ from src.intent.intent_schema import (
 
 ANALYTICS_ENDPOINTS = {
     "data_quality": "/api/analytics/eda",
+    "stock_eda_full": "/api/analytics/stock-eda-full",
     "eda": "/api/analytics/eda",
     "correlation_covariance": "/api/analytics/eda",
     "instability_regime": "/api/analytics/instability",
@@ -34,6 +35,7 @@ ANALYTICS_ENDPOINTS = {
 
 DEFAULT_TABS = {
     "data_quality": "Data EDA",
+    "stock_eda_full": "Full Stock EDA",
     "eda": "Data EDA",
     "correlation_covariance": "Correlation & Covariance EDA",
     "instability_regime": "Instability Monitor",
@@ -50,6 +52,7 @@ DEFAULT_TABS = {
 
 MODULE_MATRIX = {
     "data_quality": dict(math=True, optimizer=False, rag=False, plot=True, validator=True, frontend=True),
+    "stock_eda_full": dict(math=True, optimizer=False, rag=False, plot=True, validator=True, frontend=True),
     "eda": dict(math=True, optimizer=False, rag=False, plot=True, validator=True, frontend=True),
     "correlation_covariance": dict(math=True, optimizer=False, rag=False, plot=True, validator=True, frontend=True),
     "instability_regime": dict(math=True, optimizer=False, rag=False, plot=True, validator=True, frontend=True),
@@ -66,6 +69,7 @@ MODULE_MATRIX = {
 
 SUB_INTENT_RULES = [
     ("response_validation", 0.96, ("validate your last", "validate my last", "check your last", "forbidden", "numeric claims")),
+    ("stock_eda_full", 0.94, ("full stock eda", "complete stock eda", "notebook eda", "seasonal stock analysis", "skewness", "kurtosis", "day-of-week", "quarterly returns", "monthly returns", "ohlcv eda", "volume trend")),
     ("full_plot_coverage", 0.95, ("all plots", "full analytics", "88 plots", "plot coverage", "render all")),
     ("smart_plot_selection", 0.93, ("important plots", "smart view", "most relevant plots", "only relevant", "best plots")),
     ("advisory_allocation", 0.92, ("advisory allocation", "allocation change", "recommended allocation", "current allocation", "weights sum")),
@@ -296,6 +300,8 @@ def _extract_tickers(query: str) -> list[str]:
         "WHY", "SHOW", "GIVE", "ONLY", "ALL", "NOW", "AND", "FOR", "FROM", "TO",
         "THE", "RISK", "WHAT", "IS", "MY", "YOUR", "LAST", "THIS", "THAT",
         "DO", "NOT", "DONT", "DON", "NO", "ANSWER", "QUESTION",
+        "DAY", "WEEK", "MONTH", "YEAR", "TREND", "TRENDS", "RETURN", "RETURNS",
+        "VOLUME", "SECTOR", "STOCK", "STOCKS", "FULL", "COMPLETE",
     }
     
     # 1. Try to find explicit lists like ["AAPL", "MSFT"] or [AAPL, MSFT]

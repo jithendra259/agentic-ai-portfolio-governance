@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import logging
 from pymongo import MongoClient
 import os
+from src.analytics.stock_eda import build_full_stock_eda_payload
 from src.decision.concentration_metrics import compute_concentration_metrics
 
 logger = logging.getLogger(__name__)
@@ -479,6 +480,30 @@ def get_eda_analytics(
         "pca_explained_variance": pca_explained_variance,
         "pairwise_scatter": pairwise_scatter
     }
+
+
+@router.get("/stock-eda-full")
+def get_full_stock_eda_analytics(
+    tickers: str = "AAPL,JPM,MSFT,BAC,META,WFC,GOOG,HSBC",
+    start_date: str = "2019-01-01",
+    end_date: str = "2023-12-31",
+):
+    """
+    Full notebook-style stock EDA endpoint.
+
+    This complements the dashboard-oriented `/eda` endpoint with the R-notebook
+    workflow: OHLCV preprocessing, market-return/volatility feature engineering,
+    missing values, outliers, descriptive stats, skew/kurtosis, seasonal summaries,
+    sector comparisons, and time-series summaries.
+    """
+    return build_full_stock_eda_payload(
+        tickers=tickers,
+        start_date=start_date,
+        end_date=end_date,
+        get_collection=get_mongo_collection,
+        generate_price_series=generate_gbm_prices,
+    )
+
 
 @router.get("/instability")
 def get_instability_analytics(
