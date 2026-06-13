@@ -637,6 +637,36 @@ export default function ChatInterface({ setView }) {
       });
   }, [sessionId, token]);
 
+  const claimLegacySessions = useCallback(async () => {
+    const userId = session?.user?.id || session?.user?.email;
+    if (!token || !userId) return;
+
+    const claimKey = `portfolio-ai-legacy-history-claimed:${userId}`;
+    if (window.localStorage.getItem(claimKey) === 'true') return;
+
+    try {
+      const response = await fetch(`${BACKEND_BASE}/chat/sessions/claim-legacy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          claim_all: true,
+          session_ids: readStoredSessionIds(),
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to claim legacy chat sessions');
+      const data = await response.json().catch(() => ({}));
+      rememberSessionIds(data?.claimed_sessions || []);
+      window.localStorage.setItem(claimKey, 'true');
+      refreshSessions();
+    } catch (err) {
+      console.error('Failed to claim legacy chat sessions:', err);
+    }
+  }, [refreshSessions, session?.user?.email, session?.user?.id, token]);
+
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -644,6 +674,10 @@ export default function ChatInterface({ setView }) {
   useEffect(() => {
     refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    claimLegacySessions();
+  }, [claimLegacySessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });

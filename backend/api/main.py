@@ -283,6 +283,16 @@ class ChatSessionsResponse(BaseModel):
     sessions: list[ChatSessionResponse]
 
 
+class ClaimLegacyChatSessionsRequest(BaseModel):
+    session_ids: list[str] = Field(default_factory=list)
+    claim_all: bool = False
+
+
+class ClaimLegacyChatSessionsResponse(BaseModel):
+    claimed_rows: int
+    claimed_sessions: list[str] = Field(default_factory=list)
+
+
 class DeleteChatSessionResponse(BaseModel):
     session_id: str
     deleted_count: int
@@ -548,6 +558,26 @@ def chat_sessions(request: Request, limit: int = 50, legacy_session_ids: str | N
         legacy_session_ids=_parse_legacy_session_ids(legacy_session_ids),
     )
     return ChatSessionsResponse(sessions=sessions)
+
+
+@app.post("/chat/sessions/claim-legacy", response_model=ClaimLegacyChatSessionsResponse)
+def claim_legacy_chat_sessions(
+    payload: ClaimLegacyChatSessionsRequest,
+    request: Request,
+) -> ClaimLegacyChatSessionsResponse:
+    user_id = get_current_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required to claim legacy chat history")
+
+    result = memory_manager.claim_legacy_chat_sessions(
+        user_id=user_id,
+        session_ids=payload.session_ids,
+        claim_all=payload.claim_all,
+    )
+    return ClaimLegacyChatSessionsResponse(
+        claimed_rows=int(result.get("claimed_rows") or 0),
+        claimed_sessions=list(result.get("claimed_sessions") or []),
+    )
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)

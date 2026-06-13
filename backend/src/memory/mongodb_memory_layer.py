@@ -213,9 +213,20 @@ class MongoMemoryManager:
                             session_id VARCHAR(128) NOT NULL,
                             role VARCHAR(32) NOT NULL,
                             content TEXT NOT NULL,
+                            user_id VARCHAR(128),
                             metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
                             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                         );
+                    """)
+                    cur.execute("""
+                        ALTER TABLE chat_messages
+                        ADD COLUMN IF NOT EXISTS user_id VARCHAR(128);
+                    """)
+                    cur.execute("""
+                        UPDATE chat_messages
+                        SET user_id = metadata->>'user_id'
+                        WHERE (user_id IS NULL OR user_id = '')
+                          AND metadata ? 'user_id';
                     """)
                     cur.execute("""
                         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
@@ -232,6 +243,14 @@ class MongoMemoryManager:
                     cur.execute("""
                         CREATE INDEX IF NOT EXISTS idx_chat_messages_created_desc
                         ON chat_messages (created_at DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_user_recent
+                        ON chat_messages (user_id, created_at DESC, id DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session
+                        ON chat_messages (user_id, session_id, created_at DESC, id DESC);
                     """)
             logger.info("Postgres cache tables checked/created.")
         except Exception as exc:
@@ -569,10 +588,10 @@ class MongoMemoryManager:
                     with conn.cursor() as cur:
                         cur.execute(
                             """
-                            INSERT INTO chat_messages (session_id, role, content, metadata)
-                            VALUES (%s, %s, %s, %s);
+                            INSERT INTO chat_messages (session_id, role, content, user_id, metadata)
+                            VALUES (%s, %s, %s, %s, %s);
                             """,
-                            (clean_session_id, clean_role, clean_content, metadata_payload),
+                            (clean_session_id, clean_role, clean_content, str(user_id) if user_id else None, metadata_payload),
                         )
                 return
             except Exception as exc:
@@ -633,10 +652,13 @@ class MongoMemoryManager:
                 with self.pg_pool.connection() as conn:
                     with conn.cursor() as cur:
                         if user_id:
-                            ownership_clause = "metadata->>'user_id' = %s"
-                            params: tuple[Any, ...] = (clean_session_id, str(user_id), safe_limit)
+                            ownership_clause = "(user_id = %s OR metadata->>'user_id' = %s)"
+                            params: tuple[Any, ...] = (clean_session_id, str(user_id), str(user_id), safe_limit)
                             if include_legacy_unowned:
-                                ownership_clause = "(metadata->>'user_id' = %s OR NOT (metadata ? 'user_id'))"
+                                ownership_clause = (
+                                    "(user_id = %s OR metadata->>'user_id' = %s "
+                                    "OR ((user_id IS NULL OR user_id = '') AND NOT (metadata ? 'user_id')))"
+                                )
                             cur.execute(
                                 f"""
                                 SELECT id, role, content, metadata, created_at
@@ -748,11 +770,13 @@ class MongoMemoryManager:
                     with conn.cursor() as cur:
                         if user_id:
                             legacy_clause = ""
-                            params: list[Any] = [str(user_id)]
+                            params: list[Any] = [str(user_id), str(user_id)]
                             if clean_legacy_session_ids:
                                 placeholders = ", ".join(["%s"] * len(clean_legacy_session_ids))
                                 legacy_clause = (
-                                    f" OR (session_id IN ({placeholders}) AND NOT (metadata ? 'user_id'))"
+                                    f" OR (session_id IN ({placeholders}) "
+                                    "AND (user_id IS NULL OR user_id = '') "
+                                    "AND NOT (metadata ? 'user_id'))"
                                 )
                                 params.extend(clean_legacy_session_ids)
                             params.append(safe_limit)
@@ -769,7 +793,7 @@ class MongoMemoryManager:
                                             ORDER BY CASE WHEN role = 'user' THEN 0 ELSE 1 END, created_at ASC, id ASC
                                         ) AS title_rank
                                     FROM chat_messages
-                                    WHERE metadata->>'user_id' = %s{legacy_clause}
+                                    WHERE user_id = %s OR metadata->>'user_id' = %s{legacy_clause}
                                 )
                                 SELECT
                                     session_id,
@@ -906,8 +930,12 @@ class MongoMemoryManager:
                     with conn.cursor() as cur:
                         if user_id:
                             cur.execute(
-                                "DELETE FROM chat_messages WHERE session_id = %s AND metadata->>'user_id' = %s;",
-                                (clean_session_id, str(user_id)),
+                                """
+                                DELETE FROM chat_messages
+                                WHERE session_id = %s
+                                  AND (user_id = %s OR metadata->>'user_id' = %s);
+                                """,
+                                (clean_session_id, str(user_id), str(user_id)),
                             )
                         else:
                             cur.execute(
@@ -936,3 +964,139 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to delete chat session %s: %s", clean_session_id, exc)
             return 0
+
+    def claim_legacy_chat_sessions(
+        self,
+        user_id: str,
+        session_ids: list[str] | tuple[str, ...] | None = None,
+        claim_all: bool = False,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Attach legacy unowned chat rows to an authenticated user.
+
+        Older Supabase rows were written before chat ownership was persisted, so
+        they have neither ``user_id`` nor ``metadata.user_id``. This method only
+        claims those unowned rows, and optionally limits the all-session path to
+        app-generated ``portfolio-chat-*`` sessions.
+        """
+        clean_user_id = str(user_id or "").strip()
+        clean_session_ids = self._clean_session_ids(session_ids)
+        safe_limit = max(1, min(int(limit or 100), 500))
+        if not clean_user_id or (not claim_all and not clean_session_ids):
+            return {"claimed_rows": 0, "claimed_sessions": []}
+
+        claimed_sessions: list[str] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            WITH candidate_sessions AS (
+                                SELECT session_id
+                                FROM chat_messages
+                                WHERE (user_id IS NULL OR user_id = '')
+                                  AND NOT (metadata ? 'user_id')
+                                  AND (
+                                      (%s AND session_id LIKE 'portfolio-chat-%%')
+                                      OR session_id = ANY(%s::text[])
+                                  )
+                                GROUP BY session_id
+                                ORDER BY MAX(created_at) DESC
+                                LIMIT %s
+                            )
+                            UPDATE chat_messages
+                            SET
+                                user_id = %s,
+                                metadata = jsonb_set(
+                                    jsonb_set(
+                                        COALESCE(metadata, '{}'::jsonb),
+                                        '{user_id}',
+                                        to_jsonb(%s::text),
+                                        true
+                                    ),
+                                    '{legacy_claimed_at}',
+                                    to_jsonb(%s::text),
+                                    true
+                                )
+                            WHERE session_id IN (SELECT session_id FROM candidate_sessions)
+                              AND (user_id IS NULL OR user_id = '')
+                              AND NOT (metadata ? 'user_id')
+                            RETURNING session_id;
+                            """,
+                            (
+                                bool(claim_all),
+                                clean_session_ids,
+                                safe_limit,
+                                clean_user_id,
+                                clean_user_id,
+                                now_iso,
+                            ),
+                        )
+                        rows = cur.fetchall()
+                for row in rows:
+                    session_id = str(row[0])
+                    if session_id not in claimed_sessions:
+                        claimed_sessions.append(session_id)
+                return {"claimed_rows": len(rows), "claimed_sessions": claimed_sessions}
+            except Exception as exc:
+                logger.warning("Postgres claim_legacy_chat_sessions failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return {"claimed_rows": 0, "claimed_sessions": []}
+
+        try:
+            chat_col = self._collection("chat_messages")
+            if chat_col is None:
+                return {"claimed_rows": 0, "claimed_sessions": []}
+
+            filters = []
+            if claim_all:
+                filters.append({"session_id": {"$regex": r"^portfolio-chat-"}})
+            if clean_session_ids:
+                filters.append({"session_id": {"$in": clean_session_ids}})
+            if not filters:
+                return {"claimed_rows": 0, "claimed_sessions": []}
+
+            cursor = chat_col.aggregate(
+                [
+                    {
+                        "$match": {
+                            "$and": [
+                                {"$or": [{"user_id": {"$exists": False}}, {"user_id": ""}, {"user_id": None}]},
+                                {"metadata.user_id": {"$exists": False}},
+                                {"$or": filters},
+                            ]
+                        }
+                    },
+                    {"$group": {"_id": "$session_id", "updated_at": {"$max": "$created_at"}}},
+                    {"$sort": {"updated_at": -1}},
+                    {"$limit": safe_limit},
+                ]
+            )
+            candidate_session_ids = [str(row.get("_id")) for row in cursor if row.get("_id")]
+            if not candidate_session_ids:
+                return {"claimed_rows": 0, "claimed_sessions": []}
+
+            result = chat_col.update_many(
+                {
+                    "session_id": {"$in": candidate_session_ids},
+                    "$and": [
+                        {"$or": [{"user_id": {"$exists": False}}, {"user_id": ""}, {"user_id": None}]},
+                        {"metadata.user_id": {"$exists": False}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "user_id": clean_user_id,
+                        "metadata.user_id": clean_user_id,
+                        "metadata.legacy_claimed_at": now_iso,
+                    }
+                },
+            )
+            return {"claimed_rows": int(result.modified_count or 0), "claimed_sessions": candidate_session_ids}
+        except PyMongoError as exc:
+            logger.warning("Failed to claim legacy chat sessions: %s", exc)
+            return {"claimed_rows": 0, "claimed_sessions": []}
