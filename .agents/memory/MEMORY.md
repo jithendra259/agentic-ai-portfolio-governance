@@ -1,0 +1,1 @@
+- [AshnaAI backend config](ashnaai-backend-config.md) — URL normalization bug stripped /api from base_url; python3.12 is the correct interpreter for this project

@@ -271,12 +271,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         base_url = os.getenv("ASHNA_BASE_URL")
         
         if api_key and base_url:
-            # Normalize base URL: remove /api suffix if present (should be just /v1)
             base_url = base_url.rstrip("/")
-            if base_url.endswith("/api"):
-                base_url = base_url[:-4]  # Remove /api suffix
-            if not base_url.endswith("/v1"):
-                base_url = base_url + "/v1"
             
             actual_model = model_name
             if model_name.startswith("ashna/"):
@@ -290,8 +285,8 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                     "api_key": api_key,
                     "base_url": base_url,
                     "tags": ["orchestrator_llm"],
-                    "streaming": True,
-                    "timeout": 30,
+                    "streaming": False,
+                    "timeout": 60,
                     "max_retries": 2,
                 }
                 if num_predict is not None:
