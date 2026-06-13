@@ -216,21 +216,70 @@ app = FastAPI(
 
 # CORS must be registered before routers so all responses including redirects have proper headers.
 # allow_credentials=True requires explicit origins; "*" + credentials is rejected by browsers.
-_FRONTEND_BASE_URL = (os.getenv("FRONTEND_BASE_URL") or "http://localhost:5173").rstrip("/")
-_ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-]
-if _FRONTEND_BASE_URL and _FRONTEND_BASE_URL not in _ALLOWED_ORIGINS:
-    _ALLOWED_ORIGINS.append(_FRONTEND_BASE_URL)
+def _csv_origins(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [origin.rstrip("/") for origin in value.split(",") if origin.strip()]
+
+
+def _build_allowed_origins() -> list[str]:
+    origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        *_csv_origins(os.getenv("FRONTEND_BASE_URL")),
+        *_csv_origins(os.getenv("CORS_ALLOWED_ORIGINS")),
+    ]
+    return list(dict.fromkeys(origin for origin in origins if origin))
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_deployed_environment() -> bool:
+    return any(
+        os.getenv(name)
+        for name in (
+            "VERCEL",
+            "VERCEL_ENV",
+            "RENDER",
+            "RENDER_SERVICE_ID",
+            "RENDER_EXTERNAL_URL",
+        )
+    )
+
+
+_ALLOWED_ORIGINS = _build_allowed_origins()
+_ALLOW_PRIVATE_DEV_ORIGINS = _env_flag(
+    "ALLOW_PRIVATE_DEV_ORIGINS",
+    default=not _is_deployed_environment(),
+)
+_LOCAL_DEV_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1):\d+$"
+_PRIVATE_DEV_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost|127\.0\.0\.1|"
+    r"10(?:\.\d{1,3}){3}|"
+    r"192\.168(?:\.\d{1,3}){2}|"
+    r"172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}"
+    r"):\d+$"
+)
+_ALLOW_ORIGIN_REGEX = (
+    _PRIVATE_DEV_ORIGIN_REGEX if _ALLOW_PRIVATE_DEV_ORIGINS else _LOCAL_DEV_ORIGIN_REGEX
+)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
+    allow_origin_regex=_ALLOW_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

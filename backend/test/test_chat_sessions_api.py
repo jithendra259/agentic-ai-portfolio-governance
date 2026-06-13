@@ -82,6 +82,34 @@ class FakeMemoryManager:
 
 
 class ChatSessionsApiTests(unittest.TestCase):
+    def test_auth_login_preflight_allows_local_vite_port(self):
+        client = TestClient(app)
+        response = client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": "http://localhost:5000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,authorization",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://localhost:5000")
+
+    def test_auth_login_preflight_allows_private_network_vite_url(self):
+        client = TestClient(app)
+        response = client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": "http://10.61.12.179:5000",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type,authorization",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("access-control-allow-origin"), "http://10.61.12.179:5000")
+
     def test_chat_sessions_endpoint_returns_summaries(self):
         import api.main as main
 
