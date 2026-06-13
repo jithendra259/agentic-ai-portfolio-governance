@@ -641,7 +641,7 @@ export default function ChatInterface({ setView }) {
     const userId = session?.user?.id || session?.user?.email;
     if (!token || !userId) return;
 
-    const claimKey = `portfolio-ai-legacy-history-claimed:${userId}`;
+    const claimKey = `portfolio-ai-legacy-history-claimed-v2:${userId}`;
     if (window.localStorage.getItem(claimKey) === 'true') return;
 
     try {
@@ -652,7 +652,6 @@ export default function ChatInterface({ setView }) {
           'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          claim_all: true,
           session_ids: readStoredSessionIds(),
         }),
       });

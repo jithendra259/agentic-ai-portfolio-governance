@@ -569,10 +569,11 @@ def claim_legacy_chat_sessions(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication is required to claim legacy chat history")
 
+    allow_global_claim = os.getenv("ALLOW_GLOBAL_LEGACY_CHAT_CLAIM") == "1"
     result = memory_manager.claim_legacy_chat_sessions(
         user_id=user_id,
         session_ids=payload.session_ids,
-        claim_all=payload.claim_all,
+        claim_all=bool(payload.claim_all and allow_global_claim),
     )
     return ClaimLegacyChatSessionsResponse(
         claimed_rows=int(result.get("claimed_rows") or 0),

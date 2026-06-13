@@ -178,7 +178,7 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(response.json(), {"claimed_rows": 4, "claimed_sessions": ["session-legacy", "session-two"]})
         self.assertEqual(fake_memory.last_claim_user_id, "user-1")
         self.assertEqual(fake_memory.last_claim_session_ids, ["session-legacy"])
-        self.assertTrue(fake_memory.last_claim_all)
+        self.assertFalse(fake_memory.last_claim_all)
 
     def test_delete_chat_session_endpoint_deletes_history(self):
         import api.main as main
