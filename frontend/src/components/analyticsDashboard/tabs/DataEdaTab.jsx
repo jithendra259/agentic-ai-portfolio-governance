@@ -1,30 +1,14 @@
-import { useMemo } from 'react';
-import { Box } from '@mui/material';
-import { LineChart } from '@mui/x-charts/LineChart';
 import { BarChart } from '@mui/x-charts/BarChart';
+import { LineChart } from '@mui/x-charts/LineChart';
 import { ScatterChart } from '@mui/x-charts/ScatterChart';
 
-// Hooks
-import { useEdaAnalytics } from '../../hooks/useAnalytics';
+import AnalyticsTabLayout from '../../AnalyticsTabLayout';
+import { BoxplotLikeChart } from '../../CustomCharts';
+import MetricSummaryCards from '../../MetricSummaryCards';
+import PlotCard from '../../PlotCard';
+import { buildLineSeries, getDates } from '../analyticsDashboardModel';
 
-// Helper Components
-import PlotCard from '../PlotCard';
-import AnalyticsTabLayout from '../AnalyticsTabLayout';
-import MetricSummaryCards from '../MetricSummaryCards';
-import { HeatmapChart, BoxplotLikeChart } from '../CustomCharts';
-import {
-  buildLineSeries,
-  getDates,
-  getDateRangeForPreset,
-  getUniverseTickers,
-} from './analyticsDashboardModel';
-
-export default function DataEdaTab({ universe, datePreset, activeRegime }) {
-  const tickers = useMemo(() => getUniverseTickers(universe), [universe]);
-  const { startDate, endDate } = useMemo(() => getDateRangeForPreset(datePreset), [datePreset]);
-  
-  const eda = useEdaAnalytics(tickers, startDate, endDate, 0);
-
+export default function DataEdaTab({ activeRegime, eda, tickers, universe }) {
   return (
     <AnalyticsTabLayout
       title="Exploratory Price & Return Diagnostics"
@@ -33,15 +17,14 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
       summaryCards={
         <MetricSummaryCards
           metrics={[
-            { label: "Active Universe", value: universe, helpText: `Assets: ${tickers.join(', ')}` },
-            { label: "Observations Count", value: eda.data?.adjusted_close?.length || 0, helpText: "Business trading days in period" },
-            { label: "Volatile Ticker", value: tickers.includes("NVDA") ? "NVDA" : tickers[0], color: "#ef4444", helpText: "Highest standard deviation" },
-            { label: "Data Completeness", value: "100.0%", color: "#10b981", helpText: "No observations are missing" }
+            { label: 'Active Universe', value: universe, helpText: `Assets: ${tickers.join(', ')}` },
+            { label: 'Observations Count', value: eda.data?.adjusted_close?.length || 0, helpText: 'Business trading days in period' },
+            { label: 'Volatile Ticker', value: tickers.includes('NVDA') ? 'NVDA' : tickers[0], color: '#ef4444', helpText: 'Highest standard deviation' },
+            { label: 'Data Completeness', value: '100.0%', color: '#10b981', helpText: 'No observations are missing' },
           ]}
         />
       }
     >
-      {/* Plot 1 */}
       <PlotCard
         title="1. Adjusted Close Price Trend"
         description="Displays historical daily closing price movements for each asset in the portfolio."
@@ -61,7 +44,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 2 */}
       <PlotCard
         title="2. Normalized Price Movement"
         description="Compares asset relative performance by setting all price paths starting at a common base value of 100."
@@ -81,7 +63,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 3 */}
       <PlotCard
         title="3. Daily Log Returns Plot"
         description="Renders percentage return fluctuations calculated as ln(P_t / P_{t-1})."
@@ -101,7 +82,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 4 */}
       <PlotCard
         title="4. Return Distribution Plot"
         description="Histograms of return frequency mapping dispersion spread."
@@ -116,8 +96,8 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
           const chartData = eda.data.return_distribution[firstTicker] || [];
           return (
             <BarChart
-              xAxis={[{ data: chartData.map(d => d.bin), scaleType: 'band' }]}
-              series={[{ data: chartData.map(d => d.frequency), color: '#3b82f6', label: `${firstTicker} Return Bins` }]}
+              xAxis={[{ data: chartData.map((d) => d.bin), scaleType: 'band' }]}
+              series={[{ data: chartData.map((d) => d.frequency), color: '#3b82f6', label: `${firstTicker} Return Bins` }]}
               height={240}
               margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
             />
@@ -125,7 +105,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         }}
       />
 
-      {/* Plot 5 */}
       <PlotCard
         title="5. Boxplot of Daily Returns by Ticker"
         description="Visualizes standard quartiles (Min, Q1, Median, Q3, Max) for return dispersion."
@@ -138,7 +117,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         renderChart={() => <BoxplotLikeChart data={eda.data.boxplot_returns} />}
       />
 
-      {/* Plot 6 */}
       <PlotCard
         title="6. Rolling Volatility Plot"
         description="20-day rolling standard deviation of daily log returns annualized (multiplied by sqrt(252))."
@@ -158,7 +136,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 7 */}
       <PlotCard
         title="7. Rolling Mean Return Plot"
         description="20-day rolling average return of daily log returns."
@@ -178,7 +155,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 8 */}
       <PlotCard
         title="8. Cumulative Return Plot"
         description="Total compound growth curves calculated as exp(cumsum(returns)) - 1."
@@ -198,7 +174,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 9 */}
       <PlotCard
         title="9. Missing Data Heatmap"
         description="Analyzes missing price observations over the historical window to monitor data quality."
@@ -218,7 +193,6 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
         )}
       />
 
-      {/* Plot 10 */}
       <PlotCard
         title="10. Outlier Return Detection Plot"
         description="Scatter plot identifying points where absolute Z-score of log return exceeds 2.0."
@@ -233,8 +207,10 @@ export default function DataEdaTab({ universe, datePreset, activeRegime }) {
           return (
             <ScatterChart
               series={tickers.map((t) => ({
-                data: outlierData.filter(d => d.ticker === t).map(d => ({ x: new Date(d.date), y: d.logReturn, id: d.date })),
-                label: t
+                data: outlierData
+                  .filter((d) => d.ticker === t)
+                  .map((d) => ({ x: new Date(d.date), y: d.logReturn, id: d.date })),
+                label: t,
               }))}
               height={240}
               margin={{ top: 20, bottom: 30, left: 40, right: 10 }}
