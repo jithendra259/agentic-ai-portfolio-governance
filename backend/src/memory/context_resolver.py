@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from src.intent.intent_router import IntentRouter
+from src.memory.continuity import recover_state_from_chat_history
 from src.memory.intent_lock import build_intent_lock
 from src.memory.pending_action_manager import apply_pending_action, build_equal_weight_pending_action
 from src.memory.planner import GovernanceTaskPlanner
@@ -119,7 +120,7 @@ class ContextResolver:
         session_state: dict[str, Any],
         chat_history_last_25: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        state = dict(session_state or {})
+        state = recover_state_from_chat_history(dict(session_state or {}), chat_history_last_25)
         state, pending_status = apply_pending_action(state, message)
 
         previous_analysis = _previous_analysis_from_state(state)
@@ -243,6 +244,7 @@ class ContextResolver:
                 "active_date_range": resolved_state.get("active_date_range"),
                 "plot_request": plot_request,
                 "policy": PROJECT_POLICY_MEMORY,
+                "continuity_memory": resolved_state.get("continuity_memory"),
             },
             "intent_lock": intent_lock,
             "pending_action": resolved_state.get("pending_action"),

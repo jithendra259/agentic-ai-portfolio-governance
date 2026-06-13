@@ -80,7 +80,8 @@ class SupabaseChatMemoryTests(unittest.TestCase):
         self.assertEqual(params[0], "session-1")
         self.assertEqual(params[1], "user")
         self.assertEqual(params[2], "Plot AAPL")
-        self.assertIn("mistral:latest", params[3])
+        self.assertIsNone(params[3])
+        self.assertIn("mistral:latest", params[4])
 
     def test_list_chat_messages_returns_chronological_ui_payload(self):
         created_at = datetime(2026, 6, 2, tzinfo=timezone.utc)
