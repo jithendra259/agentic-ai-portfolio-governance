@@ -11,6 +11,7 @@ import {
   prepareYAxis,
   prepareMargins,
 } from './lineChartUtils';
+import { dateScaleType, formatChartDate } from '../../../utils/plotDataParser.js';
 
 export default function LineChartRenderer({ spec }) {
   const { dataset, series, yAxisConfig, margins } = useMemo(() => {
@@ -25,7 +26,7 @@ export default function LineChartRenderer({ spec }) {
     const specText = `${spec?.title || ''} ${spec?.plot_id || ''} ${spec?.chart_type || ''}`.toLowerCase();
     const inferredArea = spec.area === true || specText.includes('area') || specText.includes('drawdown');
 
-    const dataset = prepareDataset(spec.series);
+    const dataset = prepareDataset(spec.series, spec);
     const series = prepareSeries(spec, inferredArea);
     const yAxisConfig = prepareYAxis(spec);
     const margins = prepareMargins(spec);
@@ -65,9 +66,10 @@ export default function LineChartRenderer({ spec }) {
         xAxis={[{ 
           id: 'x-axis', 
           dataKey: 'date', 
-          scaleType: 'time', 
+          scaleType: dateScaleType(spec), 
           tickLabelStyle: AXIS_STYLE, 
           label: spec.x_label || 'Date',
+          valueFormatter: (date) => formatChartDate(date, spec),
           ...(spec.zoom ? { zoom: spec.zoom } : {}),
         }]}
         yAxis={yAxisConfig}

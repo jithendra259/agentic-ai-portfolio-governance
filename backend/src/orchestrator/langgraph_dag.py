@@ -7,13 +7,13 @@ orchestrator for deterministic Agent 1 -> Agent 2 -> Agent 3 -> Agent 4 runs.
 
 from typing import NotRequired, TypedDict
 
-import pandas as pd
 from langgraph.graph import END, StateGraph
 
 from src.agents.explainer_a4 import GenerativeExplainerAgent
 from src.agents.graph_rag_a2 import GraphRAGAgent
 from src.agents.optimizer_a3 import GCVaROptimizerAgent
 from src.agents.time_series_a1 import TimeSeriesAgent
+from src.memory.artifact_store import ArtifactStore
 from src.memory.state_sanitizer import sanitize_for_mongodb
 
 
@@ -22,8 +22,8 @@ class PortfolioState(TypedDict):
     target_date: str
 
     # Agent 1 outputs
-    returns_df: NotRequired[pd.DataFrame]
-    covariance_matrix: NotRequired[pd.DataFrame]
+    returns_artifact_id: NotRequired[str]
+    covariance_matrix_artifact_id: NotRequired[str]
     instability_index: NotRequired[float]
     raw_instability_index: NotRequired[float]
     retained_assets: NotRequired[list[str]]
@@ -33,7 +33,7 @@ class PortfolioState(TypedDict):
     mean_drawdown: NotRequired[float]
 
     # Agent 2 outputs
-    c_vector: NotRequired[pd.Series]
+    c_vector_artifact_id: NotRequired[str]
     graph_method_used: NotRequired[str]
     graph_fallback_applied: NotRequired[bool]
     graph_node_count: NotRequired[int]
@@ -43,7 +43,8 @@ class PortfolioState(TypedDict):
     graph_context: NotRequired[dict]
 
     # Agent 3 outputs
-    optimal_weights: NotRequired[pd.Series]
+    optimal_weights_artifact_id: NotRequired[str]
+    strategy_weights_artifact_id: NotRequired[str]
     strategy_weights: NotRequired[dict]
     lambda_t: NotRequired[float]
     turnover: NotRequired[dict]
@@ -65,8 +66,9 @@ class SupervisoryOrchestrator:
     LangGraph state machine for deterministic graph-governed portfolio runs.
     """
 
-    def __init__(self, db_collection):
+    def __init__(self, db_collection, artifact_store: ArtifactStore | None = None):
         self.db_collection = db_collection
+        self.artifact_store = artifact_store or ArtifactStore()
         self.agent1 = TimeSeriesAgent(db_collection)
         self.agent2 = GraphRAGAgent(db_collection)
         self.agent3 = GCVaROptimizerAgent()
@@ -101,10 +103,20 @@ class SupervisoryOrchestrator:
             universe_id=state["universe_id"],
             target_date_str=state["target_date"],
         )
+        returns_artifact_id = self.artifact_store.save(
+            result["returns_df"],
+            kind="returns_df",
+            metadata={"universe_id": state["universe_id"], "target_date": state["target_date"]},
+        )
+        covariance_artifact_id = self.artifact_store.save(
+            result["covariance_matrix"],
+            kind="covariance_matrix",
+            metadata={"universe_id": state["universe_id"], "target_date": state["target_date"]},
+        )
         return sanitize_for_mongodb({
             **state,
-            "returns_df": result["returns_df"],
-            "covariance_matrix": result["covariance_matrix"],
+            "returns_artifact_id": returns_artifact_id,
+            "covariance_matrix_artifact_id": covariance_artifact_id,
             "instability_index": result["instability_index"],
             "raw_instability_index": result["raw_instability_index"],
             "retained_assets": result.get("retained_assets", []),
@@ -116,9 +128,14 @@ class SupervisoryOrchestrator:
 
     def run_agent_2(self, state: PortfolioState):
         result = self.agent2.execute(universe_id=state["universe_id"])
+        c_vector_artifact_id = self.artifact_store.save(
+            result["c_vector"],
+            kind="c_vector",
+            metadata={"universe_id": state["universe_id"]},
+        )
         return sanitize_for_mongodb({
             **state,
-            "c_vector": result["c_vector"],
+            "c_vector_artifact_id": c_vector_artifact_id,
             "graph_method_used": result["method_used"],
             "graph_fallback_applied": result["fallback_applied"],
             "graph_node_count": result["graph_node_count"],
@@ -129,16 +146,37 @@ class SupervisoryOrchestrator:
         })
 
     def run_agent_3(self, state: PortfolioState):
+        returns_df = self.artifact_store.load(state["returns_artifact_id"])
+        c_vector = self.artifact_store.load(state["c_vector_artifact_id"])
+        previous_weights = (
+            self.artifact_store.load(state["optimal_weights_artifact_id"])
+            if state.get("optimal_weights_artifact_id")
+            else None
+        )
         result = self.agent3.execute(
-            returns_df=state["returns_df"],
-            c_vector=state["c_vector"],
+            returns_df=returns_df,
+            c_vector=c_vector,
             I_t=state["instability_index"],
-            previous_weights=state.get("optimal_weights"),
+            previous_weights=previous_weights,
+        )
+        optimal_weights_artifact_id = self.artifact_store.save(
+            result["optimal_weights"],
+            kind="optimal_weights",
+            metadata={"universe_id": state["universe_id"], "target_date": state["target_date"]},
+        )
+        strategy_weights_artifact_id = self.artifact_store.save(
+            result.get("strategy_weights", {}),
+            kind="strategy_weights",
+            metadata={"universe_id": state["universe_id"], "target_date": state["target_date"]},
         )
         return sanitize_for_mongodb({
             **state,
-            "optimal_weights": result["optimal_weights"],
-            "strategy_weights": result.get("strategy_weights", {}),
+            "optimal_weights_artifact_id": optimal_weights_artifact_id,
+            "strategy_weights_artifact_id": strategy_weights_artifact_id,
+            "strategy_weights": {
+                name: sanitize_for_mongodb(series)
+                for name, series in (result.get("strategy_weights") or {}).items()
+            },
             "lambda_t": result["lambda_t"],
             "turnover": result.get("turnover", {}),
             "hitl_required": result.get("hitl_required", False),
@@ -169,7 +207,12 @@ class SupervisoryOrchestrator:
         return "calm_market"
 
     def run_agent_4(self, state: PortfolioState):
-        result = self.agent4.execute(state)
+        explainer_state = {
+            **state,
+            "c_vector": self.artifact_store.load(state["c_vector_artifact_id"]),
+            "optimal_weights": self.artifact_store.load(state["optimal_weights_artifact_id"]),
+        }
+        result = self.agent4.execute(explainer_state)
         return sanitize_for_mongodb({**state, "hitl_report": result["hitl_report"]})
 
     def run_monthly_cycle(self, universe_id: str, target_date: str):

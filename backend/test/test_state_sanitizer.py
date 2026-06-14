@@ -7,7 +7,11 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.memory.state_sanitizer import SanitizingCheckpointer, sanitize_for_mongodb
+from src.memory.state_sanitizer import (
+    SanitizingCheckpointer,
+    reconstruct_from_mongodb,
+    sanitize_for_mongodb,
+)
 
 
 @dataclass
@@ -59,6 +63,12 @@ class StateSanitizerTests(unittest.TestCase):
         self.assertEqual(sorted(sanitized["symbols"]), ["AAPL", "MSFT"])
         self.assertEqual(sanitized["bundle"]["value"], "1.247")
 
+    def test_sanitizes_deque(self):
+        from collections import deque
+        dq = deque([Decimal("1.23"), "abc"])
+        sanitized = sanitize_for_mongodb(dq)
+        self.assertEqual(sanitized, ["1.23", "abc"])
+
     def test_sanitizing_checkpointer_scrubs_checkpoint_payload(self):
         fake = FakeCheckpointer()
         wrapper = SanitizingCheckpointer(fake)
@@ -97,6 +107,27 @@ class StateSanitizerTests(unittest.TestCase):
         self.assertIs(fake.put_writes_args[0], config)
         json.dumps(fake.put_writes_args[1])
         self.assertEqual(fake.put_writes_args[1][0][1]["beta"], 1.247)
+
+    def test_sanitizing_checkpointer_is_base_checkpoint_saver(self):
+        from langgraph.checkpoint.base import BaseCheckpointSaver
+        fake = FakeCheckpointer()
+        wrapper = SanitizingCheckpointer(fake)
+        self.assertTrue(isinstance(wrapper, BaseCheckpointSaver))
+
+    def test_reconstruct_from_mongodb_restores_explicit_markers(self):
+        restored = reconstruct_from_mongodb(
+            {
+                "frame": {"__type__": "DataFrame", "data": [{"ticker": "AAPL", "close": 201.5}]},
+                "series": {"__type__": "Series", "name": "weights", "data": {"AAPL": 0.6}},
+                "value": {"__type__": "Decimal", "value": "1.247"},
+                "timestamp": {"__type__": "datetime", "value": "2026-06-14T12:00:00+00:00"},
+            }
+        )
+
+        self.assertEqual(restored["frame"].iloc[0]["ticker"], "AAPL")
+        self.assertEqual(restored["series"].name, "weights")
+        self.assertEqual(str(restored["value"]), "1.247")
+        self.assertEqual(restored["timestamp"].isoformat(), "2026-06-14T12:00:00+00:00")
 
 
 if __name__ == "__main__":

@@ -11,21 +11,31 @@ import {
   toFiniteNumber,
   getValueFormatter,
 } from './scatterChartUtils';
+import { dateParseMode, dateScaleType, formatChartDate, parseDateValue } from '../../../utils/plotDataParser.js';
 import ScatterRegressionLine from './ScatterRegressionLine';
 
 export default function ScatterChartRenderer({ spec }) {
+  const xIsTime = spec?.x_type === 'time' || spec?.x_type === 'utc' || spec?.x_type === 'date_only' || spec?.x_scale === 'time';
+  const xDateMode = dateParseMode(spec);
   const series = useMemo(() => {
     if (!spec?.series || !Array.isArray(spec.series)) return [];
     return spec.series.map((s, i) => {
-      const dataPoints = (s.data || []).map((pt, j) => ({
-        x: toFiniteNumber(pt.x),
-        y: toFiniteNumber(pt.y),
-        id: pt.id !== undefined ? pt.id : `pt-${j}`,
-        label: pt.label,
-        ...(pt.z !== undefined ? { z: toFiniteNumber(pt.z) } : {}),
-        ...(pt.sizeValue !== undefined ? { sizeValue: toFiniteNumber(pt.sizeValue) } : {}),
-        ...(pt.colorValue !== undefined ? { colorValue: pt.colorValue } : {}),
-      }));
+      const dataPoints = (s.data || [])
+        .map((pt, j) => {
+          const x = xIsTime ? parseDateValue(pt.x ?? pt.date, { mode: xDateMode }) : toFiniteNumber(pt.x);
+          const y = toFiniteNumber(pt.y);
+          if (x == null || y == null) return null;
+          return {
+            x,
+            y,
+            id: pt.id !== undefined ? pt.id : `pt-${j}`,
+            label: pt.label,
+            ...(pt.z !== undefined ? { z: toFiniteNumber(pt.z) } : {}),
+            ...(pt.sizeValue !== undefined ? { sizeValue: toFiniteNumber(pt.sizeValue) } : {}),
+            ...(pt.colorValue !== undefined ? { colorValue: pt.colorValue } : {}),
+          };
+        })
+        .filter(Boolean);
       const entry = {
         id: s.id || s.name || `scatter-${i}`,
         type: 'scatter',
@@ -41,7 +51,7 @@ export default function ScatterChartRenderer({ spec }) {
       else if (spec.highlightScope) entry.highlightScope = spec.highlightScope;
       return entry;
     });
-  }, [spec]);
+  }, [spec, xIsTime]);
 
   const xAxisConfig = useMemo(() => {
     if (spec.xAxis && Array.isArray(spec.xAxis)) {
@@ -50,11 +60,20 @@ export default function ScatterChartRenderer({ spec }) {
         tickLabelStyle: AXIS_STYLE,
         valueFormatter: ax.valueFormatter || getValueFormatter(ax.value_format || spec.x_format || spec.x_unit),
         label: ax.label || spec.x_label || spec.x_axis || '',
+        scaleType: ax.scaleType || (xIsTime ? dateScaleType(spec) : undefined),
         domainLimit: ax.domainLimit || 'nice',
       }));
     }
-    return [{ tickLabelStyle: AXIS_STYLE, label: spec.x_label || '', valueFormatter: getValueFormatter(spec.x_format || spec.x_unit), domainLimit: 'nice' }];
-  }, [spec]);
+    return [{
+      tickLabelStyle: AXIS_STYLE,
+      label: spec.x_label || '',
+      valueFormatter: xIsTime
+        ? (date) => formatChartDate(date, spec)
+        : getValueFormatter(spec.x_format || spec.x_unit),
+      scaleType: xIsTime ? dateScaleType(spec) : undefined,
+      domainLimit: 'nice',
+    }];
+  }, [spec, xIsTime]);
 
   const yAxisConfig = useMemo(() => {
     if (spec.yAxis && Array.isArray(spec.yAxis)) {

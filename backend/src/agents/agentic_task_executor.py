@@ -89,6 +89,8 @@ class AgenticExecutorState(TypedDict, total=False):
     iteration: int
     max_iterations: int
     total_tokens_used: int
+    remaining_token_budget: int
+    estimated_cost_usd: float
     max_token_budget: int
     budget_depleted: bool
     critic_decision: str
@@ -1052,6 +1054,8 @@ class AgenticTaskExecutor:
             'max_iterations': 50,  # Prevent infinite execution
             'total_tokens_used': 0,
             'max_token_budget': int((context or {}).get('max_token_budget') or DEFAULT_MAX_TOKEN_BUDGET),
+            'remaining_token_budget': int((context or {}).get('max_token_budget') or DEFAULT_MAX_TOKEN_BUDGET),
+            'estimated_cost_usd': 0.0,
             'budget_depleted': False,
             'execution_history': [],
         }
@@ -1157,6 +1161,8 @@ class AgenticTaskExecutor:
                     **token_updates,
                     'budget_depleted': True,
                     'total_tokens_used': budget_check.total_tokens_used,
+                    'remaining_token_budget': budget_check.remaining_token_budget,
+                    'estimated_cost_usd': budget_check.estimated_cost_usd,
                 }
                 break
 
@@ -1289,6 +1295,8 @@ class AgenticTaskExecutor:
                 critic_decision='success',
                 budget_depleted=True,
                 total_tokens_used=state.get('total_tokens_used'),
+                remaining_token_budget=state.get('remaining_token_budget'),
+                estimated_cost_usd=state.get('estimated_cost_usd'),
             )
         
         if not task_id:
@@ -1548,6 +1556,8 @@ class AgenticTaskExecutor:
             ),
             'budget': {
                 'total_tokens_used': budget_check.total_tokens_used,
+                'remaining_token_budget': budget_check.remaining_token_budget,
+                'estimated_cost_usd': budget_check.estimated_cost_usd,
                 'estimated_next_context_tokens': budget_check.estimated_context_tokens,
                 'max_token_budget': budget_check.max_token_budget,
             },

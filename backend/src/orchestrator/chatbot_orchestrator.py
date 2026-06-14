@@ -19,8 +19,10 @@ try:
 except Exception:  # pragma: no cover - fallback for environments missing mongodb checkpointer package
     MongoDBSaver = None
 
-from langgraph.checkpoint.postgres import PostgresSaver
-from psycopg_pool import ConnectionPool
+try:
+    from langgraph.checkpoint.postgres import PostgresSaver
+except Exception:  # pragma: no cover - fallback for environments missing postgres checkpointer package
+    PostgresSaver = None
 
 # Import MongoDB-backed historical tools only.
 from src.agents.history_tools import get_user_analysis_history, get_detailed_past_weights
@@ -40,7 +42,6 @@ from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
-from src.memory.state_sanitizer import wrap_checkpointer_for_mongodb
 from src.providers.ashna_provider import normalize_ashna_base_url
 from src.rag.rag_tools import (
     compare_common_institutional_holders,
@@ -151,7 +152,7 @@ def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
 
     # 2. Initialize PostgresSaver checkpointer using Supabase connection pool
     checkpointer = None
-    if postgres_url:
+    if postgres_url and PostgresSaver is not None:
         try:
             from src.memory.mongodb_memory_layer import _test_and_get_pool
             pool = _test_and_get_pool(postgres_url)
@@ -180,7 +181,7 @@ def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
             logger.info("Using MemorySaver fallback checkpointer.")
             checkpointer = MemorySaver()
 
-    return memory_manager, wrap_checkpointer_for_mongodb(checkpointer)
+    return memory_manager, checkpointer
 
 
 memory_manager, checkpointer = _init_mongo_memory()
@@ -1425,6 +1426,6 @@ portfolio_assistant = builder.compile(checkpointer=checkpointer)
 # The installed sync PostgresSaver does not implement async checkpoint reads.
 # Streaming routes use a process-local async-safe checkpointer while the API
 # persists user-visible conversation history separately in Supabase.
-streaming_portfolio_assistant = builder.compile(checkpointer=wrap_checkpointer_for_mongodb(MemorySaver()))
+streaming_portfolio_assistant = builder.compile(checkpointer=MemorySaver())
 
 print("Conversational Agentic Supervisor Initialized with Memory!")

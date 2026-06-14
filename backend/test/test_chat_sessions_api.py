@@ -266,6 +266,39 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertTrue(all(call["user_id"] == "user-1" for call in fake_memory.append_calls))
         self.assertEqual(fake_memory.last_messages_user_id, "user-1")
 
+    def test_chat_start_dispatches_background_run_and_records_status(self):
+        import api.main as main
+
+        token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        main.CHAT_RUNS.clear()
+        try:
+            client = TestClient(app)
+            response = client.post(
+                "/chat/start",
+                headers={"Authorization": f"Bearer {token}"},
+                json={
+                    "session_id": "background-session-1",
+                    "user_message": "Run APG-Bench Test 1: Data Quality.",
+                    "model": None,
+                },
+            )
+            payload = response.json()
+            status_response = client.get(f"/chat/runs/{payload['thread_id']}")
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(payload["status"], "started")
+        self.assertEqual(payload["session_id"], "background-session-1")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "completed")
+        self.assertIn("response", status_response.json())
+        self.assertTrue(fake_memory.append_calls)
+        self.assertTrue(all(call["user_id"] == "user-1" for call in fake_memory.append_calls))
+
     def test_plot_line_fixture_returns_mui_line_spec(self):
         client = TestClient(app)
         response = client.get("/api/plots/test-line")

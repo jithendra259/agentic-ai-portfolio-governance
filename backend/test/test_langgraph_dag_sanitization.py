@@ -3,6 +3,7 @@ import unittest
 
 import pandas as pd
 
+from src.memory.artifact_store import ArtifactStore
 from src.orchestrator.langgraph_dag import SupervisoryOrchestrator
 
 
@@ -25,12 +26,20 @@ class LangGraphDagSanitizationTests(unittest.TestCase):
     def test_agent_1_return_state_is_json_safe(self):
         orchestrator = object.__new__(SupervisoryOrchestrator)
         orchestrator.agent1 = FakeAgent1()
+        orchestrator.artifact_store = ArtifactStore(mongo_uri="")
 
         state = orchestrator.run_agent_1({"universe_id": "U1", "target_date": "2025-12-31"})
 
         json.dumps(state)
-        self.assertEqual(state["returns_df"][0]["AAPL"], 0.01)
-        self.assertEqual(state["covariance_matrix"][0]["MSFT"], 0.01)
+        self.assertIn("returns_artifact_id", state)
+        self.assertIn("covariance_matrix_artifact_id", state)
+        self.assertNotIn("returns_df", state)
+        self.assertNotIn("covariance_matrix", state)
+
+        returns_df = orchestrator.artifact_store.load(state["returns_artifact_id"])
+        covariance_matrix = orchestrator.artifact_store.load(state["covariance_matrix_artifact_id"])
+        self.assertEqual(float(returns_df.iloc[0]["AAPL"]), 0.01)
+        self.assertEqual(float(covariance_matrix.iloc[0]["MSFT"]), 0.01)
 
 
 if __name__ == "__main__":

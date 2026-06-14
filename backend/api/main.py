@@ -5,6 +5,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -68,7 +69,7 @@ if __name__ == "__main__" and _is_port_open("127.0.0.1", 8000):
     sys.exit(1)
 
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
@@ -307,6 +308,21 @@ class ChatResponse(BaseModel):
     response: str
 
 
+class ChatStartResponse(BaseModel):
+    status: str
+    thread_id: str
+    session_id: str
+
+
+class ChatRunStatusResponse(BaseModel):
+    thread_id: str
+    session_id: str
+    status: str
+    response: str | None = None
+    error: str | None = None
+    updated_at: str
+
+
 class ChatMessageResponse(BaseModel):
     id: str
     role: str
@@ -345,6 +361,9 @@ class ClaimLegacyChatSessionsResponse(BaseModel):
 class DeleteChatSessionResponse(BaseModel):
     session_id: str
     deleted_count: int
+
+
+CHAT_RUNS: dict[str, dict[str, Any]] = {}
 
 
 def _message_to_text(message: Any) -> str:
@@ -521,6 +540,178 @@ def _persist_memory_response(
         "response_contract": {k: v for k, v in contract.items() if k != "debug_user_message"},
     }
     _persist_chat_message(session_id, "assistant", response_text, metadata=enriched_metadata, user_id=user_id)
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _set_chat_run(thread_id: str, **updates: Any) -> dict[str, Any]:
+    run = CHAT_RUNS.setdefault(
+        thread_id,
+        {
+            "thread_id": thread_id,
+            "session_id": thread_id,
+            "status": "queued",
+            "created_at": _utc_now_iso(),
+            "updated_at": _utc_now_iso(),
+            "events": [],
+        },
+    )
+    run.update(updates)
+    run["updated_at"] = _utc_now_iso()
+    event = {
+        "type": updates.get("event_type") or "status",
+        "status": run.get("status"),
+        "message": updates.get("message") or updates.get("status"),
+        "updated_at": run["updated_at"],
+    }
+    run.setdefault("events", []).append(event)
+    run["events"] = run["events"][-100:]
+    return run
+
+
+def _process_agentic_chat_job(
+    *,
+    thread_id: str,
+    request: ChatRequest,
+    user_id: str | None,
+) -> None:
+    _set_chat_run(
+        thread_id,
+        session_id=request.session_id,
+        status="running",
+        stage="memory",
+        message="Saving message and loading conversation memory",
+    )
+    _persist_chat_message(
+        request.session_id,
+        "user",
+        request.user_message,
+        metadata={"model": request.model, "transport": "background", "thread_id": thread_id},
+        user_id=user_id,
+    )
+    resolved_memory = _resolve_chat_memory(request.session_id, request.user_message, user_id=user_id)
+
+    fast_path_builders = [
+        ("pending_action", lambda: build_pending_execution_response(resolved_memory), True),
+        ("direct_context", lambda: build_direct_context_response(resolved_memory), True),
+        ("memory_missing_input", lambda: build_missing_input_response(resolved_memory), False),
+        ("apg_bench", lambda: build_apg_bench_response(request.user_message), False),
+        ("stock_eda_full", lambda: build_full_stock_eda_response(request.user_message), False),
+        ("plot_prompt", lambda: build_plot_prompt_response(request.user_message), False),
+        (
+            "regime_only",
+            lambda: build_regime_only_response(
+                request.user_message,
+                previous_analysis={
+                    "analysis_id": resolved_memory.get("session_state", {}).get("active_analysis_id"),
+                    "entities": {
+                        "universe": resolved_memory.get("session_state", {}).get("active_universe"),
+                        "tickers": resolved_memory.get("session_state", {}).get("active_tickers", []),
+                        "current_weights": resolved_memory.get("session_state", {}).get("active_weights", {}).get("weights", {}),
+                        "start_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("start"),
+                        "end_date": resolved_memory.get("session_state", {}).get("active_date_range", {}).get("end"),
+                    },
+                },
+            ),
+            False,
+        ),
+    ]
+
+    for fast_path, builder, attach_plot in fast_path_builders:
+        response_text = builder()
+        if response_text is None:
+            continue
+        if attach_plot:
+            response_text = _attach_inline_plot_tokens(request.session_id, response_text, resolved_memory)
+        _persist_memory_response(
+            request.session_id,
+            response_text,
+            resolved_memory,
+            metadata={
+                "model": request.model,
+                "transport": "background",
+                "router_fast_path": fast_path,
+                "thread_id": thread_id,
+            },
+            user_id=user_id,
+        )
+        _set_chat_run(
+            thread_id,
+            status="completed",
+            event_type="final_response",
+            response=response_text,
+            message="Completed from deterministic fast path",
+        )
+        return
+
+    _set_chat_run(
+        thread_id,
+        status="running",
+        stage="agent",
+        message="Running LangGraph portfolio assistant in background",
+    )
+    result = portfolio_assistant.invoke(
+        {"messages": [HumanMessage(content=request.user_message)]},
+        config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
+    )
+
+    messages = result.get("messages", []) if isinstance(result, dict) else []
+    if not messages:
+        response_text = "Unable to generate a response for this request."
+    else:
+        response_text = _message_to_text(messages[-1])
+
+    from src.agents.plot_store import GLOBAL_PLOT_IDS
+
+    plot_ids = GLOBAL_PLOT_IDS.pop(request.session_id, None)
+    if plot_ids:
+        if isinstance(plot_ids, str):
+            plot_ids = [plot_ids]
+        for plot_id in plot_ids:
+            response_text += f"\n{PLOT_TOKEN}{plot_id}"
+
+    _persist_memory_response(
+        request.session_id,
+        response_text,
+        resolved_memory,
+        metadata={
+            "model": request.model,
+            "transport": "background",
+            "thread_id": thread_id,
+            "plot_ids": plot_ids or [],
+        },
+        user_id=user_id,
+    )
+    _set_chat_run(
+        thread_id,
+        status="completed",
+        event_type="final_response",
+        response=response_text,
+        message="Agentic run completed",
+    )
+
+
+def _run_chat_background(thread_id: str, request_payload: dict[str, Any], user_id: str | None) -> None:
+    try:
+        request = ChatRequest(**request_payload)
+        _process_agentic_chat_job(thread_id=thread_id, request=request, user_id=user_id)
+    except Exception as exc:
+        logger.exception("Background chat run failed for thread_id=%s", thread_id)
+        _set_chat_run(
+            thread_id,
+            status="failed",
+            event_type="error",
+            error=str(exc) or exc.__class__.__name__,
+            message=f"Background run failed: {str(exc) or exc.__class__.__name__}",
+        )
+
+
+def _sse_event(payload: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(payload, default=str)}\n\n".encode("utf-8")
 
 
 def _audit_resolved_memory(session_id: str, message: str, resolved: dict[str, Any]) -> None:
@@ -719,6 +910,110 @@ def auth_logout():
 @app.get("/audit/recent")
 def recent_audit_records(limit: int = 100) -> dict[str, Any]:
     return {"records": GLOBAL_AUDIT_LOGGER.recent(limit=limit)}
+
+
+@app.post("/chat/start", response_model=ChatStartResponse, status_code=202)
+@app.post("/api/chat/start", response_model=ChatStartResponse, status_code=202)
+async def start_chat_run(
+    request: ChatRequest,
+    http_request: Request,
+    background_tasks: BackgroundTasks,
+) -> ChatStartResponse:
+    if not request.session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id cannot be empty")
+
+    if not request.user_message.strip():
+        raise HTTPException(status_code=400, detail="user_message cannot be empty")
+
+    user_id = get_current_user_id(http_request)
+    thread_id = f"run-{uuid.uuid4().hex}"
+    _set_chat_run(
+        thread_id,
+        session_id=request.session_id,
+        status="queued",
+        stage="queued",
+        message="Agentic run queued",
+    )
+    request_payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
+    background_tasks.add_task(_run_chat_background, thread_id, request_payload, user_id)
+    return ChatStartResponse(status="started", thread_id=thread_id, session_id=request.session_id)
+
+
+@app.get("/chat/runs/{thread_id}", response_model=ChatRunStatusResponse)
+@app.get("/api/chat/runs/{thread_id}", response_model=ChatRunStatusResponse)
+def get_chat_run_status(thread_id: str) -> ChatRunStatusResponse:
+    run = CHAT_RUNS.get(thread_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="chat run not found")
+    return ChatRunStatusResponse(
+        thread_id=thread_id,
+        session_id=str(run.get("session_id") or thread_id),
+        status=str(run.get("status") or "unknown"),
+        response=run.get("response"),
+        error=run.get("error"),
+        updated_at=str(run.get("updated_at") or ""),
+    )
+
+
+@app.get("/chat/events/{thread_id}")
+@app.get("/api/chat/stream/{thread_id}")
+async def stream_chat_run_events(thread_id: str) -> StreamingResponse:
+    async def event_generator():
+        import asyncio
+
+        last_event_count = 0
+        while True:
+            run = CHAT_RUNS.get(thread_id)
+            if not run:
+                yield _sse_event(
+                    {
+                        "type": "heartbeat",
+                        "thread_id": thread_id,
+                        "status": "initializing",
+                        "message": "Waiting for background run to initialize",
+                    }
+                )
+                await asyncio.sleep(2)
+                continue
+
+            events = run.get("events", [])
+            for event in events[last_event_count:]:
+                yield _sse_event({"thread_id": thread_id, **event})
+            last_event_count = len(events)
+
+            status = run.get("status")
+            if status == "completed":
+                yield _sse_event(
+                    {
+                        "type": "final_response",
+                        "thread_id": thread_id,
+                        "status": "completed",
+                        "content": run.get("response") or "",
+                    }
+                )
+                break
+            if status == "failed":
+                yield _sse_event(
+                    {
+                        "type": "error",
+                        "thread_id": thread_id,
+                        "status": "failed",
+                        "error": run.get("error") or "Unknown background run failure",
+                    }
+                )
+                break
+
+            yield _sse_event(
+                {
+                    "type": "heartbeat",
+                    "thread_id": thread_id,
+                    "status": status or "running",
+                    "message": run.get("message") or "Agentic run is still active",
+                }
+            )
+            await asyncio.sleep(2)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.post("/chat", response_model=ChatResponse)

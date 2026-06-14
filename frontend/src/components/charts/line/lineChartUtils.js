@@ -1,3 +1,6 @@
+import { formatFinancialValue } from '../../../utils/formatters.js';
+import { dateParseMode, parseDateValue } from '../../../utils/plotDataParser.js';
+
 export const PALETTE = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 export const AXIS_STYLE = { fill: '#9ca3af', fontSize: 11 };
 export const GRID_STYLE = { stroke: '#374151', strokeDasharray: '4 4' };
@@ -8,29 +11,34 @@ export function toFiniteNumber(value, fallback = 0) {
 }
 
 export function getValueFormatter(format) {
-  if (format === 'percent' || format === '%') return (v) => (v == null ? '' : `${v.toFixed(1)}%`);
-  if (format === 'decimal') return (v) => (v == null ? '' : Number(v).toFixed(2));
-  if (format === 'beta') return (v) => (v == null ? '' : `${Number(v).toFixed(2)} beta`);
+  if (format === 'percent' || format === '%') return (v) => formatFinancialValue(v, 'percentPoints');
+  if (format === 'decimal') return (v) => formatFinancialValue(v, 'decimal');
+  if (format === 'beta') return (v) => formatFinancialValue(v, 'beta');
   if (format === 'k') return (v) => (v == null ? '' : `${(v / 1000).toFixed(1)}k`);
-  if (format === 'currency') return (v) => (v == null ? '' : `$${v.toLocaleString()}`);
+  if (format === 'currency') return (v) => formatFinancialValue(v, 'currency');
+  if (format === 'compactCurrency') return (v) => formatFinancialValue(v, 'compactCurrency');
   return (v) => {
-    if (v == null) return '';
-    if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
-    if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}k`;
-    return Number(v).toFixed(2);
+    const formatted = formatFinancialValue(v);
+    return formatted === '-' ? '' : formatted;
   };
 }
 
-export function prepareDataset(seriesSpec) {
+export function prepareDataset(seriesSpec, spec = {}) {
   if (!seriesSpec) return [];
+  const mode = dateParseMode(spec);
   const dateSet = new Set();
-  seriesSpec.forEach((s) => s.data?.forEach((pt) => dateSet.add(pt.x)));
+  seriesSpec.forEach((s) => s.data?.forEach((pt) => {
+    const date = parseDateValue(pt.x ?? pt.date, { mode });
+    if (date) dateSet.add(date.toISOString());
+  }));
   const sortedDates = Array.from(dateSet).sort();
   const byDate = {};
   sortedDates.forEach((d) => { byDate[d] = { date: new Date(d) }; });
   seriesSpec.forEach((s) => {
     s.data?.forEach((pt) => {
-      if (byDate[pt.x]) byDate[pt.x][s.name] = pt.y;
+      const date = parseDateValue(pt.x ?? pt.date, { mode });
+      const key = date?.toISOString();
+      if (key && byDate[key]) byDate[key][s.name] = toFiniteNumber(pt.y ?? pt.value, null);
     });
   });
   return sortedDates.map((d) => byDate[d]);
