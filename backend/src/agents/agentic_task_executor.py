@@ -16,20 +16,36 @@ import asyncio
 import hashlib
 import json
 import logging
+import operator
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Annotated, Any, Callable, Dict, List, Optional, Set, Tuple, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
 from pymongo import MongoClient
 
 from src.guardrails.loop_detector import SemanticLoopDetector
+from src.agents.state_reducers import append_list, merge_blackboard_state
+from src.agents.htn_plan_parser import (
+    PlanValidationError,
+    build_sequential_fallback_plan,
+    extract_task_descriptions,
+    parse_execution_plan,
+    validate_execution_plan,
+)
+from src.agents.token_budget import (
+    DEFAULT_MAX_TOKEN_BUDGET,
+    cap_tool_output,
+    check_token_budget,
+    update_token_ledger,
+)
 from src.memory.audit_log import GLOBAL_AUDIT_LOGGER
 from src.memory.calculation_scratchpad import CalculationScratchpad
+from src.memory.state_sanitizer import sanitize_for_mongodb
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +80,20 @@ class ActionType(Enum):
     OBSERVE = "observe"
     UPDATE_PLAN = "update_plan"
     REQUEST_HUMAN_INPUT = "request_human_input"
+
+
+class AgenticExecutorState(TypedDict, total=False):
+    blackboard: Annotated[Dict[str, Any], merge_blackboard_state]
+    goal: str
+    context: Annotated[Dict[str, Any], merge_blackboard_state]
+    iteration: int
+    max_iterations: int
+    total_tokens_used: int
+    max_token_budget: int
+    budget_depleted: bool
+    critic_decision: str
+    execution_history: Annotated[List[Dict[str, Any]], append_list]
+    messages: Annotated[List[Dict[str, Any]], operator.add]
 
 
 # ============================================================================
@@ -715,22 +745,93 @@ class HTNPlanner:
         return tasks
     
     def _llm_decompose(self, goal: str, context: Dict[str, Any]) -> List[TaskNode]:
-        """Use LLM to decompose a goal (stub for LLM integration)."""
-        # In production, this would call an LLM with a prompt like:
-        # "Break down this goal into executable steps: {goal}"
-        # Then parse the response into TaskNodes
-        
-        # Fallback: create a generic decomposition
-        base_task = TaskNode(
-            task_id=f"generic_{uuid4().hex[:8]}",
-            name="execute_goal",
-            description=goal,
-            priority=1,
-            tool_name="generic_executor",
-            metadata={'decomposition_method': 'llm_fallback'}
+        """Use LLM structured planning with validation and sequential fallback."""
+        if not self.llm_client:
+            return self._execution_plan_to_tasks(
+                build_sequential_fallback_plan(goal),
+                decomposition_method="sequential_fallback",
+            )
+
+        last_error = ""
+        fallback_steps: List[str] = []
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                prompt = self._build_planner_prompt(goal, context, last_error)
+                raw_plan = self._invoke_planner_llm(prompt)
+                fallback_steps = extract_task_descriptions(raw_plan) or fallback_steps
+                plan = validate_execution_plan(parse_execution_plan(raw_plan))
+                return self._execution_plan_to_tasks(
+                    plan,
+                    decomposition_method="llm_structured",
+                )
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning(
+                    "HTN plan generation failed on attempt %s/%s: %s",
+                    attempt,
+                    max_attempts,
+                    last_error,
+                )
+
+        logger.warning("HTN planner degraded to sequential fallback for goal: %s", goal)
+        return self._execution_plan_to_tasks(
+            build_sequential_fallback_plan(goal, fallback_steps),
+            decomposition_method="sequential_fallback",
+            error=last_error,
         )
-        
-        return [base_task]
+
+    def _invoke_planner_llm(self, prompt: str) -> Any:
+        if hasattr(self.llm_client, "with_structured_output"):
+            structured = self.llm_client.with_structured_output(dict)
+            return structured.invoke(prompt)
+        if hasattr(self.llm_client, "invoke"):
+            return self.llm_client.invoke(prompt)
+        if callable(self.llm_client):
+            return self.llm_client(prompt)
+        raise PlanValidationError("Planner LLM client must be callable or expose invoke()")
+
+    def _build_planner_prompt(
+        self,
+        goal: str,
+        context: Dict[str, Any],
+        previous_error: str = "",
+    ) -> str:
+        prompt = [
+            "Create a valid JSON execution DAG for this portfolio governance goal.",
+            f"Goal: {goal}",
+            f"Context: {json.dumps(context, sort_keys=True, default=str)}",
+            "Return schema: {\"goal\": str, \"nodes\": [{\"task_id\": str, \"description\": str, \"dependencies\": [str], \"name\": str, \"tool\": str}]}",
+            "The graph must be acyclic and every dependency must reference an existing task_id.",
+        ]
+        if previous_error:
+            prompt.append(f"Your previous plan failed validation with this error: {previous_error}. Fix it and try again.")
+        return "\n".join(prompt)
+
+    def _execution_plan_to_tasks(
+        self,
+        plan,
+        *,
+        decomposition_method: str,
+        error: str | None = None,
+    ) -> List[TaskNode]:
+        tasks: List[TaskNode] = []
+        for index, node in enumerate(plan.nodes, start=1):
+            task = TaskNode(
+                task_id=node.task_id,
+                name=node.name or node.task_id,
+                description=node.description,
+                priority=index,
+                depends_on=list(node.dependencies),
+                tool_name=node.tool or "generic_executor",
+                metadata={
+                    'decomposition_method': decomposition_method,
+                    'planner_goal': plan.goal,
+                    **({'planner_error': error} if error else {}),
+                },
+            )
+            tasks.append(task)
+        return tasks
     
     def _validate_dag(self, tasks: List[TaskNode]) -> None:
         """Validate that the task graph is a valid DAG (no cycles)."""
@@ -888,7 +989,7 @@ class AgenticTaskExecutor:
     def _build_graph(self) -> StateGraph:
         """Build the LangGraph state machine for task execution."""
         
-        workflow = StateGraph(dict)
+        workflow = StateGraph(AgenticExecutorState)
         
         # Add nodes for each phase
         workflow.add_node("planner", self._planner_node)
@@ -949,6 +1050,10 @@ class AgenticTaskExecutor:
             'context': context or {},
             'iteration': 0,
             'max_iterations': 50,  # Prevent infinite execution
+            'total_tokens_used': 0,
+            'max_token_budget': int((context or {}).get('max_token_budget') or DEFAULT_MAX_TOKEN_BUDGET),
+            'budget_depleted': False,
+            'execution_history': [],
         }
         
         # Execute via LangGraph
@@ -967,11 +1072,11 @@ class AgenticTaskExecutor:
         except asyncio.TimeoutError:
             logger.error(f"Goal execution timed out: {goal}")
             blackboard.status = "timeout"
-            return {'error': 'Execution timed out', 'blackboard': blackboard.to_dict()}
+            return sanitize_for_mongodb({'error': 'Execution timed out', 'blackboard': blackboard.to_dict()})
         except Exception as e:
             logger.error(f"Goal execution failed: {e}", exc_info=True)
             blackboard.status = "failed"
-            return {'error': str(e), 'blackboard': blackboard.to_dict()}
+            return sanitize_for_mongodb({'error': str(e), 'blackboard': blackboard.to_dict()})
     
     async def _planner_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1002,8 +1107,7 @@ class AgenticTaskExecutor:
         else:
             logger.info("No executable tasks found")
         
-        state['blackboard'] = blackboard.to_dict()
-        return state
+        return self._node_delta(state, blackboard, "planner")
     
     async def _executor_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1019,18 +1123,43 @@ class AgenticTaskExecutor:
         
         if not task_id:
             logger.warning("Executor called but no active task")
-            return state
+            return self._node_delta(state, blackboard, "executor:no_active_task")
         
         task = blackboard.get_task(task_id)
         if not task:
             logger.error(f"Active task {task_id} not found")
-            return state
+            return self._node_delta(state, blackboard, "executor:missing_task")
         
         logger.info(f"Executor starting ReAct loop for task: {task.name}")
         
         # ReAct loop
         max_react_steps = 10
+        token_updates: Dict[str, Any] = {}
         for step_num in range(1, max_react_steps + 1):
+            budget_check = check_token_budget(
+                {**state, **token_updates},
+                {
+                    'task': task.to_dict(),
+                    'blackboard_summary': blackboard.get_summary_context(max_steps=5),
+                    'scratchpad': blackboard.calculation_scratchpad.compact_summary(),
+                },
+                reserved_tokens=1_000,
+            )
+            if not budget_check.allowed:
+                logger.warning("Token budget depleted before executor step: %s", budget_check.reason)
+                cash_out = self._build_budget_depleted_observation(task, blackboard, budget_check)
+                task.status = TaskStatus.BLOCKED
+                task.error = cash_out['message']
+                task.result = cash_out
+                blackboard.failed_tasks.add(task_id)
+                blackboard.results[task_id] = cash_out
+                token_updates = {
+                    **token_updates,
+                    'budget_depleted': True,
+                    'total_tokens_used': budget_check.total_tokens_used,
+                }
+                break
+
             # Check for loops
             if self.guardrails.check_infinite_loop(blackboard.action_history):
                 logger.error("Infinite loop detected! Aborting task.")
@@ -1041,6 +1170,7 @@ class AgenticTaskExecutor:
             
             # THOUGHT: Reason about what to do
             thought = self._generate_thought(task, blackboard)
+            token_updates = update_token_ledger({**state, **token_updates}, response=thought)
             react_step = ReActStep(
                 step_number=step_num,
                 action_type=ActionType.THINK,
@@ -1050,6 +1180,11 @@ class AgenticTaskExecutor:
             
             # ACTION: Decide on action
             action = self._decide_action(task, blackboard, thought)
+            token_updates = update_token_ledger(
+                {**state, **token_updates},
+                prompt=thought,
+                response=action,
+            )
             
             if action is None:
                 # Task complete or needs human input
@@ -1110,6 +1245,11 @@ class AgenticTaskExecutor:
             
             # Execute action (call tool)
             observation = await self._execute_action(action, task, blackboard)
+            observation = cap_tool_output(observation)
+            token_updates = update_token_ledger(
+                {**state, **token_updates},
+                response=observation,
+            )
             
             react_step.action = action
             react_step.observation = observation
@@ -1126,8 +1266,7 @@ class AgenticTaskExecutor:
                 self._store_episodic_memory(task, observation, success=True)
                 break
         
-        state['blackboard'] = blackboard.to_dict()
-        return state
+        return self._node_delta(state, blackboard, "executor", **token_updates)
     
     async def _critic_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1140,9 +1279,20 @@ class AgenticTaskExecutor:
         
         blackboard.current_phase = "reviewing"
         task_id = blackboard.active_task_id
+
+        if state.get('budget_depleted'):
+            logger.warning("Critic ending execution because token budget is depleted")
+            return self._node_delta(
+                state,
+                blackboard,
+                "critic:budget_depleted",
+                critic_decision='success',
+                budget_depleted=True,
+                total_tokens_used=state.get('total_tokens_used'),
+            )
         
         if not task_id:
-            return state
+            return self._node_delta(state, blackboard, "critic:no_active_task")
         
         task = blackboard.get_task(task_id)
         logger.info(f"Critic reviewing task: {task.name}")
@@ -1171,8 +1321,12 @@ class AgenticTaskExecutor:
                 'result': task.result,
             })
         
-        state['blackboard'] = blackboard.to_dict()
-        return state
+        return self._node_delta(
+            state,
+            blackboard,
+            "critic",
+            critic_decision=state.get('critic_decision'),
+        )
     
     async def _recovery_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1197,8 +1351,7 @@ class AgenticTaskExecutor:
             ])
             logger.info(f"Retrieved {len(similar_failures)} similar failure patterns")
         
-        state['blackboard'] = blackboard.to_dict()
-        return state
+        return self._node_delta(state, blackboard, "recovery")
     
     async def _human_input_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1213,8 +1366,7 @@ class AgenticTaskExecutor:
         # In production, this would pause and wait for actual human input
         # For now, we'll simulate continuation
         
-        state['blackboard'] = blackboard.to_dict()
-        return state
+        return self._node_delta(state, blackboard, "human_input")
     
     def _critic_router(self, state: Dict[str, Any]) -> str:
         """Route based on critic's decision."""
@@ -1223,6 +1375,73 @@ class AgenticTaskExecutor:
         return decision
     
     # Helper methods
+
+    def _node_delta(
+        self,
+        state: Dict[str, Any],
+        blackboard: BlackboardState,
+        node_name: str,
+        **extra: Any,
+    ) -> AgenticExecutorState:
+        delta: AgenticExecutorState = {
+            'blackboard': self._blackboard_delta(state.get('blackboard', {}), blackboard),
+            'execution_history': [
+                {
+                    'node': node_name,
+                    'phase': blackboard.current_phase,
+                    'active_task_id': blackboard.active_task_id,
+                    'timestamp': datetime.utcnow().isoformat(),
+                }
+            ],
+        }
+        for key, value in extra.items():
+            if value is not None:
+                delta[key] = value
+        return sanitize_for_mongodb(delta)
+
+    def _blackboard_delta(
+        self,
+        original: Dict[str, Any],
+        updated_blackboard: BlackboardState,
+    ) -> Dict[str, Any]:
+        updated = updated_blackboard.to_dict()
+        original = original or {}
+        delta: Dict[str, Any] = {
+            'request_id': updated.get('request_id'),
+            'goal': updated.get('goal'),
+            'created_at': updated.get('created_at'),
+            'started_at': updated.get('started_at'),
+            'completed_at': updated.get('completed_at'),
+            'status': updated.get('status'),
+            'current_phase': updated.get('current_phase'),
+            'active_task_id': updated.get('active_task_id'),
+            'tasks': updated.get('tasks', {}),
+            'task_order': updated.get('task_order', []),
+            'context': updated.get('context', {}),
+            'results': updated.get('results', {}),
+            'loop_detected': updated.get('loop_detected', False),
+        }
+
+        for key in ('completed_tasks', 'failed_tasks', 'skipped_tasks'):
+            before = set(original.get(key, []))
+            delta[key] = [item for item in updated.get(key, []) if item not in before]
+
+        for key in ('react_history', 'action_history', 'loop_events', 'pending_human_inputs'):
+            before_len = len(original.get(key, []))
+            delta[key] = updated.get(key, [])[before_len:]
+
+        before_calcs = {
+            item.get('calculation_id')
+            for item in original.get('calculation_scratchpad', [])
+            if isinstance(item, dict)
+        }
+        delta['calculation_scratchpad'] = [
+            item
+            for item in updated.get('calculation_scratchpad', [])
+            if not isinstance(item, dict) or item.get('calculation_id') not in before_calcs
+        ]
+
+        return delta
     
     def _dict_to_blackboard(self, data: Dict[str, Any]) -> BlackboardState:
         """Convert dictionary back to BlackboardState."""
@@ -1245,6 +1464,20 @@ class AgenticTaskExecutor:
         bb.calculation_scratchpad = CalculationScratchpad.from_list(
             data.get('calculation_scratchpad', [])
         )
+        for step_data in data.get('react_history', []):
+            if not isinstance(step_data, dict):
+                continue
+            bb.react_history.append(
+                ReActStep(
+                    step_number=int(step_data.get('step_number', len(bb.react_history) + 1)),
+                    action_type=ActionType(step_data.get('action_type', ActionType.THINK.value)),
+                    thought=step_data.get('thought', ''),
+                    action=step_data.get('action'),
+                    observation=step_data.get('observation'),
+                    timestamp=datetime.fromisoformat(step_data['timestamp'])
+                    if step_data.get('timestamp') else datetime.utcnow(),
+                )
+            )
         for item in data.get('action_history', []):
             if isinstance(item, dict) and 'action' in item:
                 bb.action_history.append(item)
@@ -1292,6 +1525,39 @@ class AgenticTaskExecutor:
             ),
             'blocked_action': action,
             'matched_action': loop_result.matched_action,
+        }
+
+    def _build_budget_depleted_observation(
+        self,
+        task: TaskNode,
+        blackboard: BlackboardState,
+        budget_check,
+    ) -> Dict[str, Any]:
+        available_results = {
+            key: value
+            for key, value in blackboard.results.items()
+            if key != task.task_id
+        }
+        return {
+            'status': 'budget_depleted',
+            'task_id': task.task_id,
+            'task_name': task.name,
+            'message': (
+                "Token budget depleted before another reasoning/tool step. "
+                "Cash out using only already collected scratchpad metrics, completed tasks, and current observations."
+            ),
+            'budget': {
+                'total_tokens_used': budget_check.total_tokens_used,
+                'estimated_next_context_tokens': budget_check.estimated_context_tokens,
+                'max_token_budget': budget_check.max_token_budget,
+            },
+            'completed_tasks': list(blackboard.completed_tasks),
+            'scratchpad': blackboard.calculation_scratchpad.compact_summary(),
+            'available_results': available_results,
+            'missing': (
+                "Further analysis was stopped by the configured token budget. "
+                "Ask a narrower follow-up or raise max_token_budget for deeper processing."
+            ),
         }
     
     def _generate_thought(self, task: TaskNode, blackboard: BlackboardState) -> str:

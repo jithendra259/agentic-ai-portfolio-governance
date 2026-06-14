@@ -40,6 +40,7 @@ from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.memory.state_sanitizer import wrap_checkpointer_for_mongodb
 from src.providers.ashna_provider import normalize_ashna_base_url
 from src.rag.rag_tools import (
     compare_common_institutional_holders,
@@ -179,7 +180,7 @@ def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
             logger.info("Using MemorySaver fallback checkpointer.")
             checkpointer = MemorySaver()
 
-    return memory_manager, checkpointer
+    return memory_manager, wrap_checkpointer_for_mongodb(checkpointer)
 
 
 memory_manager, checkpointer = _init_mongo_memory()
@@ -1424,6 +1425,6 @@ portfolio_assistant = builder.compile(checkpointer=checkpointer)
 # The installed sync PostgresSaver does not implement async checkpoint reads.
 # Streaming routes use a process-local async-safe checkpointer while the API
 # persists user-visible conversation history separately in Supabase.
-streaming_portfolio_assistant = builder.compile(checkpointer=MemorySaver())
+streaming_portfolio_assistant = builder.compile(checkpointer=wrap_checkpointer_for_mongodb(MemorySaver()))
 
 print("Conversational Agentic Supervisor Initialized with Memory!")

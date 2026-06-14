@@ -14,6 +14,7 @@ from src.agents.explainer_a4 import GenerativeExplainerAgent
 from src.agents.graph_rag_a2 import GraphRAGAgent
 from src.agents.optimizer_a3 import GCVaROptimizerAgent
 from src.agents.time_series_a1 import TimeSeriesAgent
+from src.memory.state_sanitizer import sanitize_for_mongodb
 
 
 class PortfolioState(TypedDict):
@@ -100,7 +101,7 @@ class SupervisoryOrchestrator:
             universe_id=state["universe_id"],
             target_date_str=state["target_date"],
         )
-        return {
+        return sanitize_for_mongodb({
             **state,
             "returns_df": result["returns_df"],
             "covariance_matrix": result["covariance_matrix"],
@@ -111,11 +112,11 @@ class SupervisoryOrchestrator:
             "mean_volatility": result.get("mean_volatility"),
             "mean_correlation": result.get("mean_correlation"),
             "mean_drawdown": result.get("mean_drawdown"),
-        }
+        })
 
     def run_agent_2(self, state: PortfolioState):
         result = self.agent2.execute(universe_id=state["universe_id"])
-        return {
+        return sanitize_for_mongodb({
             **state,
             "c_vector": result["c_vector"],
             "graph_method_used": result["method_used"],
@@ -125,7 +126,7 @@ class SupervisoryOrchestrator:
             "bipartite_node_count": result.get("bipartite_node_count"),
             "bipartite_edge_count": result.get("bipartite_edge_count"),
             "graph_context": result.get("graph_context", {}),
-        }
+        })
 
     def run_agent_3(self, state: PortfolioState):
         result = self.agent3.execute(
@@ -134,7 +135,7 @@ class SupervisoryOrchestrator:
             I_t=state["instability_index"],
             previous_weights=state.get("optimal_weights"),
         )
-        return {
+        return sanitize_for_mongodb({
             **state,
             "optimal_weights": result["optimal_weights"],
             "strategy_weights": result.get("strategy_weights", {}),
@@ -148,7 +149,7 @@ class SupervisoryOrchestrator:
             "solver_name": result.get("solver_name"),
             "solve_time_s": result.get("solve_time_s"),
             "max_weight_constraint": result.get("max_weight_constraint"),
-        }
+        })
 
     def hitl_router(self, state: PortfolioState):
         """Route to the explainer only when notebook-style governance triggers fire."""
@@ -169,7 +170,7 @@ class SupervisoryOrchestrator:
 
     def run_agent_4(self, state: PortfolioState):
         result = self.agent4.execute(state)
-        return {**state, "hitl_report": result["hitl_report"]}
+        return sanitize_for_mongodb({**state, "hitl_report": result["hitl_report"]})
 
     def run_monthly_cycle(self, universe_id: str, target_date: str):
         print(f"\nSTARTING LangGraph orchestrator for {target_date}")
@@ -179,4 +180,4 @@ class SupervisoryOrchestrator:
         }
         final_state = self.graph.invoke(initial_state)
         print(f"EXECUTION complete for {target_date}\n")
-        return final_state
+        return sanitize_for_mongodb(final_state)
