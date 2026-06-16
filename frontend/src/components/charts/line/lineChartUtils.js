@@ -48,6 +48,7 @@ export function prepareSeries(spec, inferredArea) {
   if (!spec?.series) return [];
   return spec.series.map((s, i) => {
     const isAreaChart = spec.chart_type === 'line_area' || spec.chart_type === 'stacked_area' || inferredArea;
+    const showMark = resolveShowMark(s.showMark, s.data);
     const entry = {
       type: 'line',
       dataKey: s.name,
@@ -60,7 +61,7 @@ export function prepareSeries(spec, inferredArea) {
     if (s.baseline != null) entry.baseline = s.baseline;
     if (s.stack) entry.stack = s.stack;
     if (s.stackOffset) entry.stackOffset = s.stackOffset;
-    entry.showMark = s.showMark ?? false;
+    entry.showMark = showMark;
     if (s.shape) entry.shape = s.shape;
     entry.connectNulls = s.connectNulls ?? spec.connect_nulls ?? spec.connectNulls ?? false;
     if (s.highlightScope) entry.highlightScope = s.highlightScope;
@@ -70,6 +71,15 @@ export function prepareSeries(spec, inferredArea) {
     else if (spec.curve) entry.curve = spec.curve;
     return entry;
   });
+}
+
+function resolveShowMark(showMark, points = []) {
+  if (showMark === 'end') {
+    const lastIndex = Array.isArray(points) ? points.length - 1 : -1;
+    return ({ index }) => index === lastIndex;
+  }
+  if (typeof showMark === 'boolean' || typeof showMark === 'function') return showMark;
+  return false;
 }
 
 export function prepareYAxis(spec) {

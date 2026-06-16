@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { CHART_TIER } from '../chartTierConfig.js';
 import { getLineChartDefinition } from './lineChartRegistry.js';
 import { validateLineChartPayload } from './lineChartValidator.js';
+import { prepareSeries } from './lineChartUtils.js';
 
 function baseLinePayload(overrides = {}) {
   return {
@@ -117,6 +118,27 @@ describe('line chart validation', () => {
     const result = validateLineChartPayload(baseLinePayload({ optimizer_called: true }));
     assert.equal(result.valid, false);
     assert.match(result.errors.join('\n'), /optimizer/);
+  });
+});
+
+describe('line chart rendering adapter', () => {
+  it('converts backend end-marker shorthand into a MUI showMark callback', () => {
+    const series = prepareSeries(baseLinePayload({
+      series: [
+        {
+          name: 'AAPL',
+          data: [
+            { x: '2024-01-02', y: 100 },
+            { x: '2024-01-03', y: 101 },
+          ],
+          showMark: 'end',
+        },
+      ],
+    }), false);
+
+    assert.equal(typeof series[0].showMark, 'function');
+    assert.equal(series[0].showMark({ index: 0 }), false);
+    assert.equal(series[0].showMark({ index: 1 }), true);
   });
 });
 
