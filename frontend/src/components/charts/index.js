@@ -11,3 +11,4 @@ export { default as GaugeChartRenderer } from './gauge';
 export { default as RadialBarChartRenderer } from './radial-bar';
 export { default as RadialLineChartRenderer } from './radial-line';
 export { default as NetworkChartRenderer } from './network';
+export { default as BoxPlotChartRenderer } from './box';

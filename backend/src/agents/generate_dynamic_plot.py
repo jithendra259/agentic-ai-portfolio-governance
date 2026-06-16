@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,6 @@ import pandas as pd
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from src.agents.plot_store import GLOBAL_PLOT_IDS
 from src.decision.advisory_labels import normalize_advisory_language
 
 
@@ -1405,26 +1405,20 @@ def generate_financial_plot(
                 mongo = MongoMemoryManager()
                 stored = bool(mongo.store_plot(plot_id, spec, ttl_days=365))
             except Exception as e:
-                import logging
                 logging.getLogger(__name__).error(f"Failed to store plot in MongoDB: {e}")
-
-            if not stored:
-                return (
-                    "Unable to generate plot: visualization storage is unavailable, "
-                    "so no interactive chart was attached."
-                )
 
             session_id = (
                 config.get("configurable", {}).get("thread_id", "default")
                 if config
                 else "default"
             )
-            from src.agents.plot_store import GLOBAL_PLOT_IDS
-            if session_id not in GLOBAL_PLOT_IDS:
-                GLOBAL_PLOT_IDS[session_id] = []
-            if isinstance(GLOBAL_PLOT_IDS[session_id], str):
-                GLOBAL_PLOT_IDS[session_id] = [GLOBAL_PLOT_IDS[session_id]]
-            GLOBAL_PLOT_IDS[session_id].append(plot_id)
+            from src.agents.plot_store import register_plot
+            register_plot(plot_id, spec, session_id)
+            if not stored:
+                logging.getLogger(__name__).warning(
+                    "Registered plot %s in process memory because persistent storage is unavailable.",
+                    plot_id,
+                )
             return f"Chart ready: {plot_title}"
 
         # --- PNG fallback for heatmap / network ---

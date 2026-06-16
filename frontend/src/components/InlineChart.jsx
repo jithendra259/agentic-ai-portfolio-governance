@@ -16,15 +16,52 @@ import {
   SankeyChartRenderer,
   ScatterChartRenderer,
   SparklineChartRenderer,
+  BoxPlotChartRenderer,
 } from './charts';
 
-export default function InlineChart({ plotId }) {
+function useNearViewport(rootMargin = '600px') {
+  const ref = React.useRef(null);
+  const [isNearViewport, setIsNearViewport] = React.useState(() => typeof IntersectionObserver === 'undefined');
+
+  React.useEffect(() => {
+    const node = ref.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setIsNearViewport(true);
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setIsNearViewport(entry.isIntersecting),
+      { root: null, rootMargin, threshold: 0.01 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [rootMargin]);
+
+  return [ref, isNearViewport];
+}
+
+function getPointCount(spec) {
+  if (Number.isFinite(Number(spec?.density?.rendered_points))) {
+    return Number(spec.density.rendered_points);
+  }
+  return (spec?.series || []).reduce((total, entry) => total + (Array.isArray(entry?.data) ? entry.data.length : 0), 0);
+}
+
+function InlineChart({ plotId }) {
+  const [containerRef, isNearViewport] = useNearViewport();
   const [spec, setSpec] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState('');
 
   React.useEffect(() => {
-    if (!plotId) return;
+    setSpec(null);
+    setLoading(true);
+    setError('');
+  }, [plotId]);
+
+  React.useEffect(() => {
+    if (!plotId || !isNearViewport || spec) return;
     
     let isMounted = true;
     setLoading(true);
@@ -60,11 +97,38 @@ export default function InlineChart({ plotId }) {
       });
       
     return () => { isMounted = false; };
-  }, [plotId]);
+  }, [plotId, isNearViewport, spec]);
+
+  const placeholder = (
+    <Paper
+      ref={containerRef}
+      elevation={0}
+      sx={{
+        p: 2,
+        mt: 1,
+        mb: 1,
+        width: '100%',
+        minHeight: 180,
+        bgcolor: '#111827',
+        borderRadius: 2,
+        border: '1px solid #1f2937',
+        contentVisibility: 'auto',
+        containIntrinsicSize: '180px',
+      }}
+    >
+      <Typography variant="body2" sx={{ color: '#94a3b8' }}>
+        Visualization will load when visible.
+      </Typography>
+    </Paper>
+  );
+
+  if (!isNearViewport && !spec) {
+    return placeholder;
+  }
 
   if (loading) {
     return (
-      <Paper elevation={3} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #1f2937' }}>
+      <Paper ref={containerRef} elevation={3} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #1f2937' }}>
         <Typography variant="body2" sx={{ color: '#cbd5e1', mb: 1 }}>
           Loading visualization...
         </Typography>
@@ -76,7 +140,7 @@ export default function InlineChart({ plotId }) {
 
   if (error) {
     return (
-      <Paper elevation={0} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #374151' }}>
+      <Paper ref={containerRef} elevation={0} sx={{ p: 2, mt: 1, mb: 1, width: '100%', bgcolor: '#111827', borderRadius: 2, border: '1px solid #374151' }}>
         <Typography variant="body2" sx={{ color: '#fca5a5' }}>
           Visualization unavailable: {error}
         </Typography>
@@ -85,8 +149,36 @@ export default function InlineChart({ plotId }) {
   }
 
   if (!spec || !spec.plot_type) return null;
+  if (!isNearViewport) {
+    return (
+      <Paper
+        ref={containerRef}
+        elevation={0}
+        sx={{
+          p: 2,
+          mt: 1,
+          mb: 1,
+          width: '100%',
+          minHeight: 180,
+          bgcolor: '#111827',
+          borderRadius: 2,
+          border: '1px solid #1f2937',
+          contentVisibility: 'auto',
+          containIntrinsicSize: '180px',
+        }}
+      >
+        <Typography variant="subtitle2" sx={{ color: '#e5e7eb', fontWeight: 600 }}>
+          {(spec.title || 'Visualization').replace(/\s*\(Interactive Pro\)\s*$/i, ' (Interactive)')}
+        </Typography>
+        <Typography variant="caption" sx={{ color: '#94a3b8' }}>
+          Chart paused offscreen to keep chat responsive.
+        </Typography>
+      </Paper>
+    );
+  }
 
   const displayTitle = (spec.title || '').replace(/\s*\(Interactive Pro\)\s*$/i, ' (Interactive)');
+  const pointCount = getPointCount(spec);
 
   let ChartComponent;
   switch (spec.plot_type) {
@@ -104,11 +196,13 @@ export default function InlineChart({ plotId }) {
     case 'gauge':       ChartComponent = GaugeChartRenderer; break;
     case 'radial_bar':  ChartComponent = RadialBarChartRenderer; break;
     case 'radial_line': ChartComponent = RadialLineChartRenderer; break;
+    case 'box':         ChartComponent = BoxPlotChartRenderer; break;
     default:            return null;
   }
 
   return (
     <Paper
+      ref={containerRef}
       elevation={3}
       sx={{
         p: 1.5,
@@ -121,6 +215,8 @@ export default function InlineChart({ plotId }) {
         overflowX: 'auto',
         overflowY: 'hidden',
         maxWidth: '100%',
+        contentVisibility: 'auto',
+        containIntrinsicSize: '380px',
       }}
     >
       <Typography
@@ -130,7 +226,14 @@ export default function InlineChart({ plotId }) {
       >
         {displayTitle}
       </Typography>
+      {spec.density?.sampled && (
+        <Typography variant="caption" align="center" sx={{ color: '#94a3b8', display: 'block', mb: 0.5 }}>
+          Rendered {pointCount.toLocaleString()} sampled points for smooth chat scrolling.
+        </Typography>
+      )}
       <ChartComponent spec={spec} />
     </Paper>
   );
 }
+
+export default React.memo(InlineChart);

@@ -326,6 +326,29 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(payload["series"][0]["data"][0], {"x": 12, "y": 8, "z": 7, "id": "AAPL"})
         self.assertEqual(payload["series"][1]["markerSize"], 6)
 
+    def test_plot_endpoint_returns_chat_generated_memory_plot(self):
+        from src.agents.plot_store import GLOBAL_PLOT_DATA
+
+        plot_id = "chat_generated_plot_1"
+        GLOBAL_PLOT_DATA[plot_id] = {
+            "plot_type": "gauge",
+            "title": "Chat Generated Gauge",
+            "value": 88,
+            "valueMin": 0,
+            "valueMax": 100,
+        }
+        try:
+            client = TestClient(app)
+            response = client.get(f"/api/plots/{plot_id}")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["plot_type"], "gauge")
+            self.assertEqual(payload["title"], "Chat Generated Gauge")
+            self.assertEqual(payload["value"], 88)
+        finally:
+            GLOBAL_PLOT_DATA.pop(plot_id, None)
+
 
 if __name__ == "__main__":
     unittest.main()

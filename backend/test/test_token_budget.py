@@ -19,6 +19,8 @@ class TokenBudgetTests(unittest.TestCase):
         update = update_token_ledger({"total_tokens_used": 5}, response=Response())
 
         self.assertEqual(update["total_tokens_used"], 25)
+        self.assertEqual(update["remaining_token_budget"], 99975)
+        self.assertGreater(update["estimated_cost_usd"], 0)
 
     def test_budget_check_blocks_projected_context_over_limit(self):
         check = check_token_budget(
@@ -27,6 +29,7 @@ class TokenBudgetTests(unittest.TestCase):
         )
 
         self.assertFalse(check.allowed)
+        self.assertEqual(check.remaining_token_budget, 10)
         self.assertIn("exceeded", check.reason)
 
     def test_cap_tool_output_returns_json_safe_summary_for_large_objects(self):

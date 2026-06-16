@@ -123,7 +123,7 @@ function renderMarkdown(rawText) {
   }
 
   // Split on token boundaries: ["prose...", "__PLOTSPEC__:uuid", "more prose"]
-  const parts = text.split(new RegExp(`(${PLOT_TOKEN}[A-Za-z0-9\\-]+)`));
+  const parts = text.split(new RegExp(`(${PLOT_TOKEN}[A-Za-z0-9_-]+)`));
   return (
     <>
       {parts.map((part, i) => {
@@ -268,7 +268,7 @@ function getMessagePreview(message) {
     ?.filter((part) => part.type === 'text')
     .map((part) => part.text || '')
     .join(' ')
-    .replace(new RegExp(`${PLOT_TOKEN}[A-Za-z0-9\\-]+`, 'g'), '')
+    .replace(new RegExp(`${PLOT_TOKEN}[A-Za-z0-9_-]+`, 'g'), '')
     .replace(/\s+/g, ' ')
     .trim();
 

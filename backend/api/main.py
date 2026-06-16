@@ -1536,6 +1536,9 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
 
 @app.get("/api/plots/{plot_id}")
 def get_plot_data(plot_id: str):
+    if plot_id in GLOBAL_PLOT_DATA:
+        return GLOBAL_PLOT_DATA[plot_id]
+
     if plot_id == "test-line":
         return {
             "plot_type": "line",

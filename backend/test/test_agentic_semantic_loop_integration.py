@@ -112,6 +112,8 @@ class AgenticSemanticLoopIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(executor.execute_count, 0)
         self.assertTrue(result["budget_depleted"])
         self.assertEqual(task_result["status"], "budget_depleted")
+        self.assertEqual(task_result["budget"]["remaining_token_budget"], 5)
+        self.assertIn("estimated_cost_usd", task_result["budget"])
         self.assertIn("task-1", final_blackboard["failed_tasks"])
 
 

@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import subprocess
+from difflib import SequenceMatcher
 from typing import Annotated, Any, Optional, Tuple, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -39,6 +40,8 @@ from src.agents.live_data_tools import (
 )
 from src.agents.price_series_tool import get_price_series_for_analysis
 from src.agents.generate_dynamic_plot import generate_financial_plot
+from src.agents.custom_math_plot import generate_custom_math_plot
+from src.agents.derived_plot_tools import generate_missing_data_heatmap, generate_ohlc_correlation_heatmap, run_data_analysis_plot
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
@@ -189,6 +192,89 @@ intent_classifier = IntentClassifier(verbose=True)
 intent_router = IntentRouter(classifier=intent_classifier)
 
 
+def merge_scratchpads(
+    current: dict[str, Any] | None,
+    update: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Reducer for immutable financial facts: keep prior metrics and merge updates."""
+    merged = dict(current or {})
+    merged.update(update or {})
+    return merged
+
+
+def append_recent_tool_signatures(
+    current: list[dict[str, Any]] | None,
+    update: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Reducer for bounded semantic-loop history."""
+    combined = [*(current or []), *(update or [])]
+    return combined[-12:]
+
+
+def replace_summary(current: str | None, update: str | None) -> str:
+    """Reducer for compressed historical context."""
+    if update is None:
+        return current or ""
+    return str(update)
+
+
+@tool("save_financial_metric")
+def save_financial_metric(metric_name: str, exact_value: float | str, context: str = "") -> str:
+    """
+    Persist an exact financial metric in the agent scratchpad.
+
+    The tool return is intentionally structured so the chatbot node can mirror
+    saved values into reducer-backed state after ToolNode execution.
+    """
+    clean_name = str(metric_name or "").strip()
+    if not clean_name:
+        return "SCRATCHPAD_SAVE_ERROR: metric_name is required."
+    return json.dumps(
+        {
+            "scratchpad_save": True,
+            "metric_name": clean_name,
+            "exact_value": exact_value,
+            "context": str(context or ""),
+        }
+    )
+
+
+def _latest_human_text(messages: list[BaseMessage] | None) -> str:
+    for message in reversed(messages or []):
+        if isinstance(message, HumanMessage):
+            return _message_content_to_text(message)
+    return ""
+
+
+def assemble_system_prompt(state: "AgentState") -> str:
+    """Build the dynamic system prompt with hard state injected before messages."""
+    original_goal = state.get("original_goal") or _latest_human_text(state.get("messages", [])) or "Portfolio governance conversation"
+    scratchpad = state.get("scratchpad") or {}
+    historical_summary = state.get("historical_summary") or state.get("summary") or ""
+
+    if scratchpad:
+        scratchpad_lines = "\n".join(
+            f"- {name}: {payload}" for name, payload in sorted(scratchpad.items())
+        )
+    else:
+        scratchpad_lines = "- No exact financial metrics saved yet."
+
+    return (
+        f"{SYSTEM_PROMPT}\n\n"
+        "### BLACKBOARD STATE ###\n"
+        f"Original goal: {original_goal}\n\n"
+        "Exact financial scratchpad metrics. These are authoritative. Read these before recalculating:\n"
+        f"{scratchpad_lines}\n\n"
+        "Historical summary of older context:\n"
+        f"{historical_summary or 'No distant context summarized yet.'}\n\n"
+        "### SCRATCHPAD RULES ###\n"
+        "- Always read from the scratchpad before calculating a metric.\n"
+        "- If a needed metric already exists in the scratchpad, use that exact value and do not recalculate.\n"
+        "- After any tool/API/math calculation of a critical metric, call save_financial_metric with the exact output.\n"
+        "- Preserve precise values for betas, correlations, weights, returns, volatility, Sharpe, CVaR, prices, and allocation changes.\n"
+    )
+
+
 @tool("run_full_governance_pipeline")
 def governance_pipeline_with_cache(
     tickers: list[str],
@@ -229,6 +315,11 @@ def governance_pipeline_with_cache(
 
 # Define the State: This is the Chatbot's Memory!
 class AgentState(TypedDict, total=False):
+    original_goal: str
+    scratchpad: Annotated[dict[str, Any], merge_scratchpads]
+    historical_summary: Annotated[str, replace_summary]
+    recent_messages: Annotated[list[BaseMessage], add_messages]
+    recent_tool_signatures: Annotated[list[dict[str, Any]], append_recent_tool_signatures]
     # 'add_messages' ensures new chat messages are appended, not overwritten
     messages: Annotated[list[BaseMessage], add_messages]
     user_portfolio: list[str]
@@ -264,6 +355,11 @@ tools = [
     get_user_analysis_history,
     get_detailed_past_weights,
     generate_financial_plot,
+    generate_custom_math_plot,
+    generate_ohlc_correlation_heatmap,
+    generate_missing_data_heatmap,
+    run_data_analysis_plot,
+    save_financial_metric,
 ]
 
 
@@ -564,10 +660,28 @@ HISTORICAL CHART RULES:
 - If the user asks to compare or plot all stocks in a universe, first call get_stocks_by_universe to resolve the tickers, then call plot_historical_prices with that ticker list. Do NOT stop after the universe lookup.
 - If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
 - If the request already contains enough information, act immediately instead of asking for confirmation.
+- If the user asks for a chart and has provided ticker(s), date range, and chart type or a clear statistic, do not ask "shall I proceed"; generate the chart.
 
 PLOT INTELLIGENCE RULES — CHART TYPE SELECTION:
 When the user requests a visualization, you MUST select the correct chart type.
 The generate_financial_plot tool supports plot_type = "line", "bar", "pie", "scatter", "sparkline", "sankey", "candlestick", "heatmap", "network", "funnel", "radar", "gauge", "radial_bar", and "radial_line".
+The chat UI also supports common analysis-rendered plot_type values such as "box" when they are produced by run_data_analysis_plot.
+
+COMMON DATA-TO-PLOT TOOL:
+- For any request that needs data fetching, cleaning, missingness checks, correlation/covariance, returns, coverage, or transformation before plotting, prefer run_data_analysis_plot.
+- Do not ask the user for intermediate matrices, cleaned tables, or missingness grids. run_data_analysis_plot resolves data scope and computes approved pandas transforms safely.
+- Supported analysis_task values include: "missing_data_heatmap", "ohlc_correlation_heatmap", "returns_correlation_heatmap", "returns_box_plot", and "price_line".
+- The AI may create a structured analysis plan by choosing analysis_task plus tickers/sector/universe/date range/cache key. Do not generate or execute arbitrary Python code in the chat.
+- If the user asks to clean data, find missing data, align series, or prepare data for a chart, map that request into the closest approved analysis_task and use run_data_analysis_plot.
+- If the user asks for a box plot, box-and-whisker plot, distribution by ticker, or daily return dispersion by ticker, use run_data_analysis_plot with analysis_task="returns_box_plot" when the metric is returns or daily returns.
+- Do not replace a requested box plot with a bar chart. Do not ask for scope when the ticker list, date range, and metric are already present in the message.
+
+CUSTOM MATHEMATICAL PLOT RULES:
+- Use generate_custom_math_plot when the user asks for a custom, formula-based, synthetic, payoff, risk curve, or mathematical plot such as y=x**2, sin(x), log(x), option payoff, utility curve, growth curve, or any chart that can be sampled from formulas.
+- Do NOT write Python/Matplotlib code in the chat for formula plots. Call generate_custom_math_plot and explain the formula in words.
+- Pass formulas as [{"name": "Quadratic", "formula": "x**2"}]. Supported syntax includes x, pi, e, +, -, *, /, **, %, and functions such as sin, cos, tan, sqrt, log, log10, exp, abs, min, max, and round.
+- Use plot_type="line" for continuous curves and plot_type="scatter" for point-based mathematical comparisons.
+- For formula domains, choose x_start, x_end, and points from the user's request. If not provided, choose a sensible financial/math range and state it.
 
 LINE CHART (plot_type="line"):
 - Time-series data: stock prices over time, returns over time, cumulative growth curves.
@@ -582,6 +696,7 @@ BAR CHART (plot_type="bar"):
 - Comparing discrete categories: sector weights, ticker risk scores, allocation percentages.
 - Ranking: top performers sorted high to low, risk scores.
 - Distribution snapshots: portfolio weights at a single point in time.
+- Do NOT use bar charts for box plot, whisker, quartile, or distribution-spread requests. Those must use run_data_analysis_plot with analysis_task="returns_box_plot" when they are daily-return distributions.
 - Side-by-side comparison of small groups (fewer than 20 categories).
 - For many categories (more than 8), use layout="horizontal" in the data dict.
 - Features available: stacking, horizontal layout, rounded corners (borderRadius), bar labels, colorMap, highlight interactions.
@@ -657,6 +772,11 @@ NETWORK GRAPH (plot_type="network"):
 
 PREMIUM CHARTS:
 - Use "heatmap" for correlation/covariance matrices and missing-data grids.
+- For a single ticker OHLC correlation heatmap, call generate_ohlc_correlation_heatmap directly. Example: "correlation between stock prices OHLC of AXP in heat map" means ticker="AXP", fields=open/high/low/close, chart=heatmap. Do not say the correlation routine is missing.
+- If an analysis_cache_key already exists from get_price_series_for_analysis and the user follows up with "yes" or asks to plot that OHLC correlation, pass that cache key into generate_ohlc_correlation_heatmap.
+- For missing-data heatmaps, call generate_missing_data_heatmap directly. Do not ask the user to provide a missingness matrix. The tool fetches historical data and computes the present/missing matrix.
+- If the user says "missing data heatmap" after discussing a sector, universe, or ticker list, reuse that scope. Example: after Healthcare stocks, call generate_missing_data_heatmap(sector="Healthcare"). After U1, call generate_missing_data_heatmap(universe="U1"). After an explicit ticker list, pass tickers=[...].
+- If the user asks for a missing-data heatmap without a scope and there is no remembered scope, default to the last discussed portfolio/ticker set. Only ask a question if no tickers, sector, universe, or cache key exists anywhere in context.
 - Use "funnel" for staged governance pipelines, data-quality drop-off, or validation pass/fail funnels. Pass {"stages": [{"label": "Loaded", "value": 100}, ...]}.
 - Use "radar" for multi-metric scorecards such as diversification/risk/regime component comparison. Pass {"metrics": ["HHI", "CVaR", ...], "series": [{"name": "Current", "data": [0.2, 0.5, ...]}]}.
 - Use "gauge" for single bounded scores such as confidence, instability, diversification score, or data-quality score. Pass {"value": 72, "min": 0, "max": 100}.
@@ -684,6 +804,8 @@ STATISTICAL ANALYSIS RULES:
 - When querying for historical data or prices to analyze yourself, always use get_price_series_for_analysis. This tool returns structured data directly to you.
 - If the user asks for a universe-level analysis, first resolve the universe members, then call get_price_series_for_analysis.
 - If the user asks for a correlation heatmap of returns, use get_price_series_for_analysis to compute the correlation matrix, then call generate_financial_plot with plot_type="heatmap" to plot the correlation heatmap.
+- If the user asks for correlation between OHLC fields for one ticker, use generate_ohlc_correlation_heatmap. It computes exact correlations and registers the heatmap for the chat UI.
+- If the user asks for missing data, data gaps, coverage, completeness, nulls, or availability as a heatmap, use generate_missing_data_heatmap. It computes the matrix and registers the chart.
 
 GOVERNANCE RULES:
 - Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
@@ -774,7 +896,7 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
     working_messages = list(messages)
     remembered_portfolio = _extract_portfolio_from_messages(working_messages)
 
-    system_messages = [SystemMessage(content=SYSTEM_PROMPT)]
+    system_messages = [SystemMessage(content=assemble_system_prompt(state))]
     if remembered_portfolio:
         system_messages.append(
             SystemMessage(
@@ -956,17 +1078,24 @@ def _get_global_activity_summary() -> str | None:
         return None
 
 
-def summarize_conversation_node(state: AgentState, config: RunnableConfig):
+def memory_manager_node(state: AgentState, config: RunnableConfig):
     """
-    Compresses distant history into a running summary to manage the token budget.
-    This enables 'infinite memory' by migrating older details to the 'summary' field.
+    Trim-and-summarize blackboard memory node.
+
+    The full checkpointer can retain raw messages for audit/history, while this
+    node keeps a compact historical summary for prompt injection.
     """
     messages = state.get("messages", [])
+    original_goal = state.get("original_goal") or _latest_human_text(messages)
     # If history is still short, skip summarization
     if len(messages) <= _MAX_CONTEXT_MESSAGES:
-        return {"summary": state.get("summary", "")}
+        return {
+            "original_goal": original_goal,
+            "summary": state.get("summary", ""),
+            "historical_summary": state.get("historical_summary", state.get("summary", "")),
+        }
 
-    existing_summary = state.get("summary", "")
+    existing_summary = state.get("historical_summary") or state.get("summary", "")
     # Distinguish which messages to summarize (oldest chunk) vs keep (newest chunk)
     to_summarize = messages[:-_MAX_CONTEXT_MESSAGES]
     
@@ -1001,10 +1130,23 @@ def summarize_conversation_node(state: AgentState, config: RunnableConfig):
         # but here we can just replace the message list if we want. 
         # Actually, we'll keep the full list in the DB (for logs) but 
         # our _trim_context handles what the LLM sees.
-        return {"summary": new_summary}
+        return {
+            "original_goal": original_goal,
+            "summary": new_summary,
+            "historical_summary": new_summary,
+        }
     except Exception as exc:
         logger.warning("Summarization failed: %s", exc)
-        return {"summary": existing_summary}
+        return {
+            "original_goal": original_goal,
+            "summary": existing_summary,
+            "historical_summary": existing_summary,
+        }
+
+
+def summarize_conversation_node(state: AgentState, config: RunnableConfig):
+    """Backward-compatible alias for older imports/tests."""
+    return memory_manager_node(state, config)
 
 
 def classify_and_route_node(state: AgentState, config: RunnableConfig = None):
@@ -1380,14 +1522,106 @@ def _route_after_tool(state: AgentState) -> str:
         return "finalize_governance"
     return "chatbot"
 
+def _latest_ai_tool_calls(messages: list[BaseMessage]) -> list[dict[str, Any]]:
+    latest = next((message for message in reversed(messages or []) if isinstance(message, AIMessage)), None)
+    calls = getattr(latest, "tool_calls", None) if latest else None
+    return calls if isinstance(calls, list) else []
+
+
+def _tool_signature(tool_call: dict[str, Any]) -> dict[str, Any]:
+    name = str(tool_call.get("name") or "").strip()
+    args = tool_call.get("args") or {}
+    try:
+        args_text = json.dumps(args, sort_keys=True, default=str)
+    except Exception:
+        args_text = str(args)
+    return {"tool_name": name, "args_text": args_text.lower()}
+
+
+def _tool_signature_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    if left.get("tool_name") != right.get("tool_name"):
+        return 0.0
+    return SequenceMatcher(None, left.get("args_text", ""), right.get("args_text", "")).ratio()
+
+
+def tool_interceptor_node(state: AgentState) -> dict[str, Any]:
+    """Block repeated semantically similar tool calls before ToolNode execution."""
+    proposed_calls = _latest_ai_tool_calls(state.get("messages", []))
+    if not proposed_calls:
+        return {"route_status": "no_tools"}
+
+    previous = state.get("recent_tool_signatures", [])
+    new_signatures = [_tool_signature(call) for call in proposed_calls]
+    for proposed in new_signatures:
+        for old in previous[-8:]:
+            if _tool_signature_similarity(proposed, old) > 0.92:
+                return {
+                    "route_status": "loop_blocked",
+                    "messages": [
+                        SystemMessage(
+                            content=(
+                                "CRITICAL SYSTEM OVERRIDE: You are in a semantic loop. "
+                                "You must change strategies, use already available scratchpad/tool results, "
+                                "or explain the blocker clearly instead of repeating the same tool call."
+                            )
+                        )
+                    ],
+                }
+
+    return {
+        "route_status": "tool_allowed",
+        "recent_tool_signatures": new_signatures,
+    }
+
+
+def _route_after_chatbot(state: AgentState) -> str:
+    return "tool_interceptor" if _latest_ai_tool_calls(state.get("messages", [])) else "end"
+
+
+def _route_after_interceptor(state: AgentState) -> str:
+    if state.get("route_status") == "tool_allowed":
+        return "tools"
+    if state.get("route_status") == "loop_blocked":
+        return "chatbot"
+    return "end"
+
+
+def capture_tool_state_node(state: AgentState) -> dict[str, Any]:
+    """Mirror scratchpad-save tool outputs into reducer-backed state."""
+    latest_tool_name, latest_tool_output = _extract_latest_tool_output(state.get("messages", []))
+    if latest_tool_name != "save_financial_metric":
+        return {}
+
+    try:
+        payload = json.loads(latest_tool_output)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict) or not payload.get("scratchpad_save"):
+        return {}
+
+    metric_name = str(payload.get("metric_name") or "").strip()
+    if not metric_name:
+        return {}
+    return {
+        "scratchpad": {
+            metric_name: {
+                "exact_value": payload.get("exact_value"),
+                "context": payload.get("context", ""),
+            }
+        }
+    }
+
+
 # 5. Build the LangGraph State Machine
 builder = StateGraph(AgentState)
 
 # Add the nodes
 builder.add_node("classify_and_route", classify_and_route_node)
-builder.add_node("summarize_conversation", summarize_conversation_node)
+builder.add_node("memory_manager", memory_manager_node)
 builder.add_node("chatbot", chatbot_node)
+builder.add_node("tool_interceptor", tool_interceptor_node)
 builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
+builder.add_node("capture_tool_state", capture_tool_state_node)
 builder.add_node("finalize_governance", finalize_governance_node)
 
 # Define the routing logic
@@ -1396,26 +1630,42 @@ builder.add_conditional_edges(
     "classify_and_route",
     _route_after_classification,
     {
-        "chatbot": "summarize_conversation",
+        "chatbot": "memory_manager",
         "end": END,
     },
 )
 
-builder.add_edge("summarize_conversation", "chatbot")
+builder.add_edge("memory_manager", "chatbot")
 
 # If the LLM decides it needs a MongoDB-backed historical tool, route to 'tools'
 # Otherwise, route to END to output the chat response to the user
 builder.add_conditional_edges(
     "chatbot",
-    tools_condition,
+    _route_after_chatbot,
+    {
+        "tool_interceptor": "tool_interceptor",
+        "end": END,
+    },
 )
 
 builder.add_conditional_edges(
-    "tools",
+    "tool_interceptor",
+    _route_after_interceptor,
+    {
+        "tools": "tools",
+        "chatbot": "chatbot",
+        "end": END,
+    },
+)
+
+builder.add_edge("tools", "capture_tool_state")
+
+builder.add_conditional_edges(
+    "capture_tool_state",
     _route_after_tool,
     {
         "finalize_governance": "finalize_governance",
-        "chatbot": "chatbot",
+        "chatbot": "memory_manager",
     },
 )
 builder.add_edge("finalize_governance", END)

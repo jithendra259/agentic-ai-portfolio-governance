@@ -24,7 +24,6 @@ from langchain_core.tools import tool
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
 from src.agents.generate_dynamic_plot import generate_financial_plot
-from src.agents.plot_store import GLOBAL_PLOT_IDS
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 
 load_dotenv()
@@ -209,7 +208,7 @@ def _downsample_df(df: pd.DataFrame, target_points: int = 500) -> pd.DataFrame:
     if df.empty or len(df) <= target_points:
         return df
 
-    step = len(df) // target_points
+    step = (len(df) + target_points - 1) // target_points
     if step <= 1:
         return df
 
@@ -1412,6 +1411,7 @@ def plot_historical_prices(
 
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         included = {}
+        point_counts = {}
         excluded = []
 
         for ticker in cleaned_tickers:
@@ -1432,14 +1432,19 @@ def plot_historical_prices(
                 )
                 continue
 
-            # Full data requested - bypassing downsampling
+            original_count = len(filtered)
+            render_frame = _downsample_df(filtered, target_points=700)
+            point_counts[ticker] = {
+                "original": int(original_count),
+                "rendered": int(len(render_frame)),
+            }
 
             included[ticker] = [
                 {
                     "date": row["Date"].strftime("%Y-%m-%d"),
                     "close": round(float(row["Close"]), 6),
                 }
-                for _, row in filtered.iterrows()
+                for _, row in render_frame.iterrows()
             ]
 
         if not included:
@@ -1470,6 +1475,7 @@ def plot_historical_prices(
             }
             for i, (ticker, rows) in enumerate(included.items())
         ]
+        total_rendered_points = sum(len(rows) for rows in included.values())
         spec = {
             "plot_type": "line",
             "title": plot_title,
@@ -1477,11 +1483,17 @@ def plot_historical_prices(
             "x_type": "time",
             "y_label": "Close Price (USD)",
             "series": series,
+            "density": {
+                "sampled": any(counts["rendered"] < counts["original"] for counts in point_counts.values()),
+                "point_counts": point_counts,
+                "rendered_points": int(total_rendered_points),
+            },
             # ── MUI X Line Chart features (backend-decided) ──
             "grid": {"horizontal": True},
             "curve": "monotoneX",
             "highlightScope": {"highlight": "series", "fade": "global"},
             "experimentalFeatures": {"enablePositionBasedPointerInteraction": True},
+            "skipAnimation": total_rendered_points > 500,
         }
 
         import uuid
@@ -1496,23 +1508,18 @@ def plot_historical_prices(
         except Exception as e:
             logger.error("Failed to store plot in MongoDB: %s", e)
 
-        if not stored:
-            return (
-                "Unable to generate the historical price plot because visualization "
-                "storage is unavailable. Please check the Supabase/MongoDB connection."
-            )
-
         session_id = (
             config.get("configurable", {}).get("thread_id", "default")
             if config
             else "default"
         )
-        from src.agents.plot_store import GLOBAL_PLOT_IDS
-        if session_id not in GLOBAL_PLOT_IDS:
-            GLOBAL_PLOT_IDS[session_id] = []
-        if isinstance(GLOBAL_PLOT_IDS[session_id], str):
-            GLOBAL_PLOT_IDS[session_id] = [GLOBAL_PLOT_IDS[session_id]]
-        GLOBAL_PLOT_IDS[session_id].append(plot_id)
+        from src.agents.plot_store import register_plot
+        register_plot(plot_id, spec, session_id)
+        if not stored:
+            logger.warning(
+                "plot_historical_prices: registered PlotSpec %s in process memory because persistent storage is unavailable",
+                plot_id,
+            )
 
         logger.info(
             "plot_historical_prices: stored PlotSpec with ID %s for session %s",
@@ -1521,7 +1528,11 @@ def plot_historical_prices(
         )
 
         coverage_lines = [
-            f"- {ticker}: {rows[0]['date']} to {rows[-1]['date']} ({len(rows)} observations)"
+            (
+                f"- {ticker}: {rows[0]['date']} to {rows[-1]['date']} "
+                f"({point_counts.get(ticker, {}).get('original', len(rows))} observations, "
+                f"{point_counts.get(ticker, {}).get('rendered', len(rows))} rendered)"
+            )
             for ticker, rows in included.items()
             if rows
         ]
@@ -2524,23 +2535,18 @@ def plot_us_economic_indicators(config: RunnableConfig = None) -> str:
     except Exception as e:
         logger.error("Failed to store plot in MongoDB: %s", e)
 
-    if not stored:
-        return (
-            "Unable to generate chart: visualization storage is unavailable. "
-            "Please check the Supabase/MongoDB connection."
-        )
-
     session_id = (
         config.get("configurable", {}).get("thread_id", "default")
         if config
         else "default"
     )
-    from src.agents.plot_store import GLOBAL_PLOT_IDS
-    if session_id not in GLOBAL_PLOT_IDS:
-        GLOBAL_PLOT_IDS[session_id] = []
-    if isinstance(GLOBAL_PLOT_IDS[session_id], str):
-        GLOBAL_PLOT_IDS[session_id] = [GLOBAL_PLOT_IDS[session_id]]
-    GLOBAL_PLOT_IDS[session_id].append(plot_id)
+    from src.agents.plot_store import register_plot
+    register_plot(plot_id, spec, session_id)
+    if not stored:
+        logger.warning(
+            "Registered macro comparison PlotSpec %s in process memory because persistent storage is unavailable",
+            plot_id,
+        )
 
     return "Chart ready: US unemployment rate comparison with GDP per capita"
 
