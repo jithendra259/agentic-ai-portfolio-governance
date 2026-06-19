@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
+import cvxpy as cp
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -23,6 +24,27 @@ class AdaptiveGateSignal:
     multiplier: float
     effective_lambda: float
     active: bool
+
+
+@dataclass(frozen=True)
+class LinearGCVarParams:
+    alpha: float = 0.95
+    max_weight: float = 0.30
+    return_tradeoff: float = 0.25
+    graph_lambda: float = 0.0025
+    lookback_days: int = 756
+    rebalance_frequency: str = "QE"
+    graph_threshold: float = 0.30
+    minimum_training_observations: int = 200
+    target_active_frequency: float = 0.10
+
+
+@dataclass
+class LinearGCVarWalkForwardResult:
+    returns: pd.Series
+    weights: pd.DataFrame
+    audit: pd.DataFrame
+    instability: pd.DataFrame
 
 
 def _normalize_unit_interval(values: pd.Series) -> pd.Series:
@@ -280,4 +302,205 @@ def adaptive_gate_signal(
         multiplier=multiplier,
         effective_lambda=effective,
         active=bool(multiplier > 0.5),
+    )
+
+
+def optimize_linear_centrality_cvar(
+    returns: pd.DataFrame,
+    centrality: pd.Series,
+    effective_lambda: float,
+    params: LinearGCVarParams,
+) -> tuple[pd.Series, dict[str, object]]:
+    """Solve CVaR with a linear centrality penalty c_t^T w."""
+    clean = pd.DataFrame(returns).dropna(how="any")
+    columns = list(clean.columns)
+    observations, assets = clean.shape
+    if observations == 0 or assets == 0:
+        raise ValueError("V2 optimizer requires nonempty aligned returns")
+
+    matrix = clean.to_numpy()
+    mean = clean.mean().reindex(columns).to_numpy()
+    penalty = pd.Series(centrality, dtype=float).reindex(columns).fillna(0.0).to_numpy()
+    weight = cp.Variable(assets)
+    threshold = cp.Variable()
+    excess = cp.Variable(observations)
+
+    losses = -matrix @ weight
+    cvar = threshold + cp.sum(excess) / ((1.0 - params.alpha) * observations)
+    expected_return = mean @ weight
+    graph_penalty = penalty @ weight
+    objective = cp.Minimize(
+        cvar
+        - float(params.return_tradeoff) * expected_return
+        + float(effective_lambda) * graph_penalty
+    )
+    max_weight = max(float(params.max_weight), 1.0 / assets + 1e-6)
+    constraints = [
+        excess >= losses - threshold,
+        excess >= 0,
+        cp.sum(weight) == 1,
+        weight >= 0,
+        weight <= max_weight,
+    ]
+    problem = cp.Problem(objective, constraints)
+
+    solver_used = None
+    for solver in ("CLARABEL", "ECOS", "SCS"):
+        if solver not in cp.installed_solvers():
+            continue
+        try:
+            problem.solve(solver=solver, verbose=False)
+            if weight.value is not None:
+                solver_used = solver
+                break
+        except Exception:
+            continue
+
+    if weight.value is None:
+        fallback = np.ones(assets) / assets
+        weights = pd.Series(fallback, index=columns)
+        return weights, {
+            "solver": "equal_weight_fallback",
+            "status": "fallback",
+            "fallback": True,
+            "graph_objective_type": "linear_centrality",
+            "weight_sum": 1.0,
+            "maximum_weight": float(weights.max()),
+        }
+
+    raw = np.maximum(np.asarray(weight.value).ravel(), 0.0)
+    if float(raw.sum()) <= 0:
+        raw = np.ones(assets) / assets
+    weights = pd.Series(raw / raw.sum(), index=columns)
+    return weights, {
+        "solver": solver_used,
+        "status": problem.status,
+        "fallback": False,
+        "graph_objective_type": "linear_centrality",
+        "weight_sum": float(weights.sum()),
+        "maximum_weight": float(weights.max()),
+        "objective_value": float(problem.value) if problem.value is not None else np.nan,
+    }
+
+
+def _rebalance_dates(index: pd.DatetimeIndex, frequency: str) -> list[pd.Timestamp]:
+    if len(index) == 0:
+        return []
+    dates = (
+        pd.Series(index, index=index)
+        .resample(frequency)
+        .first()
+        .dropna()
+        .tolist()
+    )
+    first = pd.Timestamp(index[0])
+    if first not in dates:
+        dates.insert(0, first)
+    return sorted(pd.to_datetime(dates))
+
+
+def run_linear_gcvar_walk_forward(
+    returns: pd.DataFrame,
+    universe: str,
+    holdings: pd.DataFrame | None,
+    validation_start: pd.Timestamp,
+    validation_end: pd.Timestamp,
+    test_start: pd.Timestamp,
+    test_end: pd.Timestamp,
+    params: LinearGCVarParams | None = None,
+) -> LinearGCVarWalkForwardResult:
+    """Run supplemental V2 over the untouched test lane."""
+    params = params or LinearGCVarParams()
+    aligned = pd.DataFrame(returns).dropna(how="any").sort_index()
+    instability = compute_instability_series(aligned)
+    if "instability_index" in instability.columns:
+        theta, steepness = calibrate_gate(
+            instability["instability_index"],
+            validation_start,
+            validation_end,
+            params.target_active_frequency,
+        )
+    else:
+        theta, steepness = 0.0, 1.0
+
+    evaluation = aligned.loc[pd.Timestamp(test_start):pd.Timestamp(test_end)]
+    decision_dates = _rebalance_dates(evaluation.index, params.rebalance_frequency)
+    realized: list[pd.Series] = []
+    weight_rows: list[pd.Series] = []
+    audit_rows: list[dict[str, object]] = []
+    previous_weights: pd.Series | None = None
+
+    instability_series = (
+        instability["instability_index"].dropna()
+        if "instability_index" in instability.columns
+        else pd.Series(dtype=float)
+    )
+    for position, decision_date in enumerate(decision_dates):
+        next_date = (
+            decision_dates[position + 1]
+            if position + 1 < len(decision_dates)
+            else pd.Timestamp(test_end) + pd.Timedelta(days=1)
+        )
+        history = aligned.loc[aligned.index < decision_date].tail(params.lookback_days)
+        period = aligned.loc[
+            (aligned.index >= decision_date) & (aligned.index < next_date)
+        ]
+        if len(history) < params.minimum_training_observations or period.empty:
+            continue
+
+        available_signal = instability_series.loc[instability_series.index < decision_date]
+        instability_value = float(available_signal.iloc[-1]) if len(available_signal) else np.nan
+        gate = adaptive_gate_signal(
+            instability_value, theta, steepness, params.graph_lambda
+        )
+        centrality, graph_source = get_linear_graph_penalty(
+            history,
+            history.columns,
+            decision_date,
+            holdings,
+            threshold=params.graph_threshold,
+        )
+        weights, solver_audit = optimize_linear_centrality_cvar(
+            history, centrality, gate.effective_lambda, params
+        )
+        realized.append((period @ weights).rename("return"))
+        turnover = (
+            float((weights - previous_weights.reindex(weights.index).fillna(0.0)).abs().sum())
+            if previous_weights is not None
+            else 0.0
+        )
+        hhi = float(np.square(weights).sum())
+        graph_exposure = float(
+            (weights.reindex(centrality.index).fillna(0.0) * centrality).sum()
+        )
+        weight_rows.append(weights.rename(decision_date))
+        audit_rows.append(
+            {
+                "universe": universe,
+                "decision_date": decision_date,
+                "period_end": next_date,
+                "training_start": history.index.min(),
+                "training_end": history.index.max(),
+                "instability_index": gate.instability,
+                "theta": gate.threshold,
+                "steepness_k": gate.steepness,
+                "lambda_multiplier": gate.multiplier,
+                "lambda_effective": gate.effective_lambda,
+                "active": gate.active,
+                "graph_source": graph_source,
+                "graph_exposure": graph_exposure,
+                "turnover": turnover,
+                "hhi": hhi,
+                "effective_n": float(1.0 / hhi) if hhi > 0 else np.nan,
+                "asset_count": len(weights),
+                **solver_audit,
+            }
+        )
+        previous_weights = weights
+
+    return LinearGCVarWalkForwardResult(
+        returns=pd.concat(realized).sort_index() if realized else pd.Series(dtype=float),
+        weights=pd.DataFrame(weight_rows),
+        audit=pd.DataFrame(audit_rows),
+        instability=instability,
     )

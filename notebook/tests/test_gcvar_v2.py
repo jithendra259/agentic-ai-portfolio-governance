@@ -137,5 +137,69 @@ class LinearGraphAndSignalTests(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+class LinearOptimizerAndWalkForwardTests(unittest.TestCase):
+    def setUp(self):
+        index = pd.bdate_range("2018-01-01", "2023-06-30")
+        rng = np.random.default_rng(77)
+        common = rng.normal(0.0003, 0.006, len(index))
+        self.returns = pd.DataFrame(
+            {
+                "A": common + rng.normal(0, 0.005, len(index)),
+                "B": common * 0.7 + rng.normal(0, 0.007, len(index)),
+                "C": -common * 0.2 + rng.normal(0, 0.006, len(index)),
+                "D": rng.normal(0.0002, 0.008, len(index)),
+            },
+            index=index,
+        )
+
+    def test_linear_optimizer_returns_feasible_weights(self):
+        from gcvar_v2 import LinearGCVarParams, optimize_linear_centrality_cvar
+
+        weights, audit = optimize_linear_centrality_cvar(
+            self.returns.iloc[:260],
+            pd.Series([0.1, 0.4, 0.7, 1.0], index=self.returns.columns),
+            effective_lambda=0.0025,
+            params=LinearGCVarParams(max_weight=0.4),
+        )
+
+        self.assertAlmostEqual(float(weights.sum()), 1.0, places=7)
+        self.assertTrue((weights >= -1e-8).all())
+        self.assertLessEqual(float(weights.max()), 0.4 + 1e-6)
+        self.assertEqual(audit["graph_objective_type"], "linear_centrality")
+        self.assertFalse(audit["fallback"])
+
+    def test_walk_forward_never_uses_current_or_future_returns(self):
+        from gcvar_v2 import LinearGCVarParams, run_linear_gcvar_walk_forward
+
+        result = run_linear_gcvar_walk_forward(
+            self.returns,
+            universe="U_TEST",
+            holdings=pd.DataFrame(),
+            validation_start=pd.Timestamp("2020-01-01"),
+            validation_end=pd.Timestamp("2022-12-31"),
+            test_start=pd.Timestamp("2023-01-01"),
+            test_end=pd.Timestamp("2023-06-30"),
+            params=LinearGCVarParams(
+                lookback_days=260,
+                rebalance_frequency="ME",
+                max_weight=0.5,
+            ),
+        )
+
+        self.assertFalse(result.returns.empty)
+        self.assertFalse(result.audit.empty)
+        self.assertTrue(
+            (result.audit["training_end"] < result.audit["decision_date"]).all()
+        )
+        self.assertTrue(result.audit["turnover"].notna().all())
+        self.assertEqual(set(result.audit["graph_source"]), {"correlation_proxy"})
+        self.assertTrue(
+            (
+                result.audit["active"]
+                == (result.audit["lambda_multiplier"] > 0.5)
+            ).all()
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
