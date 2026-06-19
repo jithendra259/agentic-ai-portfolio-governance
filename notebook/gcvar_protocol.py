@@ -189,9 +189,11 @@ def optimize_governance_gcvar(
     return_normalized = (mean @ weight) / equal_mean
     graph_expression = cp.quad_form(weight, cp.psd_wrap(graph))
     graph_normalized = graph_expression / equal_graph
+    graph_constraint_active = float(lambda_t) > 0
 
     objective = cvar_normalized - params.gamma_return * return_normalized
-    objective += float(lambda_t) * graph_normalized
+    if graph_constraint_active:
+        objective += float(lambda_t) * graph_normalized
     if previous_weights is not None:
         previous = (
             pd.Series(previous_weights)
@@ -211,9 +213,12 @@ def optimize_governance_gcvar(
         weight >= 0,
         weight <= max_weight,
         cvar_normalized <= params.rho_cvar + cvar_slack,
-        graph_normalized <= params.rho_graph + graph_slack,
         mean @ weight >= params.rho_return * float(mean @ equal) - return_slack,
     ]
+    if graph_constraint_active:
+        constraints.append(
+            graph_normalized <= params.rho_graph + graph_slack
+        )
     problem = cp.Problem(cp.Minimize(objective), constraints)
 
     used_solver = None
@@ -237,6 +242,7 @@ def optimize_governance_gcvar(
             "graph_slack": np.nan,
             "return_slack": np.nan,
             "fallback": True,
+            "graph_constraint_active": graph_constraint_active,
             "weight_sum": 1.0,
             "maximum_weight": float(result.max()),
         }
@@ -250,6 +256,7 @@ def optimize_governance_gcvar(
         "graph_slack": max(float(graph_slack.value), 0.0),
         "return_slack": max(float(return_slack.value), 0.0),
         "fallback": False,
+        "graph_constraint_active": graph_constraint_active,
         "weight_sum": float(result.sum()),
         "maximum_weight": float(result.max()),
     }
@@ -594,3 +601,99 @@ def calibrate_governance_gcvar(
         **json.loads(scored.loc[0, "parameter_json"])
     )
     return selected, scored
+
+
+def build_behavioral_validation_table(
+    strategy_results: Mapping[tuple[str, str], WalkForwardResult],
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for (universe, strategy), result in strategy_results.items():
+        if result.returns.empty or result.decision_log.empty:
+            continue
+        decisions = result.decision_log.sort_values("decision_date").copy()
+        decisions["next_date"] = decisions["decision_date"].shift(-1)
+        decisions.loc[decisions.index[-1], "next_date"] = (
+            result.returns.index.max() + pd.Timedelta(days=1)
+        )
+        for _, decision in decisions.iterrows():
+            period = result.returns.loc[
+                (result.returns.index >= decision["decision_date"])
+                & (result.returns.index < decision["next_date"])
+            ]
+            for date, value in period.items():
+                rows.append(
+                    {
+                        "universe": universe,
+                        "strategy": strategy,
+                        "date": date,
+                        "return": value,
+                        "regime": decision["regime"],
+                        "lambda_t": decision["lambda_t"],
+                        "graph_exposure": decision["graph_exposure"],
+                        "turnover": decision["turnover"],
+                        "effective_n": decision["effective_n"],
+                    }
+                )
+
+    daily = pd.DataFrame(rows)
+    if daily.empty:
+        return pd.DataFrame()
+    output: list[dict[str, Any]] = []
+    for (universe, regime, strategy), group in daily.groupby(
+        ["universe", "regime", "strategy"]
+    ):
+        values = group["return"].dropna()
+        annual_return = _annual_return(values)
+        annual_volatility = (
+            float(values.std() * np.sqrt(252)) if len(values) else np.nan
+        )
+        output.append(
+            {
+                "universe": universe,
+                "regime": regime,
+                "strategy": strategy,
+                "observations": len(values),
+                "annual_return": annual_return,
+                "sharpe_ratio": annual_return / annual_volatility
+                if annual_volatility > 0 and np.isfinite(annual_return)
+                else np.nan,
+                "historical_cvar_loss_95": _historical_cvar_loss(
+                    values, 0.95
+                ),
+                "max_drawdown_magnitude": _maximum_drawdown_magnitude(values),
+                "graph_exposure": float(group["graph_exposure"].mean()),
+                "turnover": float(group["turnover"].mean()),
+                "effective_n": float(group["effective_n"].mean()),
+                "adaptive_activation_frequency": float(
+                    (group["lambda_t"] > 0).mean()
+                ),
+            }
+        )
+    return pd.DataFrame(output)
+
+
+def validate_adaptive_graph_behavior(logs: pd.DataFrame) -> pd.DataFrame:
+    required = {"universe", "strategy", "regime", "graph_exposure"}
+    missing = required.difference(logs.columns)
+    if missing:
+        raise ValueError(f"Behavior logs missing columns: {sorted(missing)}")
+    adaptive = logs.loc[logs["strategy"].eq("adaptive_graph_cvar")]
+    rows: list[dict[str, Any]] = []
+    for universe, group in adaptive.groupby("universe"):
+        calm = group.loc[
+            group["regime"].eq("calm"), "graph_exposure"
+        ].mean()
+        crisis = group.loc[
+            group["regime"].eq("crisis"), "graph_exposure"
+        ].mean()
+        rows.append(
+            {
+                "universe": universe,
+                "calm_graph_exposure": calm,
+                "crisis_graph_exposure": crisis,
+                "crisis_graph_exposure_lower_than_calm": bool(
+                    pd.notna(calm) and pd.notna(crisis) and crisis < calm
+                ),
+            }
+        )
+    return pd.DataFrame(rows)

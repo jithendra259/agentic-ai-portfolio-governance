@@ -116,6 +116,27 @@ class GovernanceOptimizerTests(unittest.TestCase):
             (low - previous).abs().sum() + 1e-6,
         )
 
+    def test_zero_lambda_disables_graph_dominance_constraint(self):
+        from gcvar_protocol import GovernanceParams, optimize_governance_gcvar
+
+        _, calm_audit = optimize_governance_gcvar(
+            self.returns,
+            self.graph,
+            0.0,
+            None,
+            GovernanceParams(),
+        )
+        _, active_audit = optimize_governance_gcvar(
+            self.returns,
+            self.graph,
+            0.1,
+            None,
+            GovernanceParams(),
+        )
+
+        self.assertFalse(calm_audit["graph_constraint_active"])
+        self.assertTrue(active_audit["graph_constraint_active"])
+
 
 class AdaptiveProtocolTests(unittest.TestCase):
     def test_adaptive_lambda_is_zero_in_calm_and_bounded_in_crisis(self):
@@ -218,6 +239,46 @@ class GovernanceScoringTests(unittest.TestCase):
                 pd.bdate_range("2020-01-01", "2023-01-10"),
                 pd.bdate_range("2023-01-01", "2025-12-31"),
             )
+
+
+class BehavioralValidationTests(unittest.TestCase):
+    def test_adaptive_crisis_graph_exposure_is_lower_on_controlled_fixture(self):
+        from gcvar_protocol import validate_adaptive_graph_behavior
+
+        logs = pd.DataFrame(
+            [
+                {
+                    "universe": "U1",
+                    "strategy": "adaptive_graph_cvar",
+                    "regime": "calm",
+                    "graph_exposure": 0.40,
+                },
+                {
+                    "universe": "U1",
+                    "strategy": "adaptive_graph_cvar",
+                    "regime": "calm",
+                    "graph_exposure": 0.38,
+                },
+                {
+                    "universe": "U1",
+                    "strategy": "adaptive_graph_cvar",
+                    "regime": "crisis",
+                    "graph_exposure": 0.20,
+                },
+                {
+                    "universe": "U1",
+                    "strategy": "adaptive_graph_cvar",
+                    "regime": "crisis",
+                    "graph_exposure": 0.18,
+                },
+            ]
+        )
+
+        audit = validate_adaptive_graph_behavior(logs)
+
+        self.assertTrue(
+            audit.loc[0, "crisis_graph_exposure_lower_than_calm"]
+        )
 
 
 if __name__ == "__main__":
