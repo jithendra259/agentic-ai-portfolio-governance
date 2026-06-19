@@ -39,6 +39,23 @@ class PortfolioPlotScriptContractTests(unittest.TestCase):
         ]:
             self.assertIn(filename, self.source)
 
+    def test_full_script_exports_separate_validation_and_test_behavior(self):
+        for filename in [
+            "gcvar_validation_behavioral_validation.csv",
+            "gcvar_test_behavioral_validation.csv",
+            "gcvar_adaptive_gate_audit_validation.csv",
+            "gcvar_adaptive_gate_audit_test.csv",
+            "instability_vs_adaptive_gate_validation.png",
+            "instability_vs_adaptive_gate_test.png",
+            "crisis_governance_comparison_validation.png",
+            "crisis_governance_comparison_test.png",
+        ]:
+            self.assertIn(filename, self.source)
+
+    def test_full_script_exports_plot_quality_audit(self):
+        self.assertIn("plot_quality_audit.csv", self.source)
+        self.assertIn("Image.open", self.source)
+
     def test_full_script_imports_protocol_module(self):
         self.assertIn("from gcvar_protocol import", self.source)
         self.assertNotIn('"train_test_split": "2015-01-01"', self.source)

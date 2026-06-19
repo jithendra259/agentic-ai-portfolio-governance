@@ -136,6 +136,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from PIL import Image
 
 from gcvar_protocol import (
     GovernanceParams,
@@ -210,8 +211,8 @@ CONFIG = {
     "graph_lambda": 0.0025,
     "graph_corr_threshold": 0.30,
     "max_missing_ratio_per_ticker": 0.60,  # keep more tickers; align per universe later
-    "adaptive_lambda_max": 0.35,
-    "instability_threshold": 1.75,
+    "adaptive_lambda_max": 1.0,
+    "instability_threshold": 1.75,  # Legacy exploratory threshold only.
     "sigmoid_steepness": 6.0,
     "dynamic_lookback_days": 252,
     "multi_horizon_min_coverage": 0.80,
@@ -6358,7 +6359,7 @@ GCVAR_CANDIDATE_GRID = [
         )
     )
     for graph_lambda in (0.05, 0.10)
-    for lambda_max in (0.50, 0.80)
+    for lambda_max in (1.0,)
     for turnover_lambda in (0.02, 0.05)
 ]
 GCVAR_PARAMETER_GRID_HASH = stable_parameter_hash(GCVAR_CANDIDATE_GRID)
@@ -6368,14 +6369,21 @@ GCVAR_BOUNDARY_ROWS = []
 GCVAR_SOLVER_ROWS = []
 GCVAR_PROTOCOL_RESULTS = {}
 GCVAR_DECISION_LOGS = []
+GCVAR_VALIDATION_RESULTS = {}
+GCVAR_VALIDATION_DECISION_LOGS = []
 GCVAR_RANKING_ROWS = []
 
 
-def _protocol_standard_cvar_result(universe, r_all, instability, regime_source):
-    history = r_all.loc[
-        PROTOCOL_DATES.training_start:PROTOCOL_DATES.validation_end
-    ]
-    test = r_all.loc[PROTOCOL_DATES.test_start:PROTOCOL_DATES.test_end]
+def _protocol_standard_cvar_result(
+    universe,
+    r_all,
+    instability,
+    regime_source,
+    evaluation_start,
+    evaluation_end,
+):
+    history = r_all.loc[r_all.index < evaluation_start]
+    evaluation = r_all.loc[evaluation_start:evaluation_end]
     weights = optimize_cvar_weights(
         history,
         alpha=CONFIG["cvar_alpha"],
@@ -6383,7 +6391,7 @@ def _protocol_standard_cvar_result(universe, r_all, instability, regime_source):
         return_tradeoff=CONFIG["return_tradeoff"],
         target_annual_return=CONFIG["target_annual_return"],
     )
-    realized = portfolio_returns(test, weights)
+    realized = portfolio_returns(evaluation, weights)
     logs = []
     weight_rows = []
     for _, source in regime_source.iterrows():
@@ -6397,7 +6405,10 @@ def _protocol_standard_cvar_result(universe, r_all, instability, regime_source):
             "training_start": trailing.index.min(),
             "training_end": trailing.index.max(),
             "lambda_t": 0.0,
+            "lambda_gate": source.get("lambda_gate", source.get("lambda_t", 0.0)),
+            "active_graph_lambda": 0.0,
             "instability_index": source.get("instability_index", np.nan),
+            "instability_threshold": source.get("instability_threshold", np.nan),
             "regime": source.get("regime", "calm"),
             "graph_exposure": protocol_graph_exposure(weights, graph),
             "turnover": 0.0,
@@ -6409,7 +6420,7 @@ def _protocol_standard_cvar_result(universe, r_all, instability, regime_source):
         weight_history=pd.DataFrame(weight_rows),
         decision_log=pd.DataFrame(logs),
         solver_audit=pd.DataFrame([{
-            "decision_date": PROTOCOL_DATES.test_start,
+            "decision_date": evaluation_start,
             "solver": weights.attrs.get("solver", "legacy_cvar_optimizer"),
             "status": "baseline",
             "fallback": bool(weights.attrs.get("target_return_fallback", False)),
@@ -6449,6 +6460,47 @@ for universe in WORKING_UNIVERSES:
     calibration_df["universe"] = universe
     GCVAR_CALIBRATION_ROWS.append(calibration_df)
 
+    validation_static_result = run_walk_forward_gcvar(
+        returns=r_all.loc[:PROTOCOL_DATES.validation_end],
+        instability=protocol_instability,
+        evaluation_start=PROTOCOL_DATES.validation_start,
+        evaluation_end=PROTOCOL_DATES.validation_end,
+        params=selected_params,
+        adaptive=False,
+        rebalance_frequency="QE",
+        lookback_days=756,
+    )
+    validation_adaptive_result = run_walk_forward_gcvar(
+        returns=r_all.loc[:PROTOCOL_DATES.validation_end],
+        instability=protocol_instability,
+        evaluation_start=PROTOCOL_DATES.validation_start,
+        evaluation_end=PROTOCOL_DATES.validation_end,
+        params=selected_params,
+        adaptive=True,
+        rebalance_frequency="QE",
+        lookback_days=756,
+    )
+    validation_cvar_result = _protocol_standard_cvar_result(
+        universe,
+        r_all,
+        protocol_instability,
+        validation_adaptive_result.decision_log,
+        PROTOCOL_DATES.validation_start,
+        PROTOCOL_DATES.validation_end,
+    )
+    for strategy, result in {
+        "cvar_optimized": validation_cvar_result,
+        "graph_cvar_optimized": validation_static_result,
+        "adaptive_graph_cvar": validation_adaptive_result,
+    }.items():
+        GCVAR_VALIDATION_RESULTS[(universe, strategy)] = result
+        log = result.decision_log.copy()
+        if not log.empty:
+            log["universe"] = universe
+            log["strategy"] = strategy
+            log["evidence_period"] = "validation_2020_2022"
+            GCVAR_VALIDATION_DECISION_LOGS.append(log)
+
     static_result = run_walk_forward_gcvar(
         returns=r_all,
         instability=protocol_instability,
@@ -6474,6 +6526,8 @@ for universe in WORKING_UNIVERSES:
         r_all,
         protocol_instability,
         adaptive_result.decision_log,
+        PROTOCOL_DATES.test_start,
+        PROTOCOL_DATES.test_end,
     )
 
     for strategy, result in {
@@ -6486,6 +6540,7 @@ for universe in WORKING_UNIVERSES:
         if not log.empty:
             log["universe"] = universe
             log["strategy"] = strategy
+            log["evidence_period"] = "untouched_test_2023_2025"
             GCVAR_DECISION_LOGS.append(log)
         audit = result.solver_audit.copy()
         if not audit.empty:
@@ -6556,14 +6611,44 @@ GCVAR_DECISION_LOGS = (
     if GCVAR_DECISION_LOGS
     else pd.DataFrame()
 )
-gcvar_behavioral_validation_df = build_behavioral_validation_table(
+GCVAR_VALIDATION_DECISION_LOGS = (
+    pd.concat(GCVAR_VALIDATION_DECISION_LOGS, ignore_index=True)
+    if GCVAR_VALIDATION_DECISION_LOGS
+    else pd.DataFrame()
+)
+gcvar_validation_behavioral_validation_df = build_behavioral_validation_table(
+    GCVAR_VALIDATION_RESULTS
+)
+gcvar_test_behavioral_validation_df = build_behavioral_validation_table(
     GCVAR_PROTOCOL_RESULTS
 )
+gcvar_behavioral_validation_df = gcvar_test_behavioral_validation_df
 gcvar_test_governance_ranking_df = compute_governance_scores(
     pd.DataFrame(GCVAR_RANKING_ROWS)
 )
 gcvar_behavior_mechanism_audit_df = validate_adaptive_graph_behavior(
     GCVAR_DECISION_LOGS
+)
+
+
+def _adaptive_gate_audit(logs, evidence_period):
+    adaptive = logs.loc[logs["strategy"].eq("adaptive_graph_cvar")].copy()
+    columns = [
+        "universe", "decision_date", "training_start", "training_end",
+        "instability_index", "instability_threshold", "lambda_gate",
+        "active_graph_lambda", "regime", "graph_exposure", "turnover",
+    ]
+    adaptive["evidence_period"] = evidence_period
+    adaptive["gate_gt_050"] = adaptive["lambda_gate"] > 0.50
+    adaptive["gate_gt_025"] = adaptive["lambda_gate"] > 0.25
+    return adaptive[["evidence_period", *columns, "gate_gt_050", "gate_gt_025"]]
+
+
+gcvar_adaptive_gate_audit_validation_df = _adaptive_gate_audit(
+    GCVAR_VALIDATION_DECISION_LOGS, "validation_2020_2022"
+)
+gcvar_adaptive_gate_audit_test_df = _adaptive_gate_audit(
+    GCVAR_DECISION_LOGS, "untouched_test_2023_2025"
 )
 
 gcvar_calibration_results_df.to_csv(
@@ -6577,6 +6662,18 @@ gcvar_solver_audit_df.to_csv(
 )
 gcvar_behavioral_validation_df.to_csv(
     TABLE_DIR / "gcvar_behavioral_validation.csv", index=False
+)
+gcvar_validation_behavioral_validation_df.to_csv(
+    TABLE_DIR / "gcvar_validation_behavioral_validation.csv", index=False
+)
+gcvar_test_behavioral_validation_df.to_csv(
+    TABLE_DIR / "gcvar_test_behavioral_validation.csv", index=False
+)
+gcvar_adaptive_gate_audit_validation_df.to_csv(
+    TABLE_DIR / "gcvar_adaptive_gate_audit_validation.csv", index=False
+)
+gcvar_adaptive_gate_audit_test_df.to_csv(
+    TABLE_DIR / "gcvar_adaptive_gate_audit_test.csv", index=False
 )
 gcvar_test_governance_ranking_df.to_csv(
     TABLE_DIR / "gcvar_test_governance_ranking.csv", index=False
@@ -6607,29 +6704,39 @@ GCVAR_FIGURE_DIR = FIGURE_DIR / "walk_forward_governance_gcvar"
 GCVAR_FIGURE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def plot_instability_vs_adaptive_lambda(decision_logs):
+def plot_instability_vs_adaptive_gate(decision_logs, period_label, filename):
     adaptive = decision_logs[
         decision_logs["strategy"] == "adaptive_graph_cvar"
     ]
-    fig, axes = plt.subplots(2, 1, figsize=(15, 8), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(15, 11), sharex=True)
     for universe, group in adaptive.groupby("universe"):
         group = group.sort_values("decision_date")
         axes[0].plot(
             group["decision_date"], group["instability_index"],
             label=universe, alpha=0.75,
         )
+        axes[0].plot(
+            group["decision_date"], group["instability_threshold"],
+            linestyle="--", alpha=0.35,
+        )
         axes[1].plot(
-            group["decision_date"], group["lambda_t"],
+            group["decision_date"], group["lambda_gate"],
+            label=universe, alpha=0.75,
+        )
+        axes[2].plot(
+            group["decision_date"], group["active_graph_lambda"],
             label=universe, alpha=0.75,
         )
     axes[0].set_ylabel("Instability index")
-    axes[1].set_ylabel("Adaptive lambda")
-    axes[1].set_xlabel("Untouched test date")
+    axes[1].set_ylabel("Lambda gate [0, 1]")
+    axes[1].axhline(0.50, color="black", linestyle=":", linewidth=1)
+    axes[2].set_ylabel("Active graph lambda")
+    axes[2].set_xlabel("Decision date")
     axes[0].set_title(
-        "Instability and Adaptive Activation — Untouched test: 2023-2025"
+        f"Instability, q80 Gate, and Optimizer Penalty — {period_label}"
     )
     axes[0].legend(ncol=4, fontsize=8)
-    path = GCVAR_FIGURE_DIR / "instability_vs_adaptive_lambda.png"
+    path = GCVAR_FIGURE_DIR / filename
     fig.savefig(path, dpi=240, bbox_inches="tight")
     plt.close(fig)
     return path
@@ -6656,7 +6763,7 @@ def plot_time_varying_graph_exposure(decision_logs):
     return path
 
 
-def plot_crisis_only_governance_comparison(behavior):
+def plot_crisis_governance_comparison(behavior, period_label, filename):
     metrics = [
         "historical_cvar_loss_95",
         "max_drawdown_magnitude",
@@ -6665,31 +6772,57 @@ def plot_crisis_only_governance_comparison(behavior):
         "annual_return",
     ]
     crisis = behavior[behavior["regime"] == "crisis"]
-    fig, ax = plt.subplots(figsize=(13, 7))
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    axes = axes.ravel()
     if crisis.empty:
-        ax.text(
-            0.5, 0.5, "No crisis observations in untouched test window",
-            ha="center", va="center", transform=ax.transAxes,
+        axes[0].text(
+            0.5, 0.5, f"No crisis observations in {period_label}",
+            ha="center", va="center", transform=axes[0].transAxes,
         )
+        for ax in axes[1:]:
+            ax.axis("off")
     else:
         summary = crisis.groupby("strategy")[metrics].mean()
-        denominator = (summary.max() - summary.min()).replace(0, 1)
-        normalized = (summary - summary.min()) / denominator
-        normalized.plot(kind="bar", ax=ax)
-        ax.legend(title="Metric", fontsize=8)
-    ax.set_title(
-        "Crisis-Only Governance Comparison — Untouched test: 2023-2025"
+        for ax, metric in zip(axes, metrics):
+            values = summary[metric].sort_values(
+                ascending=metric == "annual_return"
+            )
+            ax.bar(values.index, values.values)
+            ax.set_title(metric.replace("_", " ").title())
+            ax.tick_params(axis="x", rotation=25, labelsize=8)
+            ax.grid(axis="y", alpha=0.2)
+        axes[-1].axis("off")
+    fig.suptitle(
+        f"Crisis-Window Governance Comparison — {period_label}",
+        fontsize=14, fontweight="bold",
     )
-    ax.set_ylabel("Within-metric normalized value")
-    path = GCVAR_FIGURE_DIR / "crisis_only_governance_comparison.png"
+    path = GCVAR_FIGURE_DIR / filename
     fig.savefig(path, dpi=240, bbox_inches="tight")
     plt.close(fig)
     return path
 
 
-plot_instability_vs_adaptive_lambda(GCVAR_DECISION_LOGS)
+plot_instability_vs_adaptive_gate(
+    GCVAR_VALIDATION_DECISION_LOGS,
+    "Validation behavioral evidence: 2020-2022",
+    "instability_vs_adaptive_gate_validation.png",
+)
+plot_instability_vs_adaptive_gate(
+    GCVAR_DECISION_LOGS,
+    "Untouched final test evidence: 2023-2025",
+    "instability_vs_adaptive_gate_test.png",
+)
 plot_time_varying_graph_exposure(GCVAR_DECISION_LOGS)
-plot_crisis_only_governance_comparison(gcvar_behavioral_validation_df)
+plot_crisis_governance_comparison(
+    gcvar_validation_behavioral_validation_df,
+    "Validation behavioral evidence: 2020-2022",
+    "crisis_governance_comparison_validation.png",
+)
+plot_crisis_governance_comparison(
+    gcvar_test_behavioral_validation_df,
+    "Untouched final test evidence: 2023-2025",
+    "crisis_governance_comparison_test.png",
+)
 
 display(Markdown("### Untouched-Test Governance Ranking (2023-2025)"))
 display(
@@ -6731,6 +6864,68 @@ display(Markdown("### Restored Full Plot and Matrix Manifest"))
 display(RESTORED_PLOT_MATRIX_MANIFEST.head(100))
 print(f"Figures indexed: {(RESTORED_PLOT_MATRIX_MANIFEST['artifact_type'] == 'figure').sum() if not RESTORED_PLOT_MATRIX_MANIFEST.empty else 0}")
 print(f"Tables/matrices indexed: {(RESTORED_PLOT_MATRIX_MANIFEST['artifact_type'] == 'table_or_matrix').sum() if not RESTORED_PLOT_MATRIX_MANIFEST.empty else 0}")
+
+
+def audit_generated_plots(figure_root):
+    """Open and measure every PNG so blank/corrupt plots cannot pass silently."""
+    rows = []
+    for path in sorted(Path(figure_root).rglob("*.png")):
+        try:
+            with Image.open(path) as image:
+                image.verify()
+            with Image.open(path) as image:
+                width, height = image.size
+                gray_image = image.convert("L")
+                gray_image.thumbnail((640, 640))
+                pixels = np.asarray(gray_image, dtype=float)
+            histogram = np.bincount(
+                pixels.astype(np.uint8).ravel(), minlength=256
+            ).astype(float)
+            probabilities = histogram[histogram > 0] / histogram.sum()
+            entropy = float(-(probabilities * np.log2(probabilities)).sum())
+            edge = np.concatenate([
+                pixels[:3, :].ravel(), pixels[-3:, :].ravel(),
+                pixels[:, :3].ravel(), pixels[:, -3:].ravel(),
+            ])
+            gray_variance = float(pixels.var())
+            near_white_fraction = float((pixels >= 250).mean())
+            dark_edge_fraction = float((edge < 245).mean())
+            critical = (
+                width < 400 or height < 250 or gray_variance < 2.0
+                or entropy < 0.15
+            )
+            review = (
+                near_white_fraction > 0.985 or dark_edge_fraction > 0.20
+                or max(width / height, height / width) > 5.0
+            )
+            status = "critical" if critical else ("review" if review else "pass")
+            rows.append({
+                "relative_path": str(path.relative_to(Path(figure_root))),
+                "width_px": width,
+                "height_px": height,
+                "file_size_bytes": path.stat().st_size,
+                "gray_variance": gray_variance,
+                "entropy_bits": entropy,
+                "near_white_fraction": near_white_fraction,
+                "dark_edge_fraction": dark_edge_fraction,
+                "qa_status": status,
+                "read_error": "",
+            })
+        except Exception as exc:
+            rows.append({
+                "relative_path": str(path.relative_to(Path(figure_root))),
+                "qa_status": "critical",
+                "read_error": f"{type(exc).__name__}: {exc}",
+            })
+    return pd.DataFrame(rows)
+
+
+PLOT_QUALITY_AUDIT_DF = audit_generated_plots(FIGURE_DIR)
+PLOT_QUALITY_AUDIT_DF.to_csv(
+    TABLE_DIR / "plot_quality_audit.csv", index=False
+)
+print("Plot QA status counts:")
+print(PLOT_QUALITY_AUDIT_DF["qa_status"].value_counts(dropna=False))
 
 """
 ## 31. Final Interpretation for the Multi-Horizon Return Panel
