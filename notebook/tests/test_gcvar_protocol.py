@@ -117,5 +117,108 @@ class GovernanceOptimizerTests(unittest.TestCase):
         )
 
 
+class AdaptiveProtocolTests(unittest.TestCase):
+    def test_adaptive_lambda_is_zero_in_calm_and_bounded_in_crisis(self):
+        from gcvar_protocol import adaptive_lambda_quantile
+
+        history = pd.Series(np.linspace(-1.0, 1.0, 200))
+
+        calm = adaptive_lambda_quantile(history, -0.5, 0.8, 0.8, 8.0)
+        crisis = adaptive_lambda_quantile(history, 2.0, 0.8, 0.8, 8.0)
+
+        self.assertEqual(calm, 0.0)
+        self.assertGreater(crisis, 0.0)
+        self.assertLessEqual(crisis, 0.8)
+
+    def test_walk_forward_training_cutoff_is_strictly_before_decision_date(self):
+        from gcvar_protocol import GovernanceParams, run_walk_forward_gcvar
+
+        index = pd.bdate_range("2019-01-01", "2023-03-31")
+        rng = np.random.default_rng(99)
+        returns = pd.DataFrame(
+            rng.normal(0, 0.01, (len(index), 4)),
+            index=index,
+            columns=list("ABCD"),
+        )
+        instability = pd.Series(rng.normal(size=len(index)), index=index)
+
+        result = run_walk_forward_gcvar(
+            returns=returns,
+            instability=instability,
+            evaluation_start=pd.Timestamp("2023-01-01"),
+            evaluation_end=pd.Timestamp("2023-03-31"),
+            params=GovernanceParams(),
+            adaptive=True,
+            rebalance_frequency="ME",
+            lookback_days=756,
+        )
+
+        self.assertFalse(result.decision_log.empty)
+        self.assertTrue(
+            (
+                result.decision_log["training_end"]
+                < result.decision_log["decision_date"]
+            ).all()
+        )
+
+
+class GovernanceScoringTests(unittest.TestCase):
+    def test_score_weights_are_fixed_and_sum_to_one(self):
+        from gcvar_protocol import GOVERNANCE_SCORE_WEIGHTS
+
+        self.assertEqual(
+            GOVERNANCE_SCORE_WEIGHTS,
+            {
+                "sharpe_ratio": 0.20,
+                "annual_return": 0.15,
+                "historical_cvar_loss_95": 0.25,
+                "max_drawdown_magnitude": 0.15,
+                "graph_exposure": 0.10,
+                "effective_n": 0.10,
+                "turnover": 0.05,
+            },
+        )
+        self.assertAlmostEqual(sum(GOVERNANCE_SCORE_WEIGHTS.values()), 1.0)
+
+    def test_incomplete_rows_do_not_receive_silently_reweighted_scores(self):
+        from gcvar_protocol import compute_governance_scores
+
+        metrics = pd.DataFrame(
+            [
+                {
+                    "universe": "U1",
+                    "strategy": "complete",
+                    "sharpe_ratio": 1.0,
+                    "annual_return": 0.1,
+                    "historical_cvar_loss_95": 0.02,
+                    "max_drawdown_magnitude": 0.2,
+                    "graph_exposure": 0.2,
+                    "effective_n": 5.0,
+                    "turnover": 0.1,
+                },
+                {
+                    "universe": "U1",
+                    "strategy": "missing",
+                    "sharpe_ratio": 2.0,
+                },
+            ]
+        )
+
+        scored = compute_governance_scores(metrics)
+        missing = scored.set_index("strategy").loc["missing"]
+
+        self.assertEqual(missing["score_status"], "incomplete")
+        self.assertTrue(pd.isna(missing["composite_governance_score"]))
+
+    def test_calibration_rejects_overlapping_validation_and_test_dates(self):
+        from gcvar_protocol import assert_disjoint_windows
+
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            assert_disjoint_windows(
+                pd.bdate_range("2020-01-01", "2023-01-10"),
+                pd.bdate_range("2023-01-01", "2025-12-31"),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
