@@ -588,6 +588,12 @@ def _normalize_metric_aliases(metrics: pd.DataFrame) -> pd.DataFrame:
         frame["max_drawdown_magnitude"] = pd.to_numeric(
             frame["max_drawdown"], errors="coerce"
         ).abs()
+    elif "max_drawdown_magnitude" in frame.columns and "max_drawdown" in frame.columns:
+        frame["max_drawdown_magnitude"] = pd.to_numeric(
+            frame["max_drawdown_magnitude"], errors="coerce"
+        ).fillna(
+            pd.to_numeric(frame["max_drawdown"], errors="coerce").abs()
+        )
     return frame
 
 

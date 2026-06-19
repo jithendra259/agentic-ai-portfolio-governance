@@ -270,6 +270,18 @@ class NanSafeRankingTests(unittest.TestCase):
         self.assertTrue(rejected.empty)
         self.assertAlmostEqual(rankings.loc[0, "turnover"], 0.04)
 
+    def test_drawdown_alias_fills_existing_empty_magnitude_column(self):
+        from gcvar_v2 import compute_family_rankings
+
+        row = self._row("U1", "adaptive_graph_cvar")
+        row["max_drawdown_magnitude"] = np.nan
+        row["max_drawdown"] = -0.23
+
+        rankings, rejected = compute_family_rankings(pd.DataFrame([row]))
+
+        self.assertTrue(rejected.empty)
+        self.assertAlmostEqual(rankings.loc[0, "max_drawdown_magnitude"], 0.23)
+
 
 if __name__ == "__main__":
     unittest.main()
