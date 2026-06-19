@@ -289,6 +289,25 @@ def adaptive_lambda_quantile(
     )
 
 
+def adaptive_gate_quantile(
+    history: pd.Series,
+    current_value: float,
+    quantile: float,
+    steepness: float,
+) -> tuple[float, float]:
+    """Return a unitless activation gate and its look-ahead-safe boundary."""
+    past = pd.Series(history).dropna()
+    if len(past) < 30 or not np.isfinite(current_value):
+        return 0.0, np.nan
+    boundary = float(past.quantile(quantile))
+    if current_value < boundary:
+        return 0.0, boundary
+    gate = 1.0 / (
+        1.0 + np.exp(-steepness * (float(current_value) - boundary))
+    )
+    return float(np.clip(gate, 0.0, 1.0)), boundary
+
+
 def run_walk_forward_gcvar(
     returns: pd.DataFrame,
     instability: pd.Series,
@@ -352,21 +371,21 @@ def run_walk_forward_gcvar(
             if len(instability_available)
             else np.nan
         )
-        lambda_t = (
-            adaptive_lambda_quantile(
-                instability_available.iloc[:-1],
-                current,
-                params.lambda_max,
-                params.instability_quantile,
-                params.sigmoid_steepness,
-            )
+        lambda_gate, instability_threshold = adaptive_gate_quantile(
+            instability_available.iloc[:-1],
+            current,
+            params.instability_quantile,
+            params.sigmoid_steepness,
+        )
+        active_graph_lambda = (
+            params.graph_lambda * lambda_gate
             if adaptive
             else params.graph_lambda
         )
         allocation, audit = optimize_governance_gcvar(
             history,
             graph,
-            lambda_t,
+            active_graph_lambda,
             previous,
             params,
         )
@@ -390,8 +409,8 @@ def run_walk_forward_gcvar(
         )
         regime = (
             "crisis"
-            if lambda_t > 0.5 * params.lambda_max
-            else ("elevated" if lambda_t > 0 else "calm")
+            if lambda_gate > 0.5
+            else ("elevated" if lambda_gate > 0 else "calm")
         )
         weights.append(allocation.rename(decision_date))
         logs.append(
@@ -399,8 +418,11 @@ def run_walk_forward_gcvar(
                 "decision_date": decision_date,
                 "training_start": history.index.min(),
                 "training_end": history.index.max(),
-                "lambda_t": lambda_t,
+                "lambda_t": lambda_gate,
+                "lambda_gate": lambda_gate,
+                "active_graph_lambda": active_graph_lambda,
                 "instability_index": current,
+                "instability_threshold": instability_threshold,
                 "regime": regime,
                 "graph_exposure": graph_exposure(allocation, graph),
                 "turnover": turnover,

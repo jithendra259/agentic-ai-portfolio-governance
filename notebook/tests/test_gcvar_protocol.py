@@ -182,6 +182,52 @@ class AdaptiveProtocolTests(unittest.TestCase):
             ).all()
         )
 
+    def test_walk_forward_logs_gate_threshold_and_active_graph_lambda_separately(self):
+        from gcvar_protocol import GovernanceParams, run_walk_forward_gcvar
+
+        index = pd.bdate_range("2018-01-01", "2023-03-31")
+        rng = np.random.default_rng(101)
+        returns = pd.DataFrame(
+            rng.normal(0, 0.01, (len(index), 4)),
+            index=index,
+            columns=list("ABCD"),
+        )
+        instability = pd.Series(
+            np.linspace(-1.0, 2.0, len(index)), index=index
+        )
+        params = GovernanceParams(
+            graph_lambda=0.2,
+            lambda_max=1.0,
+            instability_quantile=0.8,
+        )
+
+        result = run_walk_forward_gcvar(
+            returns=returns,
+            instability=instability,
+            evaluation_start=pd.Timestamp("2023-01-01"),
+            evaluation_end=pd.Timestamp("2023-03-31"),
+            params=params,
+            adaptive=True,
+            rebalance_frequency="ME",
+            lookback_days=756,
+        )
+
+        required = {
+            "instability_threshold",
+            "lambda_gate",
+            "active_graph_lambda",
+        }
+        self.assertTrue(required.issubset(result.decision_log.columns))
+        self.assertTrue(result.decision_log["lambda_gate"].between(0, 1).all())
+        np.testing.assert_allclose(
+            result.decision_log["active_graph_lambda"],
+            params.graph_lambda * result.decision_log["lambda_gate"],
+        )
+        np.testing.assert_allclose(
+            result.decision_log["lambda_t"],
+            result.decision_log["lambda_gate"],
+        )
+
 
 class GovernanceScoringTests(unittest.TestCase):
     def test_score_weights_are_fixed_and_sum_to_one(self):
