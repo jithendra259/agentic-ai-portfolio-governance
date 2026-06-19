@@ -138,6 +138,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from PIL import Image
+from market_data_cache import update_adjusted_close_cache
 
 from gcvar_protocol import (
     GovernanceParams,
@@ -306,31 +307,48 @@ The notebook downloads only the final working tickers. It does not repeat the pr
 
 
 def download_adjusted_close(tickers, start_date, end_date):
-    data = yf.download(
+    base_dir = (
+        Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+    )
+    cache_path = base_dir / "data" / "yfinance_adjusted_close_2014_2025.csv"
+
+    def fetch_ticker(ticker, start, end):
+        data = yf.download(
+            tickers=[ticker],
+            start=start,
+            end=end,
+            auto_adjust=True,
+            repair=True,
+            progress=False,
+            group_by="column",
+            threads=False,
+        )
+        if data.empty:
+            return pd.Series(dtype=float, name=ticker)
+        if isinstance(data.columns, pd.MultiIndex):
+            if "Close" not in data.columns.get_level_values(0):
+                return pd.Series(dtype=float, name=ticker)
+            close = data["Close"]
+            if isinstance(close, pd.DataFrame):
+                close = close[ticker] if ticker in close.columns else close.iloc[:, 0]
+        else:
+            close = data["Close"]
+        return pd.Series(close, name=ticker).dropna()
+
+    close, audit = update_adjusted_close_cache(
         tickers=tickers,
         start=start_date,
-        end=end_date,
-        auto_adjust=True,
-        repair=True,
-        progress=False,
-        group_by="column",
-        threads=False,
+        end_exclusive=end_date,
+        cache_path=cache_path,
+        fetch_ticker=fetch_ticker,
+        max_attempts=3,
+        pause_seconds=0.75,
     )
-
-    if data.empty:
-        raise ValueError("No data returned from yfinance.")
-
-    if isinstance(data.columns, pd.MultiIndex):
-        if "Close" not in data.columns.get_level_values(0):
-            raise ValueError("Close column not found in yfinance response.")
-        close = data["Close"].copy()
-    else:
-        close = data[["Close"]].copy()
-        close.columns = tickers
-
-    close = close.loc[:, ~close.columns.duplicated()]
-    close = close[[ticker for ticker in tickers if ticker in close.columns]]
-    close.index = pd.to_datetime(close.index)
+    global MARKET_DATA_DOWNLOAD_AUDIT
+    MARKET_DATA_DOWNLOAD_AUDIT = audit
+    audit.to_csv(TABLE_DIR / "market_data_download_cache_audit.csv", index=False)
+    if close.empty:
+        raise ValueError("No data returned from yfinance or local cache.")
     return close.sort_index()
 
 

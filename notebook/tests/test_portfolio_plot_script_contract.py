@@ -36,6 +36,14 @@ class PortfolioPlotScriptContractTests(unittest.TestCase):
         self.assertIn("threads=False", download_block)
         self.assertNotIn("threads=True", download_block)
 
+    def test_yfinance_download_uses_incremental_persistent_cache(self):
+        download_start = self.source.index("def download_adjusted_close")
+        download_end = self.source.index("raw_prices =", download_start)
+        download_block = self.source[download_start:download_end]
+        self.assertIn("update_adjusted_close_cache", self.source)
+        self.assertIn("yfinance_adjusted_close_2014_2025.csv", download_block)
+        self.assertIn("MARKET_DATA_DOWNLOAD_AUDIT", download_block)
+
     def test_full_script_exports_protocol_audits(self):
         for filename in [
             "calibration_vs_test_boundary_audit.csv",
