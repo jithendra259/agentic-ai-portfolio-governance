@@ -314,7 +314,7 @@ def download_adjusted_close(tickers, start_date, end_date):
         repair=True,
         progress=False,
         group_by="column",
-        threads=True,
+        threads=False,
     )
 
     if data.empty:
