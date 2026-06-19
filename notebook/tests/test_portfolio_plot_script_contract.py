@@ -85,6 +85,42 @@ class PortfolioPlotScriptContractTests(unittest.TestCase):
         self.assertIn("strategy_labels", crisis_block)
         self.assertIn("No solver fallbacks", self.source)
 
+    def test_v2_is_supplemental_and_runs_after_primary_protocol(self):
+        marker = self.source.index(
+            "FINAL WALK-FORWARD GOVERNANCE G-CVaR EVALUATION PROTOCOL"
+        )
+        label = "Supplemental Linear-Centrality Adaptive G-CVaR"
+        v2 = self.source.index(label)
+
+        self.assertGreater(v2, marker)
+        self.assertIn('"adaptive_graph_cvar_v2"', self.source[v2:])
+        self.assertIn("from gcvar_v2 import", self.source[v2:])
+
+    def test_v2_exports_thesis_safe_audits_and_rankings(self):
+        for filename in [
+            "adaptive_graph_cvar_v2_audit.csv",
+            "adaptive_graph_cvar_v2_results.csv",
+            "adaptive_graph_cvar_v2_weights.csv",
+            "adaptive_graph_cvar_v2_activation_summary.csv",
+            "nan_safe_core_governance_ranking.csv",
+            "nan_safe_supplemental_governance_ranking.csv",
+            "nan_safe_hitl_simulation_ranking.csv",
+            "nan_safe_governance_rejections.csv",
+            "final_technical_validation_checks.csv",
+        ]:
+            self.assertIn(filename, self.source)
+
+    def test_v2_does_not_replace_primary_strategy_name(self):
+        label = "Supplemental Linear-Centrality Adaptive G-CVaR"
+        v2_block = self.source[self.source.index(label):]
+        self.assertIn('"strategy": "adaptive_graph_cvar_v2"', v2_block)
+        self.assertIn('"strategy_label": "Supplemental Linear-Centrality Adaptive G-CVaR"', v2_block)
+
+    def test_v2_finite_metric_check_reduces_to_one_boolean(self):
+        label = "Supplemental Linear-Centrality Adaptive G-CVaR"
+        v2_block = self.source[self.source.index(label):]
+        self.assertIn(").all().all()", v2_block)
+
     def test_full_script_imports_protocol_module(self):
         self.assertIn("from gcvar_protocol import", self.source)
         self.assertNotIn('"train_test_split": "2015-01-01"', self.source)

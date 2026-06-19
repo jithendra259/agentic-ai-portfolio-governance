@@ -7018,6 +7018,285 @@ print(
     "after observing the untouched test results."
 )
 
+"""## Supplemental Linear-Centrality Adaptive G-CVaR
+
+The original Static and Adaptive G-CVaR models remain the primary thesis
+protocol because they use the quadratic graph exposure term ``w^T A_t w``,
+preserving pairwise graph-risk interaction. A separate Adaptive G-CVaR V2 is
+added as a supplemental extension using a linear centrality penalty ``c_t^T w``.
+V2 does not replace the original protocol. In the absence of local SEC 13F
+holdings data, V2 transparently uses the correlation-network fallback.
+"""
+
+# ============================================================
+# SUPPLEMENTAL LINEAR-CENTRALITY ADAPTIVE G-CVAR V2
+# ============================================================
+
+import hashlib
+
+from gcvar_v2 import (
+    LinearGCVarParams,
+    compute_family_rankings,
+    load_clean_13f_holdings,
+    run_linear_gcvar_walk_forward,
+)
+
+
+V2_STRATEGY_NAME = "adaptive_graph_cvar_v2"
+V2_STRATEGY_LABEL = "Supplemental Linear-Centrality Adaptive G-CVaR"
+V2_BASE_DIR = (
+    Path(__file__).resolve().parent if "__file__" in globals() else Path.cwd()
+)
+V2_HOLDINGS_PATH = V2_BASE_DIR / "data" / "sec13f_holdings_clean.csv"
+V2_HOLDINGS = load_clean_13f_holdings(V2_HOLDINGS_PATH)
+V2_PARAMS = LinearGCVarParams(
+    alpha=CONFIG["cvar_alpha"],
+    max_weight=CONFIG["max_weight"],
+    return_tradeoff=CONFIG["return_tradeoff"],
+    graph_lambda=CONFIG["graph_lambda"],
+    lookback_days=756,
+    rebalance_frequency="QE",
+    graph_threshold=CONFIG["graph_corr_threshold"],
+    target_active_frequency=0.10,
+)
+
+ADAPTIVE_GCVAR_V2_RETURNS = {}
+ADAPTIVE_GCVAR_V2_AUDITS = {}
+ADAPTIVE_GCVAR_V2_WEIGHTS = {}
+V2_AUDIT_ROWS = []
+V2_WEIGHT_ROWS = []
+V2_RESULT_ROWS = []
+V2_FAILURE_ROWS = []
+
+for universe in WORKING_UNIVERSES:
+    r_all = get_universe_returns(universe)
+    try:
+        result = run_linear_gcvar_walk_forward(
+            returns=r_all,
+            universe=universe,
+            holdings=V2_HOLDINGS,
+            validation_start=PROTOCOL_DATES.validation_start,
+            validation_end=PROTOCOL_DATES.validation_end,
+            test_start=PROTOCOL_DATES.test_start,
+            test_end=PROTOCOL_DATES.test_end,
+            params=V2_PARAMS,
+        )
+        if result.returns.empty or result.audit.empty or result.weights.empty:
+            raise ValueError("V2 produced no test-period decisions")
+
+        ADAPTIVE_GCVAR_V2_RETURNS[universe] = result.returns
+        ADAPTIVE_GCVAR_V2_AUDITS[universe] = result.audit
+        ADAPTIVE_GCVAR_V2_WEIGHTS[universe] = result.weights
+        BACKTEST_RETURNS[(universe, V2_STRATEGY_NAME)] = result.returns
+
+        audit = result.audit.copy()
+        audit["strategy"] = V2_STRATEGY_NAME
+        V2_AUDIT_ROWS.append(audit)
+
+        weights = result.weights.copy()
+        weights.index.name = "decision_date"
+        weights = weights.reset_index()
+        weights.insert(0, "universe", universe)
+        V2_WEIGHT_ROWS.append(weights)
+
+        metrics = repair_metrics_schema(portfolio_metrics(result.returns))
+        max_drawdown_value = metrics.get("max_drawdown", np.nan)
+        metrics.update({
+            "universe": universe,
+            "universe_label": UNIVERSE_LABELS.get(universe, universe),
+            "strategy": "adaptive_graph_cvar_v2",
+            "strategy_label": "Supplemental Linear-Centrality Adaptive G-CVaR",
+            "strategy_family": "supplemental",
+            "annual_volatility": metrics.get(
+                "annual_volatility", metrics.get("volatility", np.nan)
+            ),
+            "max_drawdown_magnitude": (
+                abs(float(max_drawdown_value))
+                if pd.notna(max_drawdown_value) else np.nan
+            ),
+            "turnover": float(audit["turnover"].mean()),
+            "mean_turnover": float(audit["turnover"].mean()),
+            "hhi": float(audit["hhi"].mean()),
+            "effective_n": float(audit["effective_n"].mean()),
+            "graph_exposure": float(audit["graph_exposure"].mean()),
+            "active_frequency": float(audit["active"].mean()),
+            "mean_lambda_multiplier": float(audit["lambda_multiplier"].mean()),
+            "mean_lambda_effective": float(audit["lambda_effective"].mean()),
+            "graph_source_mode": ",".join(
+                sorted(audit["graph_source"].dropna().astype(str).unique())
+            ),
+            "asset_count": int(audit["asset_count"].max()),
+            "initial_capital": 100000.0,
+            "terminal_value": 100000.0 * float(
+                (1.0 + result.returns.dropna()).prod()
+            ),
+        })
+        V2_RESULT_ROWS.append(metrics)
+    except Exception as exc:
+        V2_FAILURE_ROWS.append({
+            "universe": universe,
+            "strategy": V2_STRATEGY_NAME,
+            "failure_type": type(exc).__name__,
+            "failure_message": str(exc),
+        })
+
+
+adaptive_graph_cvar_v2_audit_df = (
+    pd.concat(V2_AUDIT_ROWS, ignore_index=True)
+    if V2_AUDIT_ROWS else pd.DataFrame()
+)
+adaptive_graph_cvar_v2_weights_df = (
+    pd.concat(V2_WEIGHT_ROWS, ignore_index=True, sort=False)
+    if V2_WEIGHT_ROWS else pd.DataFrame()
+)
+adaptive_graph_cvar_v2_results_df = pd.DataFrame(V2_RESULT_ROWS)
+adaptive_graph_cvar_v2_failures_df = pd.DataFrame(V2_FAILURE_ROWS)
+adaptive_graph_cvar_v2_activation_summary_df = (
+    adaptive_graph_cvar_v2_audit_df.groupby("universe", as_index=False)
+    .agg(
+        rebalance_count=("decision_date", "count"),
+        active_frequency=("active", "mean"),
+        mean_lambda_multiplier=("lambda_multiplier", "mean"),
+        maximum_lambda_multiplier=("lambda_multiplier", "max"),
+        mean_lambda_effective=("lambda_effective", "mean"),
+        maximum_lambda_effective=("lambda_effective", "max"),
+        mean_graph_exposure=("graph_exposure", "mean"),
+        mean_turnover=("turnover", "mean"),
+        solver_fallbacks=("fallback", "sum"),
+    )
+    if not adaptive_graph_cvar_v2_audit_df.empty else pd.DataFrame()
+)
+
+adaptive_graph_cvar_v2_audit_df.to_csv(
+    TABLE_DIR / "adaptive_graph_cvar_v2_audit.csv", index=False
+)
+adaptive_graph_cvar_v2_results_df.to_csv(
+    TABLE_DIR / "adaptive_graph_cvar_v2_results.csv", index=False
+)
+adaptive_graph_cvar_v2_weights_df.to_csv(
+    TABLE_DIR / "adaptive_graph_cvar_v2_weights.csv", index=False
+)
+adaptive_graph_cvar_v2_activation_summary_df.to_csv(
+    TABLE_DIR / "adaptive_graph_cvar_v2_activation_summary.csv", index=False
+)
+adaptive_graph_cvar_v2_failures_df.to_csv(
+    TABLE_DIR / "adaptive_graph_cvar_v2_failures.csv", index=False
+)
+
+# Rank a copy of the completed tournament plus V2. Existing primary ranking
+# tables and score weights remain untouched.
+V2_RANKING_INPUT_DF = pd.concat(
+    [ten_algo_results_df.copy(), adaptive_graph_cvar_v2_results_df],
+    ignore_index=True,
+    sort=False,
+)
+nan_safe_rankings_df, nan_safe_governance_rejections_df = (
+    compute_family_rankings(V2_RANKING_INPUT_DF)
+)
+nan_safe_core_governance_ranking_df = nan_safe_rankings_df.loc[
+    nan_safe_rankings_df["ranking_family"].eq("core")
+].copy() if not nan_safe_rankings_df.empty else pd.DataFrame()
+nan_safe_supplemental_governance_ranking_df = nan_safe_rankings_df.loc[
+    nan_safe_rankings_df["ranking_family"].eq("supplemental")
+].copy() if not nan_safe_rankings_df.empty else pd.DataFrame()
+nan_safe_hitl_simulation_ranking_df = nan_safe_rankings_df.loc[
+    nan_safe_rankings_df["ranking_family"].eq("hitl_simulation")
+].copy() if not nan_safe_rankings_df.empty else pd.DataFrame()
+
+nan_safe_core_governance_ranking_df.to_csv(
+    TABLE_DIR / "nan_safe_core_governance_ranking.csv", index=False
+)
+nan_safe_supplemental_governance_ranking_df.to_csv(
+    TABLE_DIR / "nan_safe_supplemental_governance_ranking.csv", index=False
+)
+nan_safe_hitl_simulation_ranking_df.to_csv(
+    TABLE_DIR / "nan_safe_hitl_simulation_ranking.csv", index=False
+)
+nan_safe_governance_rejections_df.to_csv(
+    TABLE_DIR / "nan_safe_governance_rejections.csv", index=False
+)
+
+V2_ALLOWED_GRAPH_SOURCES = {
+    "correlation_proxy", "sec_13f_institutional_coownership"
+}
+V2_REQUIRED_METRICS = [
+    "annual_return", "annual_volatility", "sharpe_ratio", "sortino_ratio",
+    "historical_cvar_loss_95", "max_drawdown_magnitude", "turnover", "hhi",
+    "effective_n", "graph_exposure",
+]
+V2_FROZEN_PROTOCOL_SHA256 = (
+    "f556d253c9400f1fcf071e85d7813345c23094a3c4a54aa9ad34453db12d0058"
+)
+protocol_path = V2_BASE_DIR / "gcvar_protocol.py"
+current_protocol_sha256 = hashlib.sha256(protocol_path.read_bytes()).hexdigest()
+V2_TECHNICAL_CHECKS = {
+    "primary_quadratic_protocol_source_unchanged": (
+        current_protocol_sha256 == V2_FROZEN_PROTOCOL_SHA256
+    ),
+    "v2_generated_for_all_11_universes": (
+        len(ADAPTIVE_GCVAR_V2_RETURNS) == len(WORKING_UNIVERSES)
+    ),
+    "v2_failures_empty": adaptive_graph_cvar_v2_failures_df.empty,
+    "graph_source_is_audited": (
+        not adaptive_graph_cvar_v2_audit_df.empty
+        and set(adaptive_graph_cvar_v2_audit_df["graph_source"])
+        .issubset(V2_ALLOWED_GRAPH_SOURCES)
+    ),
+    "correlation_fallback_used_without_local_13f": (
+        not V2_HOLDINGS.empty
+        or (
+            not adaptive_graph_cvar_v2_audit_df.empty
+            and adaptive_graph_cvar_v2_audit_df["graph_source"]
+            .eq("correlation_proxy").all()
+        )
+    ),
+    "activation_uses_multiplier_gt_050": (
+        not adaptive_graph_cvar_v2_audit_df.empty
+        and (
+            adaptive_graph_cvar_v2_audit_df["active"]
+            == (adaptive_graph_cvar_v2_audit_df["lambda_multiplier"] > 0.5)
+        ).all()
+    ),
+    "v2_activation_nonzero": (
+        not adaptive_graph_cvar_v2_audit_df.empty
+        and adaptive_graph_cvar_v2_audit_df["active"].mean() > 0
+    ),
+    "strict_no_lookahead": (
+        not adaptive_graph_cvar_v2_audit_df.empty
+        and (
+            pd.to_datetime(adaptive_graph_cvar_v2_audit_df["training_end"])
+            < pd.to_datetime(adaptive_graph_cvar_v2_audit_df["decision_date"])
+        ).all()
+    ),
+    "v2_required_metrics_finite": (
+        not adaptive_graph_cvar_v2_results_df.empty
+        and np.isfinite(
+            adaptive_graph_cvar_v2_results_df[V2_REQUIRED_METRICS]
+            .apply(pd.to_numeric, errors="coerce")
+        ).all().all()
+    ),
+    "v2_only_in_supplemental_ranking": (
+        V2_STRATEGY_NAME
+        not in set(nan_safe_core_governance_ranking_df.get("strategy", []))
+        and V2_STRATEGY_NAME
+        in set(nan_safe_supplemental_governance_ranking_df.get("strategy", []))
+    ),
+}
+FINAL_TECHNICAL_VALIDATION_CHECKS_DF = pd.DataFrame(
+    [
+        {"check": check, "passed": bool(passed)}
+        for check, passed in V2_TECHNICAL_CHECKS.items()
+    ]
+)
+FINAL_TECHNICAL_VALIDATION_CHECKS_DF.to_csv(
+    TABLE_DIR / "final_technical_validation_checks.csv", index=False
+)
+
+display(Markdown("### Supplemental Linear-Centrality Adaptive G-CVaR V2"))
+display(adaptive_graph_cvar_v2_results_df)
+display(adaptive_graph_cvar_v2_activation_summary_df)
+display(FINAL_TECHNICAL_VALIDATION_CHECKS_DF)
+
 """## Restored Plot and Matrix Manifest
 
 This section proves that the full plot and matrix pack is still present. It does not replace earlier figures. It only indexes every figure/table generated by the restored notebook.
