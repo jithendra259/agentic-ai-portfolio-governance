@@ -201,5 +201,75 @@ class LinearOptimizerAndWalkForwardTests(unittest.TestCase):
         )
 
 
+class NanSafeRankingTests(unittest.TestCase):
+    def _row(self, universe, strategy, turnover=0.02, family=None):
+        return {
+            "universe": universe,
+            "strategy": strategy,
+            "strategy_family": family or "core",
+            "annual_return": 0.12,
+            "annual_volatility": 0.18,
+            "sharpe_ratio": 0.70,
+            "sortino_ratio": 1.10,
+            "historical_cvar_loss_95": 0.03,
+            "max_drawdown_magnitude": 0.20,
+            "turnover": turnover,
+            "hhi": 0.15,
+            "effective_n": 6.0,
+            "graph_exposure": 0.25,
+        }
+
+    def test_incomplete_governance_row_is_rejected(self):
+        from gcvar_v2 import compute_family_rankings
+
+        rows = [
+            self._row("U1", "adaptive_graph_cvar"),
+            self._row("U1", "missing_turnover", turnover=np.nan),
+        ]
+
+        rankings, rejected = compute_family_rankings(pd.DataFrame(rows))
+
+        self.assertNotIn("missing_turnover", set(rankings["strategy"]))
+        self.assertEqual(
+            rejected.set_index("strategy").loc[
+                "missing_turnover", "rejection_reason"
+            ],
+            "missing_required_governance_metrics:turnover",
+        )
+
+    def test_ranking_families_are_separate(self):
+        from gcvar_v2 import compute_family_rankings
+
+        rows = [
+            self._row("U1", "adaptive_graph_cvar"),
+            self._row("U1", "adaptive_graph_cvar_v2"),
+            self._row("U1", "sample_hitl_governed_adaptive_gcvar"),
+        ]
+
+        rankings, rejected = compute_family_rankings(pd.DataFrame(rows))
+
+        self.assertTrue(rejected.empty)
+        self.assertEqual(
+            set(rankings["ranking_family"]),
+            {"core", "supplemental", "hitl_simulation"},
+        )
+        self.assertEqual(
+            rankings.groupby("ranking_family")["governance_rank"].min().to_dict(),
+            {"core": 1.0, "supplemental": 1.0, "hitl_simulation": 1.0},
+        )
+
+    def test_mean_turnover_alias_is_used_for_eligibility(self):
+        from gcvar_v2 import compute_family_rankings
+
+        row = self._row("U1", "adaptive_graph_cvar_v2")
+        row.pop("turnover")
+        row["mean_turnover"] = 0.04
+
+        rankings, rejected = compute_family_rankings(pd.DataFrame([row]))
+
+        self.assertTrue(rejected.empty)
+        self.assertAlmostEqual(rankings.loc[0, "turnover"], 0.04)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,65 @@ class LinearGCVarWalkForwardResult:
     instability: pd.DataFrame
 
 
+CORE_RANKING_STRATEGIES = {
+    "equal_weight",
+    "buy_hold_equal_weight",
+    "inverse_volatility",
+    "minimum_variance",
+    "mean_variance",
+    "risk_parity",
+    "hierarchical_risk_parity",
+    "cvar_optimized",
+    "standard_cvar",
+    "graph_cvar_optimized",
+    "static_graph_cvar",
+    "adaptive_graph_cvar",
+    "fixed_quarterly_graph_cvar",
+}
+
+SUPPLEMENTAL_RANKING_STRATEGIES = {"adaptive_graph_cvar_v2"}
+HITL_RANKING_STRATEGIES = {"sample_hitl_governed_adaptive_gcvar"}
+
+REQUIRED_GOVERNANCE_METRICS = (
+    "annual_return",
+    "annual_volatility",
+    "sharpe_ratio",
+    "sortino_ratio",
+    "historical_cvar_loss_95",
+    "max_drawdown_magnitude",
+    "turnover",
+    "hhi",
+    "effective_n",
+    "graph_exposure",
+)
+
+GOVERNANCE_RANKING_WEIGHTS = {
+    "annual_return": 0.10,
+    "annual_volatility": 0.10,
+    "sharpe_ratio": 0.15,
+    "sortino_ratio": 0.10,
+    "historical_cvar_loss_95": 0.20,
+    "max_drawdown_magnitude": 0.15,
+    "turnover": 0.05,
+    "hhi": 0.05,
+    "effective_n": 0.05,
+    "graph_exposure": 0.05,
+}
+
+HIGHER_IS_BETTER = {
+    "annual_return": True,
+    "annual_volatility": False,
+    "sharpe_ratio": True,
+    "sortino_ratio": True,
+    "historical_cvar_loss_95": False,
+    "max_drawdown_magnitude": False,
+    "turnover": False,
+    "hhi": False,
+    "effective_n": True,
+    "graph_exposure": False,
+}
+
+
 def _normalize_unit_interval(values: pd.Series) -> pd.Series:
     series = pd.Series(values, dtype=float).replace([np.inf, -np.inf], np.nan)
     series = series.fillna(0.0)
@@ -504,3 +563,100 @@ def run_linear_gcvar_walk_forward(
         audit=pd.DataFrame(audit_rows),
         instability=instability,
     )
+
+
+def _classify_ranking_family(strategy: object) -> str:
+    name = str(strategy)
+    if name in HITL_RANKING_STRATEGIES or "hitl" in name.lower():
+        return "hitl_simulation"
+    if name in SUPPLEMENTAL_RANKING_STRATEGIES or name.endswith("_v2"):
+        return "supplemental"
+    if name in CORE_RANKING_STRATEGIES:
+        return "core"
+    return "supplemental"
+
+
+def _normalize_metric_aliases(metrics: pd.DataFrame) -> pd.DataFrame:
+    frame = pd.DataFrame(metrics).copy()
+    if "annual_volatility" not in frame.columns and "volatility" in frame.columns:
+        frame["annual_volatility"] = frame["volatility"]
+    if "turnover" not in frame.columns and "mean_turnover" in frame.columns:
+        frame["turnover"] = frame["mean_turnover"]
+    elif "turnover" in frame.columns and "mean_turnover" in frame.columns:
+        frame["turnover"] = frame["turnover"].fillna(frame["mean_turnover"])
+    if "max_drawdown_magnitude" not in frame.columns and "max_drawdown" in frame.columns:
+        frame["max_drawdown_magnitude"] = pd.to_numeric(
+            frame["max_drawdown"], errors="coerce"
+        ).abs()
+    return frame
+
+
+def _rank_score(values: pd.Series, higher_is_better: bool) -> pd.Series:
+    series = pd.Series(values, dtype=float)
+    count = int(series.notna().sum())
+    if count <= 1:
+        return pd.Series(1.0, index=series.index)
+    rank = series.rank(pct=True, method="average")
+    if higher_is_better:
+        return rank
+    return 1.0 + (1.0 / count) - rank
+
+
+def compute_family_rankings(
+    metrics: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rank complete rows only, separately by ranking family and universe."""
+    frame = _normalize_metric_aliases(metrics)
+    if frame.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    frame["ranking_family"] = frame["strategy"].map(_classify_ranking_family)
+
+    missing_columns = [
+        column for column in REQUIRED_GOVERNANCE_METRICS if column not in frame.columns
+    ]
+    for column in missing_columns:
+        frame[column] = np.nan
+
+    numeric = frame.loc[:, REQUIRED_GOVERNANCE_METRICS].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    finite = np.isfinite(numeric).all(axis=1)
+    eligible = frame.loc[finite].copy()
+    rejected = frame.loc[~finite].copy()
+
+    if not rejected.empty:
+        reasons: list[str] = []
+        for idx, row in numeric.loc[~finite].iterrows():
+            missing = [
+                column
+                for column in REQUIRED_GOVERNANCE_METRICS
+                if not np.isfinite(row[column])
+            ]
+            reasons.append(
+                "missing_required_governance_metrics:" + ",".join(missing)
+            )
+        rejected["rejection_reason"] = reasons
+        rejected["governance_composite_score"] = np.nan
+        rejected["governance_rank"] = np.nan
+    else:
+        rejected = pd.DataFrame(columns=list(frame.columns) + ["rejection_reason"])
+
+    ranked_groups: list[pd.DataFrame] = []
+    for (_, _), group in eligible.groupby(["universe", "ranking_family"], dropna=False):
+        scored = group.copy()
+        for metric, weight in GOVERNANCE_RANKING_WEIGHTS.items():
+            scored[f"score_{metric}"] = _rank_score(
+                pd.to_numeric(scored[metric], errors="coerce"),
+                HIGHER_IS_BETTER[metric],
+            )
+        scored["governance_composite_score"] = sum(
+            GOVERNANCE_RANKING_WEIGHTS[metric] * scored[f"score_{metric}"]
+            for metric in GOVERNANCE_RANKING_WEIGHTS
+        )
+        scored["governance_rank"] = scored["governance_composite_score"].rank(
+            ascending=False, method="dense"
+        )
+        ranked_groups.append(scored)
+
+    rankings = pd.concat(ranked_groups, ignore_index=True) if ranked_groups else pd.DataFrame()
+    return rankings, rejected.reset_index(drop=True)
