@@ -56,6 +56,35 @@ class PortfolioPlotScriptContractTests(unittest.TestCase):
         self.assertIn("plot_quality_audit.csv", self.source)
         self.assertIn("Image.open", self.source)
 
+    def test_final_protocol_overwrites_legacy_adaptive_evidence(self):
+        marker = self.source.index(
+            "FINAL WALK-FORWARD GOVERNANCE G-CVaR EVALUATION PROTOCOL"
+        )
+        for filename in [
+            "adaptive_gcvar_evidence_triangle.png",
+            "adaptive_lambda_diagnostics_grid.png",
+            "gcvar_implementation_audit.png",
+            "instability_vs_adaptive_lambda.png",
+            "crisis_only_governance_comparison.png",
+        ]:
+            self.assertGreater(self.source.rfind(filename), marker)
+
+    def test_boxplot_uses_current_matplotlib_keyword(self):
+        self.assertNotIn("boxplot(data, labels=", self.source)
+        self.assertIn("boxplot(data, tick_labels=", self.source)
+
+    def test_crisis_plot_and_zero_fallback_panel_are_explicit(self):
+        crisis_start = self.source.index(
+            "def plot_crisis_governance_comparison"
+        )
+        crisis_end = self.source.index(
+            "plot_instability_vs_adaptive_gate(", crisis_start
+        )
+        crisis_block = self.source[crisis_start:crisis_end]
+        self.assertIn("constrained_layout=True", crisis_block)
+        self.assertIn("strategy_labels", crisis_block)
+        self.assertIn("No solver fallbacks", self.source)
+
     def test_full_script_imports_protocol_module(self):
         self.assertIn("from gcvar_protocol import", self.source)
         self.assertNotIn('"train_test_split": "2015-01-01"', self.source)

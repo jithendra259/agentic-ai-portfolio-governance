@@ -127,6 +127,7 @@ One import cell. One configuration dictionary. No repeated setup cells.
 # ============================================================
 
 import os
+import shutil
 import warnings
 from dataclasses import asdict
 from pathlib import Path
@@ -3875,7 +3876,7 @@ def plot_hitl_lambda_by_action(show=True):
     order = ["Approve", "Reject", "Constrain"]
     data = [sample_hitl_logs_df.loc[sample_hitl_logs_df["operator_action"] == a, "lambda_t"].dropna().values for a in order]
     fig, ax = plt.subplots(figsize=(11, 6))
-    ax.boxplot(data, labels=order, showmeans=True)
+    ax.boxplot(data, tick_labels=order, showmeans=True)
     ax.set_title("Adaptive lambda distribution by HITL decision", fontweight="bold", fontsize=16)
     ax.set_ylabel("Adaptive lambda")
     ax.grid(True, axis="y", alpha=0.25)
@@ -6772,7 +6773,9 @@ def plot_crisis_governance_comparison(behavior, period_label, filename):
         "annual_return",
     ]
     crisis = behavior[behavior["regime"] == "crisis"]
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    fig, axes = plt.subplots(
+        2, 3, figsize=(16, 9), constrained_layout=True
+    )
     axes = axes.ravel()
     if crisis.empty:
         axes[0].text(
@@ -6783,13 +6786,19 @@ def plot_crisis_governance_comparison(behavior, period_label, filename):
             ax.axis("off")
     else:
         summary = crisis.groupby("strategy")[metrics].mean()
+        strategy_labels = {
+            "cvar_optimized": "CVaR",
+            "graph_cvar_optimized": "Static G-CVaR",
+            "adaptive_graph_cvar": "Adaptive G-CVaR",
+        }
         for ax, metric in zip(axes, metrics):
             values = summary[metric].sort_values(
                 ascending=metric == "annual_return"
             )
-            ax.bar(values.index, values.values)
+            labels = [strategy_labels.get(value, value) for value in values.index]
+            ax.bar(labels, values.values)
             ax.set_title(metric.replace("_", " ").title())
-            ax.tick_params(axis="x", rotation=25, labelsize=8)
+            ax.tick_params(axis="x", rotation=12, labelsize=8)
             ax.grid(axis="y", alpha=0.2)
         axes[-1].axis("off")
     fig.suptitle(
@@ -6822,6 +6831,180 @@ plot_crisis_governance_comparison(
     gcvar_test_behavioral_validation_df,
     "Untouched final test evidence: 2023-2025",
     "crisis_governance_comparison_test.png",
+)
+
+
+def plot_authoritative_gcvar_evidence_triangle():
+    evidence_dir = FIGURE_DIR / "adaptive_gcvar_evidence_triangle"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    strategies = [
+        "cvar_optimized", "graph_cvar_optimized", "adaptive_graph_cvar"
+    ]
+    labels = {
+        "cvar_optimized": "CVaR",
+        "graph_cvar_optimized": "Static G-CVaR",
+        "adaptive_graph_cvar": "Adaptive G-CVaR",
+    }
+    ranks = gcvar_test_governance_ranking_df.loc[
+        gcvar_test_governance_ranking_df["strategy"].isin(strategies)
+    ].pivot(index="universe", columns="strategy", values="governance_rank")
+    universes = sorted(ranks.index, key=natural_universe_key)
+    x = np.arange(len(universes))
+    fig, axes = plt.subplots(3, 1, figsize=(15, 12))
+    width = 0.25
+    for offset, strategy in enumerate(strategies):
+        axes[0].bar(
+            x + (offset - 1) * width,
+            ranks.reindex(universes)[strategy],
+            width,
+            label=labels[strategy],
+        )
+    axes[0].set_xticks(x, universes)
+    axes[0].invert_yaxis()
+    axes[0].set_ylabel("Governance rank (1 is best)")
+    axes[0].set_title("Panel A — Untouched-test governance ranks")
+    axes[0].legend(ncol=3)
+
+    exposure_source = gcvar_test_behavioral_validation_df.copy()
+    exposure_source["weighted_graph_exposure"] = (
+        exposure_source["graph_exposure"] * exposure_source["observations"]
+    )
+    exposure = (
+        exposure_source.groupby(["universe", "strategy"])[[
+            "weighted_graph_exposure", "observations"
+        ]].sum()
+    )
+    exposure["graph_exposure"] = (
+        exposure["weighted_graph_exposure"] / exposure["observations"]
+    )
+    exposure = exposure["graph_exposure"].unstack()
+    for strategy in strategies:
+        axes[1].plot(
+            universes,
+            exposure.reindex(universes)[strategy],
+            marker="o",
+            label=labels[strategy],
+        )
+    axes[1].set_ylabel("Mean graph exposure")
+    axes[1].set_title("Panel B — Untouched-test graph exposure")
+    axes[1].legend(ncol=3)
+
+    validation_frequency = gcvar_adaptive_gate_audit_validation_df.groupby(
+        "universe"
+    )["gate_gt_050"].mean().reindex(universes)
+    test_frequency = gcvar_adaptive_gate_audit_test_df.groupby(
+        "universe"
+    )["gate_gt_050"].mean().reindex(universes)
+    axes[2].bar(x - 0.2, validation_frequency, 0.4, label="Validation 2020-2022")
+    axes[2].bar(x + 0.2, test_frequency, 0.4, label="Test 2023-2025")
+    axes[2].set_xticks(x, universes)
+    axes[2].set_ylim(0, 1)
+    axes[2].set_ylabel("Gate > 0.50 frequency")
+    axes[2].set_title("Panel C — Adaptive gate activation")
+    axes[2].legend()
+    fig.suptitle(
+        "Authoritative Adaptive G-CVaR Evidence Triangle",
+        fontsize=15,
+        fontweight="bold",
+    )
+    path = evidence_dir / "adaptive_gcvar_evidence_triangle.png"
+    fig.savefig(path, dpi=240, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_authoritative_adaptive_diagnostics():
+    evidence_dir = FIGURE_DIR / "adaptive_gcvar_evidence_triangle"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+    for ax, frame, period in [
+        (axes[0, 0], gcvar_adaptive_gate_audit_validation_df, "Validation 2020-2022"),
+        (axes[0, 1], gcvar_adaptive_gate_audit_test_df, "Untouched test 2023-2025"),
+    ]:
+        frequency = frame.groupby("universe")["gate_gt_050"].mean()
+        frequency = frequency.reindex(sorted(frequency.index, key=natural_universe_key))
+        ax.bar(frequency.index, frequency.values)
+        ax.set_ylim(0, 1)
+        ax.set_title(f"Gate > 0.50 frequency — {period}")
+        ax.set_ylabel("Frequency")
+    test_summary = gcvar_adaptive_gate_audit_test_df.groupby("universe")[[
+        "lambda_gate", "active_graph_lambda"
+    ]].max()
+    test_summary = test_summary.reindex(
+        sorted(test_summary.index, key=natural_universe_key)
+    )
+    axes[1, 0].bar(test_summary.index, test_summary["lambda_gate"])
+    axes[1, 0].axhline(0.50, color="black", linestyle=":")
+    axes[1, 0].set_title("Maximum unitless gate — untouched test")
+    axes[1, 0].set_ylabel("Lambda gate [0, 1]")
+    axes[1, 1].bar(test_summary.index, test_summary["active_graph_lambda"])
+    axes[1, 1].set_title("Maximum optimizer graph penalty — untouched test")
+    axes[1, 1].set_ylabel("Active graph lambda")
+    fig.suptitle(
+        "Authoritative Adaptive G-CVaR Gate Diagnostics",
+        fontsize=15,
+        fontweight="bold",
+    )
+    path = evidence_dir / "adaptive_lambda_diagnostics_grid.png"
+    fig.savefig(path, dpi=240, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def plot_authoritative_gcvar_implementation_audit():
+    evidence_dir = FIGURE_DIR / "adaptive_gcvar_evidence_triangle"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
+    coverage = UNIVERSE_DATA_AUDIT_DF.set_index("universe")[[
+        "training_rows", "validation_rows", "test_rows"
+    ]].reindex(sorted(UNIVERSE_DATA_AUDIT_DF["universe"], key=natural_universe_key))
+    coverage.plot(kind="bar", ax=axes[0])
+    axes[0].set_title("Protocol observations by lane")
+    axes[0].set_ylabel("Trading-day observations")
+    axes[0].tick_params(axis="x", rotation=0)
+    fallback = gcvar_solver_audit_df.groupby("strategy")["fallback"].sum()
+    axes[1].bar(fallback.index, fallback.values)
+    axes[1].set_title("Solver fallbacks")
+    axes[1].tick_params(axis="x", rotation=25, labelsize=8)
+    axes[1].set_ylabel("Count")
+    if float(fallback.sum()) == 0:
+        axes[1].set_ylim(0, 1)
+        axes[1].text(
+            0.5, 0.5, "No solver fallbacks",
+            ha="center", va="center", transform=axes[1].transAxes,
+            fontsize=12, fontweight="bold",
+        )
+    boundary_ok = (~gcvar_boundary_audit_df[
+        "whether_test_used_in_calibration"
+    ].astype(bool)).sum()
+    axes[2].bar(["Separated", "Violation"], [
+        boundary_ok, len(gcvar_boundary_audit_df) - boundary_ok
+    ])
+    axes[2].set_title("Calibration/test boundary audit")
+    axes[2].set_ylabel("Universes")
+    fig.suptitle(
+        "Authoritative Walk-Forward G-CVaR Implementation Audit",
+        fontsize=15,
+        fontweight="bold",
+    )
+    path = evidence_dir / "gcvar_implementation_audit.png"
+    fig.savefig(path, dpi=240, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+plot_authoritative_gcvar_evidence_triangle()
+plot_authoritative_adaptive_diagnostics()
+plot_authoritative_gcvar_implementation_audit()
+
+# Keep historical filenames synchronized with authoritative protocol figures.
+shutil.copyfile(
+    GCVAR_FIGURE_DIR / "instability_vs_adaptive_gate_test.png",
+    GCVAR_FIGURE_DIR / "instability_vs_adaptive_lambda.png",
+)
+shutil.copyfile(
+    GCVAR_FIGURE_DIR / "crisis_governance_comparison_test.png",
+    GCVAR_FIGURE_DIR / "crisis_only_governance_comparison.png",
 )
 
 display(Markdown("### Untouched-Test Governance Ranking (2023-2025)"))
