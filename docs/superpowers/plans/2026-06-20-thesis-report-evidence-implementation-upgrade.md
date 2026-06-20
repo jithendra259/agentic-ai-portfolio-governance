@@ -15,6 +15,8 @@
 - Modify: `report/New Project/main.tex` — authoritative thesis source, narrative, equations, tables, implementation audit, conclusions, and appendix inclusion.
 - Create: `report/New Project/generate_result_figure_appendix.py` — deterministic scanner and LaTeX annex generator for all result PNGs.
 - Create: `report/New Project/generated_result_figures.tex` — generated grouped annex referenced by `main.tex`.
+- Create: `report/New Project/generate_verified_results_tables.py` — deterministic CSV-to-LaTeX evidence-table generator.
+- Create: `report/New Project/generated_verified_results_tables.tex` — generated executive results, lane, reproducibility, and audit tables.
 - Create: `report/New Project/tests/test_report_contract.py` — report evidence, path, and figure-completeness checks.
 - Generate: `report/New Project/.latex-build/main.pdf` — compiled PDF artifact.
 
@@ -246,6 +248,8 @@ git commit -m "docs: add complete result figure annex"
 - Modify: `report/New Project/main.tex:90-190`
 - Modify: `report/New Project/main.tex:790-853`
 - Modify: `report/New Project/main.tex:1188-1415`
+- Create: `report/New Project/generate_verified_results_tables.py`
+- Create: `report/New Project/generated_verified_results_tables.tex`
 - Test: `report/New Project/tests/test_report_contract.py`
 
 - [ ] **Step 1: Correct the front matter**
@@ -316,9 +320,19 @@ Add a separate V2 paragraph and equation with `\lambda_t c_t^\top w`, labelled s
 
 Document 197/197 available assets, 3,018 price rows, 3,017 return rows, all 11 universes, NaN-safe family separation, and explicit rejection of incomplete fixed-quarterly/HITL rows from governance ranking.
 
+Add `generate_verified_results_tables.py` so data coverage, experiment lanes, authoritative means, pairwise wins, primary/V2 activation, technical checks, rejection counts, and reproducibility metadata are read directly from the completed CSV artifacts and emitted into `generated_verified_results_tables.tex`. The generated source must identify each CSV input and expose `\input{generated_verified_results_tables.tex}` blocks for the methodology and Results chapter. It must fail if required files, universes, metrics, or validation checks are absent instead of silently emitting incomplete evidence.
+
+The generated evidence must include:
+
+- an executive result summary separating strengths, limitations, and non-activation findings;
+- an experiment-lane table distinguishing authoritative, core, supplemental, HITL, and legacy outputs;
+- a reproducibility table containing Python/package versions, CVXPY/CLARABEL, the active Git commit, data dates, and the exact analysis entry point;
+- an indexed manifest introducing the complete 121-figure appendix.
+
 - [ ] **Step 5: Run report contract tests**
 
 ```powershell
+& '.\venv\Scripts\python.exe' 'report\New Project\generate_verified_results_tables.py'
 & '.\venv\Scripts\python.exe' -m unittest discover -s 'report\New Project\tests' -v
 ```
 
@@ -327,7 +341,7 @@ Expected: study-period, protocol, objective, and unsupported-claim tests pass.
 - [ ] **Step 6: Commit front matter and methodology**
 
 ```powershell
-git add -- 'report/New Project/main.tex' 'report/New Project/tests/test_report_contract.py'
+git add -- 'report/New Project/main.tex' 'report/New Project/generate_verified_results_tables.py' 'report/New Project/generated_verified_results_tables.tex' 'report/New Project/tests/test_report_contract.py'
 git commit -m "docs: align thesis methodology with verified protocol"
 ```
 
@@ -479,6 +493,7 @@ git commit -m "docs: add thesis limitations and artifact audit"
 
 ```powershell
 & '.\venv\Scripts\python.exe' 'report\New Project\generate_result_figure_appendix.py'
+& '.\venv\Scripts\python.exe' 'report\New Project\generate_verified_results_tables.py'
 & '.\venv\Scripts\python.exe' -m unittest discover -s 'report\New Project\tests' -v
 ```
 
@@ -525,7 +540,7 @@ Repeat report tests, annex generation, compile, log scan, PDF metadata/text chec
 - [ ] **Step 8: Commit the verified report sources**
 
 ```powershell
-git add -- 'report/New Project/main.tex' 'report/New Project/generated_result_figures.tex' 'report/New Project/generate_result_figure_appendix.py' 'report/New Project/tests/test_report_contract.py'
+git add -- 'report/New Project/main.tex' 'report/New Project/generated_result_figures.tex' 'report/New Project/generate_result_figure_appendix.py' 'report/New Project/generated_verified_results_tables.tex' 'report/New Project/generate_verified_results_tables.py' 'report/New Project/tests/test_report_contract.py'
 git commit -m "docs: complete verified thesis report upgrade"
 ```
 
