@@ -280,6 +280,7 @@ def governance_pipeline_with_cache(
     tickers: list[str],
     target_date: str,
     risk_tolerance: str = "moderate",
+    previous_weights: Optional[dict[str, float]] = None,
     config: RunnableConfig = None,
 ) -> str:
     """
@@ -292,7 +293,7 @@ def governance_pipeline_with_cache(
         target_date=target_date,
         risk_tolerance=normalized_risk_tolerance,
     )
-    cached = memory_manager.retrieve_cached_plan(query_hash)
+    cached = None if previous_weights else memory_manager.retrieve_cached_plan(query_hash)
     if cached:
         logger.info("Cache Hit (-46%% cost) | query_hash=%s", query_hash)
         return cached
@@ -302,15 +303,18 @@ def governance_pipeline_with_cache(
             "tickers": tickers,
             "target_date": target_date,
             "risk_tolerance": normalized_risk_tolerance,
+            "previous_weights": previous_weights,
         },
         config=config,
     )
     if isinstance(result, str):
-        memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
+        if not previous_weights:
+            memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
         return result
 
     serialized = json.dumps(result)
-    memory_manager.cache_governance_plan(query_hash=query_hash, payload=serialized, ttl_days=7)
+    if not previous_weights:
+        memory_manager.cache_governance_plan(query_hash=query_hash, payload=serialized, ttl_days=7)
     return serialized
 
 # Define the State: This is the Chatbot's Memory!
@@ -1428,6 +1432,58 @@ def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
         lines.append(f"- Instability index (I_t): {instability_index:.4f}")
     if lambda_t is not None:
         lines.append(f"- Graph penalty (lambda_t): {lambda_t:.4f}")
+
+    risk_tolerance = optimization.get("risk_tolerance")
+    solver_name = optimization.get("solver_name")
+    solver_status = optimization.get("solver_status")
+    window_start = optimization.get("effective_window_start")
+    window_end = optimization.get("effective_window_end")
+    max_weight_constraint = optimization.get("max_weight_constraint")
+    max_observed_weight = optimization.get("max_observed_weight")
+    hhi = optimization.get("hhi")
+    effective_holdings = optimization.get("effective_number_of_holdings")
+    graph_exposure = optimization.get("graph_exposure")
+    turnover = optimization.get("turnover")
+
+    if any(
+        value is not None
+        for value in (
+            risk_tolerance,
+            solver_name,
+            window_start,
+            max_weight_constraint,
+            hhi,
+            graph_exposure,
+        )
+    ):
+        lines.append("")
+        lines.append("### Optimization Audit")
+    if risk_tolerance:
+        lines.append(f"- Risk profile: {str(risk_tolerance).capitalize()}")
+    if solver_name or solver_status:
+        solver_label = str(solver_name or "unknown")
+        status_label = str(solver_status or "unknown")
+        lines.append(f"- Solver: {solver_label} ({status_label})")
+    if window_start or window_end:
+        lines.append(f"- Effective historical window: {window_start or 'unknown'} to {window_end or 'unknown'}")
+    if max_weight_constraint is not None:
+        lines.append(f"- Maximum-weight constraint: {float(max_weight_constraint):.2%}")
+    if max_observed_weight is not None:
+        lines.append(f"- Largest optimized weight: {float(max_observed_weight):.2%}")
+    if hhi is not None:
+        lines.append(f"- HHI concentration: {float(hhi):.4f}")
+    if effective_holdings is not None:
+        lines.append(f"- Effective holdings: {float(effective_holdings):.2f}")
+    if graph_exposure is not None:
+        lines.append(f"- Graph exposure: {float(graph_exposure):.4f}")
+    if "turnover" in optimization:
+        lines.append(f"- Turnover: {float(turnover):.2%}" if turnover is not None else "- Turnover: unavailable")
+
+    if optimization.get("fallback_applied"):
+        fallback_reason = str(optimization.get("fallback_reason") or "return-floor constraint was relaxed")
+        lines.append(f"- Optimization warning: {fallback_reason}.")
+    elif optimization.get("target_return_constraint_used") is False:
+        lines.append("- Optimization warning: the profile return-floor constraint was not used.")
 
     return "\n".join(lines)
 
