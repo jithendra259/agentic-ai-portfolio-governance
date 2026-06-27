@@ -50,6 +50,7 @@ import {
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
 const SESSION_INDEX_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
+const WELCOME_MESSAGE_ID = 'msg-welcome-1';
 
 function createSessionId() {
   const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
@@ -228,7 +229,7 @@ function upsertConversation(conversations, conversation) {
 
 function makeWelcomeMessage(sessionId) {
   return {
-    id: 'msg-welcome-1',
+    id: WELCOME_MESSAGE_ID,
     conversationId: sessionId,
     role: 'assistant',
     status: 'sent',
@@ -548,7 +549,7 @@ function ChatMessageRow({ message, onRegenerate }) {
   const isUser = role === 'user';
   const isStreaming = message.status === 'streaming'
     || message.parts?.some((part) => part.state === 'streaming');
-  const isWelcomeMessage = message.id === 'msg-welcome-1';
+  const isWelcomeMessage = message.id === WELCOME_MESSAGE_ID;
   const showActions = !isUser && !isWelcomeMessage && !isStreaming && text.trim().length > 0;
   return (
     <Box className={`message-row ${isUser ? 'message-row-user' : 'message-row-assistant'}`}>
@@ -608,6 +609,7 @@ export default function ChatInterface({ setView }) {
   const messagesEndRef = useRef(null);
   const activeStreamControllerRef = useRef(null);
   const autoOpenedLatestSessionRef = useRef(false);
+  const messagesRef = useRef(messages);
 
   const getAuthorizationHeaders = useCallback(async (headers = {}, options = {}) => {
     const authToken = token || await getAuthToken();
@@ -679,7 +681,14 @@ export default function ChatInterface({ setView }) {
 
         const latestSessionId = sessions[0]?.session_id;
         const currentSessionExists = sessions.some((item) => item.session_id === sessionId);
-        if (!autoOpenedLatestSessionRef.current && latestSessionId && !currentSessionExists) {
+        const currentHasConversation = messagesRef.current.some((message) => (
+          message.id !== WELCOME_MESSAGE_ID && messageText(message).trim()
+        ));
+        const shouldOpenLatestSession = latestSessionId && (
+          !currentSessionExists
+          || (!currentHasConversation && latestSessionId !== sessionId)
+        );
+        if (!autoOpenedLatestSessionRef.current && shouldOpenLatestSession) {
           autoOpenedLatestSessionRef.current = true;
           window.localStorage.setItem(sessionStorageKey, latestSessionId);
           rememberSessionId(latestSessionId, sessionIndexStorageKey);
@@ -699,16 +708,24 @@ export default function ChatInterface({ setView }) {
       setChatSessions(cachedSessions);
     }
 
-    const cachedMessages = readCachedMessages(userStorageScope, sessionId).map((item) => toChatMessage(item, sessionId));
+    const cachedSessionId = window.localStorage.getItem(sessionStorageKey) || cachedSessions[0]?.session_id;
+    if (cachedSessionId && cachedSessionId !== sessionId) {
+      setSessionId(cachedSessionId);
+      setActiveConversationId(cachedSessionId);
+      return;
+    }
+
+    const targetSessionId = cachedSessionId || sessionId;
+    const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
     if (cachedMessages.length) {
       setMessages(cachedMessages);
       setHistoryLoaded(true);
     }
-  }, [sessionId, userStorageScope]);
+  }, [sessionId, sessionStorageKey, userStorageScope]);
 
   useEffect(() => {
     const cacheableMessages = messages
-      .filter((message) => message.id !== 'msg-welcome-1')
+      .filter((message) => message.id !== WELCOME_MESSAGE_ID)
       .map((message) => ({
         id: message.id,
         role: message.role || (message.senderId === 'assistant' ? 'assistant' : 'user'),
@@ -725,6 +742,10 @@ export default function ChatInterface({ setView }) {
       writeCachedMessages(userStorageScope, sessionId, cacheableMessages);
     }
   }, [messages, sessionId, userStorageScope]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -808,7 +829,7 @@ export default function ChatInterface({ setView }) {
     return () => {
       active = false;
     };
-  }, [sessionId]);
+  }, [sessionId, token, userStorageScope]);
 
   const activeSession = chatSessions.find((item) => item.session_id === sessionId);
   const activeTitle = activeSession?.title || 'Portfolio Assistant';
