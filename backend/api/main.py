@@ -658,6 +658,26 @@ def _persist_memory_response(
     _persist_chat_message(session_id, "assistant", response_text, metadata=enriched_metadata, user_id=user_id)
 
 
+def _persist_plot_specs(plot_ids: list[str] | tuple[str, ...] | str | None, ttl_days: int = 365) -> list[str]:
+    if not plot_ids:
+        return []
+    normalized_plot_ids = [plot_ids] if isinstance(plot_ids, str) else list(plot_ids)
+    persisted = []
+    for plot_id in normalized_plot_ids:
+        clean_plot_id = str(plot_id or "").strip()
+        if not clean_plot_id:
+            continue
+        plot_spec = GLOBAL_PLOT_DATA.get(clean_plot_id)
+        if not isinstance(plot_spec, dict):
+            continue
+        try:
+            if memory_manager.store_plot(clean_plot_id, plot_spec, ttl_days=ttl_days):
+                persisted.append(clean_plot_id)
+        except Exception as exc:
+            logger.warning("Failed to persist plot %s before chat save: %s", clean_plot_id, exc)
+    return persisted
+
+
 def _utc_now_iso() -> str:
     from datetime import datetime, timezone
 
@@ -1387,6 +1407,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
             )
             if governance_continuity is not None:
                 response_text, plot_ids = governance_continuity
+                await _run_blocking_io(_persist_plot_specs, plot_ids)
                 accumulated_response = response_text
                 async for chunk in _stream_text_delta(text_id, response_text):
                     yield chunk
@@ -1538,6 +1559,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
             )
             if deterministic_chart is not None:
                 chart_response, plot_ids = deterministic_chart
+                await _run_blocking_io(_persist_plot_specs, plot_ids)
                 accumulated_response = chart_response
                 async for chunk in _stream_text_delta(text_id, chart_response):
                     yield chunk
@@ -1713,6 +1735,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
             if plot_ids:
                 if isinstance(plot_ids, str):
                     plot_ids = [plot_ids]
+                await _run_blocking_io(_persist_plot_specs, plot_ids)
                 for p_id in plot_ids:
                     accumulated_response += f"\n{PLOT_TOKEN}{p_id}"
                     yield _stream_event({"type": "data-plot", "plotId": p_id})
@@ -2056,9 +2079,7 @@ def get_plot_data(plot_id: str):
             "height": 60
         }
 
-    from src.memory.mongodb_memory_layer import MongoMemoryManager
-    mongo = MongoMemoryManager()
-    data = mongo.retrieve_plot(plot_id)
+    data = memory_manager.retrieve_plot(plot_id)
     if not data:
         raise HTTPException(status_code=404, detail="Plot not found or expired")
     return data

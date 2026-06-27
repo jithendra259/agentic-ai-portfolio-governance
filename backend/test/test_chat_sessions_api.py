@@ -49,6 +49,8 @@ class FakeMemoryManager:
         self.last_claim_session_ids = None
         self.last_claim_all = None
         self.append_calls = []
+        self.stored_plots = {}
+        self.retrieve_plot_calls = []
 
     def list_chat_sessions(self, limit=50, user_id=None, legacy_session_ids=None):
         self.last_list_user_id = user_id
@@ -78,7 +80,15 @@ class FakeMemoryManager:
                 "user_id": user_id,
             }
         )
-        return None
+
+    def store_plot(self, plot_id, plot_data, ttl_days=365):
+        self.stored_plots[plot_id] = {"data": plot_data, "ttl_days": ttl_days}
+        return True
+
+    def retrieve_plot(self, plot_id):
+        self.retrieve_plot_calls.append(plot_id)
+        stored = self.stored_plots.get(plot_id)
+        return stored["data"] if stored else None
 
     def list_chat_messages(self, session_id, limit=200, user_id=None, include_legacy_unowned=False):
         self.last_messages_user_id = user_id
@@ -529,6 +539,51 @@ class ChatSessionsApiTests(unittest.TestCase):
             self.assertEqual(payload["value"], 88)
         finally:
             GLOBAL_PLOT_DATA.pop(plot_id, None)
+
+    def test_plot_endpoint_returns_persisted_plot_when_process_memory_is_empty(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        fake_memory.stored_plots["persisted_plot_1"] = {
+            "data": {
+                "plot_type": "line",
+                "title": "Persisted Plot",
+                "series": [],
+            },
+            "ttl_days": 365,
+        }
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        try:
+            client = TestClient(app)
+            response = client.get("/api/plots/persisted_plot_1")
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["title"], "Persisted Plot")
+        self.assertEqual(fake_memory.retrieve_plot_calls, ["persisted_plot_1"])
+
+    def test_persist_plot_specs_stores_generated_plot_data(self):
+        import api.main as main
+        from src.agents.plot_store import GLOBAL_PLOT_DATA
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        GLOBAL_PLOT_DATA["generated_plot_1"] = {
+            "plot_type": "bar",
+            "title": "Generated Plot",
+            "series": [],
+        }
+        try:
+            persisted = main._persist_plot_specs(["generated_plot_1"])
+        finally:
+            main.memory_manager = original_memory_manager
+            GLOBAL_PLOT_DATA.pop("generated_plot_1", None)
+
+        self.assertEqual(persisted, ["generated_plot_1"])
+        self.assertEqual(fake_memory.stored_plots["generated_plot_1"]["data"]["title"], "Generated Plot")
 
 
 if __name__ == "__main__":

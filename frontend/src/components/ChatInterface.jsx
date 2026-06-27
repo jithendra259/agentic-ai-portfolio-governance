@@ -40,12 +40,6 @@ import InlineChart from './InlineChart';
 import PlotFixtureGallery from './PlotFixtureGallery';
 import { BACKEND_BASE } from '../config/api';
 import { useAuth } from '../context/AuthContext';
-import {
-  readCachedMessages,
-  readCachedSessions,
-  writeCachedMessages,
-  writeCachedSessions,
-} from '../utils/chatHistoryCache';
 
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
@@ -584,8 +578,7 @@ export default function ChatInterface({ setView }) {
       return existing;
     }
 
-    const cachedSessionId = readCachedSessions(userStorageScope)[0]?.session_id;
-    const nextSessionId = cachedSessionId || createSessionId();
+    const nextSessionId = createSessionId();
     window.localStorage.setItem(sessionStorageKey, nextSessionId);
     rememberSessionId(nextSessionId, sessionIndexStorageKey);
     return nextSessionId;
@@ -595,12 +588,9 @@ export default function ChatInterface({ setView }) {
   const [availableModels, setAvailableModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [activeConversationId, setActiveConversationId] = useState(sessionId);
-  const [messages, setMessages] = useState(() => {
-    const cachedMessages = readCachedMessages(userStorageScope, sessionId).map((item) => toChatMessage(item, sessionId));
-    return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(sessionId)];
-  });
+  const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [chatSessions, setChatSessions] = useState(() => readCachedSessions(userStorageScope));
+  const [chatSessions, setChatSessions] = useState([]);
   const [composerText, setComposerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [streamStatus, setStreamStatus] = useState('');
@@ -637,8 +627,7 @@ export default function ChatInterface({ setView }) {
 
     const headers = await getAuthorizationHeaders({}, { refresh: true });
     if (!headers['X-Portfolio-User-Id']) {
-      const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
-      return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(targetSessionId)];
+      return [makeWelcomeMessage(targetSessionId)];
     }
 
     return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?${params.toString()}`, {
@@ -650,7 +639,6 @@ export default function ChatInterface({ setView }) {
       })
       .then((data) => {
         const rows = data?.messages || [];
-        writeCachedMessages(userStorageScope, targetSessionId, rows);
         const loadedMessages = rows.map((item) => toChatMessage(item, targetSessionId));
         return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
       });
@@ -665,7 +653,7 @@ export default function ChatInterface({ setView }) {
 
     const headers = await getAuthorizationHeaders({}, { refresh: true });
     if (!headers['X-Portfolio-User-Id']) {
-      setChatSessions(readCachedSessions(userStorageScope));
+      setChatSessions([]);
       return undefined;
     }
 
@@ -679,7 +667,6 @@ export default function ChatInterface({ setView }) {
       .then((data) => {
         const sessions = data?.sessions || [];
         rememberSessionIds([sessionId, ...sessions.map((item) => item.session_id)], sessionIndexStorageKey);
-        writeCachedSessions(userStorageScope, sessions);
         setChatSessions(sessions);
 
         const latestSessionId = sessions[0]?.session_id;
@@ -701,50 +688,17 @@ export default function ChatInterface({ setView }) {
       })
       .catch((err) => {
         console.error('Failed to load chat sessions:', err);
-        setChatSessions(readCachedSessions(userStorageScope));
+        setChatSessions([]);
       });
   }, [getAuthorizationHeaders, sessionId, sessionIndexStorageKey, sessionStorageKey, userStorageScope]);
 
   useEffect(() => {
-    const cachedSessions = readCachedSessions(userStorageScope);
-    if (cachedSessions.length) {
-      setChatSessions(cachedSessions);
-    }
-
-    const cachedSessionId = window.localStorage.getItem(sessionStorageKey) || cachedSessions[0]?.session_id;
+    const cachedSessionId = window.localStorage.getItem(sessionStorageKey);
     if (cachedSessionId && cachedSessionId !== sessionId) {
       setSessionId(cachedSessionId);
       setActiveConversationId(cachedSessionId);
-      return;
-    }
-
-    const targetSessionId = cachedSessionId || sessionId;
-    const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
-    if (cachedMessages.length) {
-      setMessages(cachedMessages);
-      setHistoryLoaded(true);
     }
   }, [sessionId, sessionStorageKey, userStorageScope]);
-
-  useEffect(() => {
-    const cacheableMessages = messages
-      .filter((message) => message.id !== WELCOME_MESSAGE_ID)
-      .map((message) => ({
-        id: message.id,
-        role: message.role || (message.senderId === 'assistant' ? 'assistant' : 'user'),
-        content: messageText(message),
-        metadata: {},
-        created_at:
-          typeof message.createdAt === 'string'
-            ? message.createdAt
-            : (message.createdAt ? new Date(message.createdAt).toISOString() : new Date().toISOString()),
-      }))
-      .filter((message) => message.content.trim());
-
-    if (cacheableMessages.length) {
-      writeCachedMessages(userStorageScope, sessionId, cacheableMessages);
-    }
-  }, [messages, sessionId, userStorageScope]);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -1056,6 +1010,8 @@ export default function ChatInterface({ setView }) {
         }
       }
 
+      const persistedMessages = await loadSessionMessagesRef.current(sessionId);
+      setMessages(persistedMessages);
       refreshSessions();
     } catch (error) {
       if (controller.signal.aborted) {
