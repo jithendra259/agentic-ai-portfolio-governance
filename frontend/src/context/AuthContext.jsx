@@ -35,10 +35,10 @@ export function AuthProvider({ children }) {
     return buildSession(user);
   }, [isSignedIn, loading, user]);
 
-  const getAuthToken = useCallback(async () => {
+  const getAuthToken = useCallback(async (options = {}) => {
     if (!isAuthLoaded || !isSignedIn) return null;
     try {
-      const nextToken = await getClerkToken();
+      const nextToken = await getClerkToken(options);
       if (!nextToken) {
         const refreshedToken = await getClerkToken({ skipCache: true });
         setToken(refreshedToken || null);

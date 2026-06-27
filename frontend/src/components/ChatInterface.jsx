@@ -612,7 +612,9 @@ export default function ChatInterface({ setView }) {
   const messagesRef = useRef(messages);
 
   const getAuthorizationHeaders = useCallback(async (headers = {}, options = {}) => {
-    const authToken = token || await getAuthToken();
+    const authToken = options.refresh || options.required
+      ? await getAuthToken({ skipCache: true })
+      : token || await getAuthToken();
     if (!authToken) {
       if (options.required) {
         throw new Error('Your login session is still loading. Please wait a moment and try again.');
@@ -626,13 +628,13 @@ export default function ChatInterface({ setView }) {
   }, [getAuthToken, token]);
 
   const getRequiredAuthorizationHeaders = useCallback((headers = {}) => (
-    getAuthorizationHeaders(headers, { required: true })
+    getAuthorizationHeaders(headers, { required: true, refresh: true })
   ), [getAuthorizationHeaders]);
 
   const loadSessionMessages = useCallback(async (targetSessionId) => {
     const params = new URLSearchParams({ limit: '200' });
 
-    const headers = await getAuthorizationHeaders();
+    const headers = await getAuthorizationHeaders({}, { refresh: true });
     if (!headers.Authorization) {
       const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
       return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(targetSessionId)];
@@ -660,7 +662,7 @@ export default function ChatInterface({ setView }) {
   const refreshSessions = useCallback(async () => {
     const params = new URLSearchParams({ limit: '50' });
 
-    const headers = await getAuthorizationHeaders();
+    const headers = await getAuthorizationHeaders({}, { refresh: true });
     if (!headers.Authorization) {
       setChatSessions(readCachedSessions(userStorageScope));
       return undefined;
