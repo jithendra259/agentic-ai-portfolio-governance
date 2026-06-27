@@ -319,6 +319,20 @@ async function parseNDJSONStream(response, signal) {
   });
 }
 
+async function readApiError(response, fallbackMessage) {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      return payload?.detail || payload?.message || fallbackMessage;
+    }
+    const text = await response.text();
+    return text || fallbackMessage;
+  } catch {
+    return fallbackMessage;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Custom Composer Attach Button with inline model selector
 // ---------------------------------------------------------------------------
@@ -825,7 +839,10 @@ export default function ChatInterface({ setView }) {
         signal,
       });
 
-      if (!response.ok) throw new Error('Network response was not ok');
+      if (!response.ok) {
+        const detail = await readApiError(response, 'Network response was not ok');
+        throw new Error(`Backend returned ${response.status}: ${detail}`);
+      }
 
       const ndjsonStream = await parseNDJSONStream(response, signal);
 
@@ -987,7 +1004,10 @@ export default function ChatInterface({ setView }) {
         signal: controller.signal,
       });
 
-      if (!response.ok) throw new Error('Network response was not ok');
+      if (!response.ok) {
+        const detail = await readApiError(response, 'Network response was not ok');
+        throw new Error(`Backend returned ${response.status}: ${detail}`);
+      }
 
       const reader = (await parseNDJSONStream(response, controller.signal)).getReader();
       while (true) {

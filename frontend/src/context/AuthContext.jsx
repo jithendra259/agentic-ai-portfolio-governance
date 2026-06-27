@@ -27,7 +27,8 @@ export function AuthProvider({ children }) {
   const { isLoaded: isUserLoaded, user } = useUser();
   const { openSignIn, openSignUp, signOut } = useClerk();
   const [token, setToken] = useState(null);
-  const loading = !isAuthLoaded || (isSignedIn && !isUserLoaded);
+  const [tokenLoaded, setTokenLoaded] = useState(false);
+  const loading = !isAuthLoaded || (isSignedIn && (!isUserLoaded || !tokenLoaded));
 
   const session = useMemo(() => {
     if (loading || !isSignedIn) return null;
@@ -38,11 +39,19 @@ export function AuthProvider({ children }) {
     if (!isAuthLoaded || !isSignedIn) return null;
     try {
       const nextToken = await getClerkToken();
+      if (!nextToken) {
+        const refreshedToken = await getClerkToken({ skipCache: true });
+        setToken(refreshedToken || null);
+        setTokenLoaded(true);
+        return refreshedToken || null;
+      }
       setToken(nextToken || null);
+      setTokenLoaded(true);
       return nextToken || null;
     } catch (error) {
       console.error('Unable to read Clerk auth token:', error);
       setToken(null);
+      setTokenLoaded(true);
       return null;
     }
   }, [getClerkToken, isAuthLoaded, isSignedIn]);
@@ -51,18 +60,28 @@ export function AuthProvider({ children }) {
     localStorage.removeItem(LEGACY_TOKEN_KEY);
     if (!isAuthLoaded || !isSignedIn) {
       setToken(null);
+      setTokenLoaded(!isAuthLoaded ? false : true);
       return undefined;
     }
 
     let cancelled = false;
+    setTokenLoaded(false);
     getClerkToken()
       .then(nextToken => {
-        if (!cancelled) setToken(nextToken || null);
+        if (nextToken || cancelled) return nextToken;
+        return getClerkToken({ skipCache: true });
+      })
+      .then(nextToken => {
+        if (!cancelled) {
+          setToken(nextToken || null);
+          setTokenLoaded(true);
+        }
       })
       .catch(error => {
         if (!cancelled) {
           console.error('Unable to initialize Clerk auth token:', error);
           setToken(null);
+          setTokenLoaded(true);
         }
       });
 
