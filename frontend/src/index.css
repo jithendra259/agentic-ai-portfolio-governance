@@ -1,16 +1,23 @@
 /* MUI CssBaseline handles base styling */
+html {
+  color-scheme: dark;
+  background: #0d0d0d;
+}
+
 body {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
   overflow: hidden;
+  background: #0d0d0d;
+  color: #ececec;
 }
 
 html,
 body,
 #root {
   height: 100%;
-  background: #000;
+  background: #0d0d0d;
 }
 
 /* Table markdown styles for ChatGPT-style look */
@@ -265,6 +272,21 @@ body,
   margin-top: 4px;
 }
 
+.mini-profile-user-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  margin-top: 4px;
+}
+
+.mini-profile-user-button .cl-userButtonBox,
+.sidebar-profile .cl-userButtonBox {
+  display: grid;
+  place-items: center;
+}
+
 .mini-divider {
   width: 28px;
   height: 1px;
@@ -517,6 +539,11 @@ body,
 
 .sidebar-profile:hover .profile-avatar {
   transform: scale(1.06);
+}
+
+.sidebar-profile .cl-userButtonTrigger {
+  flex-shrink: 0;
+  border-radius: 50%;
 }
 
 .profile-copy {

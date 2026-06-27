@@ -1,5 +1,6 @@
 import { useReducer, useEffect } from 'react';
 import { BACKEND_BASE } from '../config/api';
+import { useAuth } from '../context/AuthContext';
 
 const initialAnalyticsState = {
   data: null,
@@ -22,45 +23,48 @@ function analyticsReducer(state, action) {
 
 function useTabAnalytics(endpoint, tickers, startDate, endDate, refreshKey = 0) {
   const [state, dispatch] = useReducer(analyticsReducer, initialAnalyticsState);
+  const { token, getAuthToken } = useAuth();
 
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
-    dispatch({ type: 'loading' });
-    const formattedTickers = Array.isArray(tickers) ? tickers.join(',') : tickers;
-    const url = `${BACKEND_BASE}/api/analytics/${endpoint}?tickers=${encodeURIComponent(formattedTickers)}&start_date=${startDate}&end_date=${endDate}`;
-    const token = localStorage.getItem('portfolio-governance-auth-token');
-    const headers = {};
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
 
-    fetch(url, { headers, signal: controller.signal })
-      .then(async res => {
+    async function loadAnalytics() {
+      dispatch({ type: 'loading' });
+      const formattedTickers = Array.isArray(tickers) ? tickers.join(',') : tickers;
+      const url = `${BACKEND_BASE}/api/analytics/${endpoint}?tickers=${encodeURIComponent(formattedTickers)}&start_date=${startDate}&end_date=${endDate}`;
+      const authToken = token || await getAuthToken();
+      const headers = {};
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`;
+      }
+
+      try {
+        const res = await fetch(url, { headers, signal: controller.signal });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
           throw new Error(text || `Failed to fetch ${endpoint} data: ${res.status}`);
         }
-        return res.json();
-      })
-      .then(result => {
+        const result = await res.json();
         if (isMounted) {
           dispatch({ type: 'success', data: result });
         }
-      })
-      .catch(err => {
+      } catch (err) {
         if (err.name === 'AbortError') return;
         console.error(`Error loading analytics tab [${endpoint}]:`, err);
         if (isMounted) {
           dispatch({ type: 'error', error: err.message });
         }
-      });
+      }
+    }
+
+    loadAnalytics();
 
     return () => {
       isMounted = false;
       controller.abort();
     };
-  }, [endpoint, tickers, startDate, endDate, refreshKey]);
+  }, [endpoint, tickers, startDate, endDate, refreshKey, token, getAuthToken]);
 
   return state;
 }

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback, forwardRef } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { UserButton } from '@clerk/react';
 import Box from '@mui/material/Box';
 import Typography from '@mui/material/Typography';
 import Select from '@mui/material/Select';
@@ -29,7 +30,6 @@ import {
   Sparkles,
   Trash2,
   Square,
-  LogOut,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -80,10 +80,6 @@ function rememberSessionId(sessionId) {
 
 function forgetSessionId(sessionId) {
   writeStoredSessionIds(readStoredSessionIds().filter((item) => item !== sessionId));
-}
-
-function isKnownBrowserSession(sessionId) {
-  return readStoredSessionIds().includes(sessionId);
 }
 
 // ---------------------------------------------------------------------------
@@ -555,7 +551,7 @@ function ChatMessageRow({ message, onRegenerate }) {
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface({ setView }) {
-  const { session, token, logout } = useAuth();
+  const { session, token, getAuthToken } = useAuth();
   const showPlotFixtureGallery = new URLSearchParams(window.location.search).has('plotTest');
   const [sessionId, setSessionId] = useState(() => {
     const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -585,16 +581,21 @@ export default function ChatInterface({ setView }) {
   const messagesEndRef = useRef(null);
   const activeStreamControllerRef = useRef(null);
 
-  const loadSessionMessages = useCallback((targetSessionId) => {
-    const params = new URLSearchParams({ limit: '200' });
-    if (isKnownBrowserSession(targetSessionId)) {
-      params.set('include_legacy', 'true');
-    }
+  const getAuthorizationHeaders = useCallback(async (headers = {}) => {
+    const authToken = token || await getAuthToken();
+    if (!authToken) return headers;
+    return {
+      ...headers,
+      Authorization: `Bearer ${authToken}`,
+    };
+  }, [getAuthToken, token]);
 
+  const loadSessionMessages = useCallback(async (targetSessionId) => {
+    const params = new URLSearchParams({ limit: '200' });
+
+    const headers = await getAuthorizationHeaders();
     return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?${params.toString()}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+      headers,
     })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch conversation history');
@@ -604,23 +605,18 @@ export default function ChatInterface({ setView }) {
         const loadedMessages = (data?.messages || []).map((item) => toChatMessage(item, targetSessionId));
         return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
       });
-  }, [token]);
+  }, [getAuthorizationHeaders]);
 
   // Use a ref to track loadSessionMessages to avoid unnecessary re-runs
   const loadSessionMessagesRef = useRef(loadSessionMessages);
   loadSessionMessagesRef.current = loadSessionMessages;
 
-  const refreshSessions = useCallback(() => {
-    const legacySessionIds = [...readStoredSessionIds(), sessionId].filter(Boolean);
+  const refreshSessions = useCallback(async () => {
     const params = new URLSearchParams({ limit: '50' });
-    if (legacySessionIds.length) {
-      params.set('legacy_session_ids', [...new Set(legacySessionIds)].join(','));
-    }
 
+    const headers = await getAuthorizationHeaders();
     return fetch(`${BACKEND_BASE}/chat/sessions?${params.toString()}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`
-      }
+      headers,
     })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch chat sessions');
@@ -635,36 +631,7 @@ export default function ChatInterface({ setView }) {
         console.error('Failed to load chat sessions:', err);
         setChatSessions([]);
       });
-  }, [sessionId, token]);
-
-  const claimLegacySessions = useCallback(async () => {
-    const userId = session?.user?.id || session?.user?.email;
-    if (!token || !userId) return;
-
-    const claimKey = `portfolio-ai-legacy-history-claimed-v2:${userId}`;
-    if (window.localStorage.getItem(claimKey) === 'true') return;
-
-    try {
-      const response = await fetch(`${BACKEND_BASE}/chat/sessions/claim-legacy`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          session_ids: readStoredSessionIds(),
-        }),
-      });
-
-      if (!response.ok) throw new Error('Failed to claim legacy chat sessions');
-      const data = await response.json().catch(() => ({}));
-      rememberSessionIds(data?.claimed_sessions || []);
-      window.localStorage.setItem(claimKey, 'true');
-      refreshSessions();
-    } catch (err) {
-      console.error('Failed to claim legacy chat sessions:', err);
-    }
-  }, [refreshSessions, session?.user?.email, session?.user?.id, token]);
+  }, [getAuthorizationHeaders, sessionId]);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -673,10 +640,6 @@ export default function ChatInterface({ setView }) {
   useEffect(() => {
     refreshSessions();
   }, [refreshSessions]);
-
-  useEffect(() => {
-    claimLegacySessions();
-  }, [claimLegacySessions]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -751,13 +714,13 @@ export default function ChatInterface({ setView }) {
     async sendMessage({ message, signal }) {
       const textPart = message.parts?.find(p => p.type === 'text');
       const userText = textPart ? textPart.text : (typeof message === 'string' ? message : '');
+      const headers = await getAuthorizationHeaders({
+        'Content-Type': 'application/json',
+      });
 
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({ 
           session_id: sessionId, 
           user_message: userText,
@@ -805,7 +768,7 @@ export default function ChatInterface({ setView }) {
 
       return ndjsonStream.pipeThrough(transformStream).pipeThrough(refreshAfterStream);
     },
-  }), [refreshSessions, sessionId, token]);
+  }), [getAuthorizationHeaders, refreshSessions, sessionId]);
 
   const handleMessagesChange = (nextMessages) => {
     const alignedMessages = nextMessages.map((message) => {
@@ -853,11 +816,10 @@ export default function ChatInterface({ setView }) {
     if (!targetSessionId) return;
 
     try {
+      const headers = await getAuthorizationHeaders();
       const response = await fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers,
       });
       if (!response.ok) throw new Error('Failed to delete chat');
 
@@ -872,7 +834,7 @@ export default function ChatInterface({ setView }) {
     } catch (error) {
       console.error('Failed to delete chat session:', error);
     }
-  }, [handleNewChat, refreshSessions, sessionId, token]);
+  }, [getAuthorizationHeaders, handleNewChat, refreshSessions, sessionId]);
 
   const stopStreaming = useCallback(() => {
     activeStreamControllerRef.current?.abort();
@@ -914,12 +876,12 @@ export default function ChatInterface({ setView }) {
     activeStreamControllerRef.current = controller;
 
     try {
+      const headers = await getAuthorizationHeaders({
+        'Content-Type': 'application/json',
+      });
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers,
         body: JSON.stringify({
           session_id: sessionId,
           user_message: userText,
@@ -992,7 +954,7 @@ export default function ChatInterface({ setView }) {
       setIsSubmitting(false);
       setStreamStatus('');
     }
-  }, [activeConversationId, isSubmitting, refreshSessions, sessionId]);
+  }, [activeConversationId, getAuthorizationHeaders, isSubmitting, refreshSessions, sessionId]);
 
   const handleComposerKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -1090,11 +1052,17 @@ export default function ChatInterface({ setView }) {
           </Box>
 
           <Box className="sidebar-profile">
-            <Box className="profile-avatar">
-              {session?.user?.name
-                ? session.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
-                : 'AI'}
-            </Box>
+            <UserButton
+              afterSignOutUrl="/"
+              appearance={{
+                elements: {
+                  avatarBox: {
+                    width: '36px',
+                    height: '36px',
+                  },
+                },
+              }}
+            />
             <Box className="profile-copy">
               <Typography className="profile-name">
                 {session?.user?.name || 'Portfolio Governance'}
@@ -1103,21 +1071,6 @@ export default function ChatInterface({ setView }) {
                 {session?.user?.plan || 'Advisory workspace'}
               </Typography>
             </Box>
-            <Tooltip title="Sign Out">
-              <IconButton
-                size="small"
-                onClick={logout}
-                sx={{
-                  color: '#555',
-                  flexShrink: 0,
-                  borderRadius: '6px',
-                  transition: 'color 130ms ease, background-color 130ms ease',
-                  '&:hover': { color: '#f4f4f4', backgroundColor: 'rgba(255,255,255,0.07)' },
-                }}
-              >
-                <LogOut size={14} />
-              </IconButton>
-            </Tooltip>
           </Box>
         </Box>
 
@@ -1184,15 +1137,19 @@ export default function ChatInterface({ setView }) {
             placement="right"
             arrow
           >
-            <IconButton
-              className="mini-icon-btn mini-profile-btn"
-              aria-label="Profile"
-              onClick={logout}
-            >
-              {session?.user?.name
-                ? session.user.name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
-                : 'AI'}
-            </IconButton>
+            <Box className="mini-profile-user-button">
+              <UserButton
+                afterSignOutUrl="/"
+                appearance={{
+                  elements: {
+                    avatarBox: {
+                      width: '38px',
+                      height: '38px',
+                    },
+                  },
+                }}
+              />
+            </Box>
           </Tooltip>
         </Box>
       </Box>

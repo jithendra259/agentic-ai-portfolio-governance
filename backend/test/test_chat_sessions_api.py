@@ -121,7 +121,7 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers.get("access-control-allow-origin"), "http://10.61.12.179:5000")
 
-    def test_chat_sessions_endpoint_returns_summaries(self):
+    def test_chat_sessions_endpoint_requires_authentication(self):
         import api.main as main
 
         fake_memory = FakeMemoryManager()
@@ -133,25 +133,12 @@ class ChatSessionsApiTests(unittest.TestCase):
         finally:
             main.memory_manager = original_memory_manager
 
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json(),
-            {
-                "sessions": [
-                    {
-                        "session_id": "session-1",
-                        "title": "Plot AAPL",
-                        "message_count": 2,
-                        "created_at": "2026-06-02T00:00:00+00:00",
-                        "updated_at": "2026-06-02T00:05:00+00:00",
-                    }
-                ]
-            },
-        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"detail": "Authentication is required to load chat sessions"})
         self.assertIsNone(fake_memory.last_list_user_id)
-        self.assertEqual(fake_memory.last_legacy_session_ids, [])
+        self.assertIsNone(fake_memory.last_legacy_session_ids)
 
-    def test_chat_sessions_endpoint_passes_authenticated_user_and_legacy_ids(self):
+    def test_chat_sessions_endpoint_uses_authenticated_user_without_legacy_ids(self):
         import api.main as main
 
         fake_memory = FakeMemoryManager()
@@ -169,9 +156,83 @@ class ChatSessionsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(fake_memory.last_list_user_id, "user-1")
-        self.assertEqual(fake_memory.last_legacy_session_ids, ["session-legacy", "current-session"])
+        self.assertEqual(fake_memory.last_legacy_session_ids, [])
 
-    def test_chat_messages_endpoint_can_include_browser_known_legacy_rows(self):
+    def test_chat_sessions_endpoint_accepts_clerk_session_token(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        original_verify_clerk_token = getattr(main, "verify_clerk_token", None)
+        main.memory_manager = fake_memory
+        main.verify_clerk_token = lambda token: {
+            "user": {
+                "id": "user_clerk_123",
+                "email": "clerk@example.com",
+                "name": "Clerk User",
+            }
+        } if token == "clerk-session-token" else None
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/chat/sessions?limit=25",
+                headers={"Authorization": "Bearer clerk-session-token"},
+            )
+        finally:
+            main.memory_manager = original_memory_manager
+            if original_verify_clerk_token is None:
+                delattr(main, "verify_clerk_token")
+            else:
+                main.verify_clerk_token = original_verify_clerk_token
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_memory.last_list_user_id, "user_clerk_123")
+
+    def test_auth_session_returns_clerk_session_payload(self):
+        import api.main as main
+        import api.auth_router as auth_router
+
+        def fake_verify_clerk_token(token):
+            return {
+                "user": {
+                    "id": "user_clerk_123",
+                    "email": "clerk@example.com",
+                    "name": "Clerk User",
+                }
+            } if token == "clerk-session-token" else None
+
+        original_verify_clerk_token = getattr(main, "verify_clerk_token", None)
+        original_router_verify_clerk_token = auth_router.verify_clerk_token
+        main.verify_clerk_token = fake_verify_clerk_token
+        auth_router.verify_clerk_token = fake_verify_clerk_token
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/api/auth/session",
+                headers={"Authorization": "Bearer clerk-session-token"},
+            )
+        finally:
+            if original_verify_clerk_token is None:
+                delattr(main, "verify_clerk_token")
+            else:
+                main.verify_clerk_token = original_verify_clerk_token
+            auth_router.verify_clerk_token = original_router_verify_clerk_token
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "session": {
+                    "user": {
+                        "id": "user_clerk_123",
+                        "email": "clerk@example.com",
+                        "name": "Clerk User",
+                    }
+                }
+            },
+        )
+
+    def test_chat_messages_endpoint_does_not_include_legacy_rows_for_authenticated_users(self):
         import api.main as main
 
         fake_memory = FakeMemoryManager()
@@ -189,9 +250,9 @@ class ChatSessionsApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(fake_memory.last_messages_user_id, "user-1")
-        self.assertTrue(fake_memory.last_include_legacy_unowned)
+        self.assertFalse(fake_memory.last_include_legacy_unowned)
 
-    def test_claim_legacy_chat_sessions_requires_auth_and_passes_user(self):
+    def test_claim_legacy_chat_sessions_is_disabled_for_user_isolation(self):
         import api.main as main
 
         fake_memory = FakeMemoryManager()
@@ -213,11 +274,11 @@ class ChatSessionsApiTests(unittest.TestCase):
             main.memory_manager = original_memory_manager
 
         self.assertEqual(unauthenticated.status_code, 401)
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"claimed_rows": 4, "claimed_sessions": ["session-legacy", "session-two"]})
-        self.assertEqual(fake_memory.last_claim_user_id, "user-1")
-        self.assertEqual(fake_memory.last_claim_session_ids, ["session-legacy"])
-        self.assertFalse(fake_memory.last_claim_all)
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json(), {"detail": "Legacy chat claiming is disabled"})
+        self.assertIsNone(fake_memory.last_claim_user_id)
+        self.assertIsNone(fake_memory.last_claim_session_ids)
+        self.assertIsNone(fake_memory.last_claim_all)
 
     def test_delete_chat_session_endpoint_deletes_history(self):
         import api.main as main
@@ -227,16 +288,17 @@ class ChatSessionsApiTests(unittest.TestCase):
         main.memory_manager = fake_memory
         main.session_memory_store.save_state("session-1", {"session_id": "session-1", "universe": {"tickers": ["AAPL"]}})
         main.session_memory_store.append_message("session-1", "user", "hello")
+        token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
         try:
             client = TestClient(app)
-            response = client.delete("/chat/session-1")
+            response = client.delete("/chat/session-1", headers={"Authorization": f"Bearer {token}"})
         finally:
             main.memory_manager = original_memory_manager
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"session_id": "session-1", "deleted_count": 2})
         self.assertEqual(fake_memory.deleted_session_id, "session-1")
-        self.assertIsNone(fake_memory.deleted_user_id)
+        self.assertEqual(fake_memory.deleted_user_id, "user-1")
         self.assertEqual(main.session_memory_store.get_last_messages("session-1"), [])
 
     def test_chat_stream_chunks_fast_path_responses(self):

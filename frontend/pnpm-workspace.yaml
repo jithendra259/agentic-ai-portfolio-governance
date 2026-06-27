@@ -1,2 +1,3 @@
 allowBuilds:
+  '@clerk/shared': false
   '@mui/x-telemetry': true

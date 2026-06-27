@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from bson import ObjectId
 
 from src.orchestrator.chatbot_orchestrator import memory_manager
+from src.utils.clerk_auth import verify_clerk_token
 from src.utils.crypto_utils import (
     hash_password,
     verify_password,
@@ -116,7 +117,7 @@ def auth_session(request: Request):
     if not auth_header or not auth_header.startswith("Bearer "):
         return {"session": None}
     token = auth_header.split(" ")[1]
-    payload = verify_auth_token(token)
+    payload = verify_clerk_token(token) or verify_auth_token(token)
     if not payload:
         return {"session": None}
     return {"session": payload}

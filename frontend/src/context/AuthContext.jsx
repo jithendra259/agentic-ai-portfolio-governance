@@ -1,129 +1,87 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { BACKEND_BASE } from '../config/api';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useAuth as useClerkAuth, useClerk, useUser } from '@clerk/react';
 
 const AuthContext = createContext(null);
+const LEGACY_TOKEN_KEY = 'portfolio-governance-auth-token';
 
-/**
- * Read token from URL params first (OAuth callback), then fall back to localStorage.
- * This runs synchronously during state initialization so there's no race condition.
- */
-function getInitialToken() {
-  try {
-    const urlParams = new URLSearchParams(window.location.search);
-    const tokenFromUrl = urlParams.get('token');
-    if (tokenFromUrl) {
-      // Store it immediately and clear the URL
-      localStorage.setItem('portfolio-governance-auth-token', tokenFromUrl);
-      // Replace history without query string — done once synchronously
-      window.history.replaceState({}, document.title, window.location.pathname);
-      return tokenFromUrl;
-    }
-  } catch (_) {
-    // SSR or restricted environment — ignore
-  }
-  return localStorage.getItem('portfolio-governance-auth-token');
+function buildSession(user) {
+  if (!user) return null;
+
+  const email = user.primaryEmailAddress?.emailAddress || user.emailAddresses?.[0]?.emailAddress || null;
+  const name = user.fullName || user.firstName || email || 'User';
+  const plan = user.publicMetadata?.plan || user.unsafeMetadata?.plan || 'Advisory workspace';
+
+  return {
+    user: {
+      id: user.id,
+      name,
+      email,
+      image: user.imageUrl,
+      plan,
+    },
+  };
 }
 
 export function AuthProvider({ children }) {
-  const [session, setSession] = useState(null);
-  // Token initializer reads URL ?token= first (OAuth callback), then localStorage
-  const [token, setToken] = useState(getInitialToken);
-  const [loading, setLoading] = useState(true);
+  const { isLoaded: isAuthLoaded, isSignedIn, getToken: getClerkToken } = useClerkAuth();
+  const { isLoaded: isUserLoaded, user } = useUser();
+  const { openSignIn, openSignUp, signOut } = useClerk();
+  const [token, setToken] = useState(null);
+  const loading = !isAuthLoaded || (isSignedIn && !isUserLoaded);
+
+  const session = useMemo(() => {
+    if (loading || !isSignedIn) return null;
+    return buildSession(user);
+  }, [isSignedIn, loading, user]);
+
+  const getAuthToken = useCallback(async () => {
+    if (!isAuthLoaded || !isSignedIn) return null;
+    try {
+      const nextToken = await getClerkToken();
+      setToken(nextToken || null);
+      return nextToken || null;
+    } catch (error) {
+      console.error('Unable to read Clerk auth token:', error);
+      setToken(null);
+      return null;
+    }
+  }, [getClerkToken, isAuthLoaded, isSignedIn]);
 
   useEffect(() => {
-    if (token) {
-      localStorage.setItem('portfolio-governance-auth-token', token);
-      // Verify token with backend session endpoint
-      fetch(`${BACKEND_BASE}/api/auth/session`, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    if (!isAuthLoaded || !isSignedIn) {
+      setToken(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    getClerkToken()
+      .then(nextToken => {
+        if (!cancelled) setToken(nextToken || null);
       })
-        .then(res => {
-          if (!res.ok) throw new Error('Session invalid');
-          return res.json();
-        })
-        .then(data => {
-          if (data?.session) {
-            setSession(data.session);
-          } else {
-            setSession(null);
-            setToken(null);
-            localStorage.removeItem('portfolio-governance-auth-token');
-          }
-          setLoading(false);
-        })
-        .catch(() => {
-          setSession(null);
+      .catch(error => {
+        if (!cancelled) {
+          console.error('Unable to initialize Clerk auth token:', error);
           setToken(null);
-          localStorage.removeItem('portfolio-governance-auth-token');
-          setLoading(false);
-        });
-    } else {
-      localStorage.removeItem('portfolio-governance-auth-token');
-      setSession(null);
-      setLoading(false);
-    }
-  }, [token]);
-
-  const login = async (email, password) => {
-    const res = await fetch(`${BACKEND_BASE}/api/auth/login`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email, password })
-    });
-    
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.detail || 'Incorrect credentials.');
-    }
-    
-    const data = await res.json();
-    setToken(data.token);
-    setSession(data.session);
-    return data.session;
-  };
-
-  const signup = async (name, email, password, plan) => {
-    const res = await fetch(`${BACKEND_BASE}/api/auth/signup`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ name, email, password, plan })
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.detail || 'Sign up failed.');
-    }
-
-    const data = await res.json();
-    setToken(data.token);
-    setSession(data.session);
-    return data.session;
-  };
-
-  const logout = async () => {
-    try {
-      await fetch(`${BACKEND_BASE}/api/auth/logout`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
         }
       });
-    } catch (e) {
-      console.error('Logout request failed:', e);
-    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getClerkToken, isAuthLoaded, isSignedIn, user?.id]);
+
+  const login = useCallback(async () => openSignIn(), [openSignIn]);
+  const signup = useCallback(async () => openSignUp(), [openSignUp]);
+
+  const logout = useCallback(async () => {
     setToken(null);
-    setSession(null);
-    localStorage.removeItem('portfolio-governance-auth-token');
-  };
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    await signOut();
+  }, [signOut]);
 
   return (
-    <AuthContext.Provider value={{ session, token, login, logout, signup, loading }}>
+    <AuthContext.Provider value={{ session, token, getAuthToken, login, logout, signup, loading }}>
       {children}
     </AuthContext.Provider>
   );

@@ -35,6 +35,22 @@ const darkTheme = createTheme({
     color: '#ECECEC',
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        html: {
+          colorScheme: 'dark',
+          backgroundColor: '#0D0D0D',
+        },
+        body: {
+          backgroundColor: '#0D0D0D',
+          color: '#ECECEC',
+        },
+        '#root': {
+          backgroundColor: '#0D0D0D',
+          color: '#ECECEC',
+        },
+      },
+    },
     MuiChatBox: {
       styleOverrides: {
         root: ({ theme }) => ({

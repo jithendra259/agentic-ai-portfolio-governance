@@ -121,6 +121,7 @@ PLOT_TOKEN = "__PLOTSPEC__:"
 if os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"):
     OUTPUTS_DIR = Path("/tmp/outputs")
 
+from src.utils.clerk_auth import verify_clerk_token
 from src.utils.crypto_utils import hash_password, verify_password, create_auth_token, verify_auth_token
 
 def get_current_user_id(request: Request) -> str | None:
@@ -128,7 +129,7 @@ def get_current_user_id(request: Request) -> str | None:
     if not auth_header or not auth_header.startswith("Bearer "):
         return None
     token = auth_header.split(" ")[1]
-    payload = verify_auth_token(token)
+    payload = verify_clerk_token(token) or verify_auth_token(token)
     if not payload:
         return None
     user = payload.get("user", {})
@@ -891,11 +892,14 @@ def health_check() -> dict:
 @app.get("/chat/sessions", response_model=ChatSessionsResponse)
 def chat_sessions(request: Request, limit: int = 50, legacy_session_ids: str | None = None) -> ChatSessionsResponse:
     user_id = get_current_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required to load chat sessions")
+
     safe_limit = max(1, min(int(limit or 50), 100))
     sessions = memory_manager.list_chat_sessions(
         limit=safe_limit,
         user_id=user_id,
-        legacy_session_ids=_parse_legacy_session_ids(legacy_session_ids),
+        legacy_session_ids=[],
     )
     return ChatSessionsResponse(sessions=sessions)
 
@@ -909,16 +913,7 @@ def claim_legacy_chat_sessions(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication is required to claim legacy chat history")
 
-    allow_global_claim = os.getenv("ALLOW_GLOBAL_LEGACY_CHAT_CLAIM") == "1"
-    result = memory_manager.claim_legacy_chat_sessions(
-        user_id=user_id,
-        session_ids=payload.session_ids,
-        claim_all=bool(payload.claim_all and allow_global_claim),
-    )
-    return ClaimLegacyChatSessionsResponse(
-        claimed_rows=int(result.get("claimed_rows") or 0),
-        claimed_sessions=list(result.get("claimed_sessions") or []),
-    )
+    raise HTTPException(status_code=403, detail="Legacy chat claiming is disabled")
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
@@ -932,11 +927,14 @@ def chat_messages(
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
     user_id = get_current_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required to load chat messages")
+
     rows = memory_manager.list_chat_messages(
         session_id,
         limit=limit,
         user_id=user_id,
-        include_legacy_unowned=include_legacy,
+        include_legacy_unowned=False,
     )
     return ChatHistoryResponse(session_id=session_id, messages=rows)
 
@@ -948,6 +946,9 @@ def delete_chat_session(session_id: str, request: Request) -> DeleteChatSessionR
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
     user_id = get_current_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required to delete chat sessions")
+
     deleted_count = 0
     if hasattr(memory_manager, "delete_chat_session"):
         deleted_count = int(memory_manager.delete_chat_session(clean_session_id, user_id=user_id) or 0)
@@ -998,7 +999,7 @@ def auth_session(request: Request):
     if not auth_header or not auth_header.startswith("Bearer "):
         return {"session": None}
     token = auth_header.split(" ")[1]
-    payload = verify_auth_token(token)
+    payload = verify_clerk_token(token) or verify_auth_token(token)
     if not payload:
         return {"session": None}
     return {"session": payload}
