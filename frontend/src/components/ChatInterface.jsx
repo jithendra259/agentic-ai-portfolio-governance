@@ -40,6 +40,12 @@ import InlineChart from './InlineChart';
 import PlotFixtureGallery from './PlotFixtureGallery';
 import { BACKEND_BASE } from '../config/api';
 import { useAuth } from '../context/AuthContext';
+import {
+  readCachedMessages,
+  readCachedSessions,
+  writeCachedMessages,
+  writeCachedSessions,
+} from '../utils/chatHistoryCache';
 
 const PLOT_TOKEN = '__PLOTSPEC__:';
 const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
@@ -50,9 +56,9 @@ function createSessionId() {
   return `portfolio-chat-${randomPart}`;
 }
 
-function readStoredSessionIds() {
+function readStoredSessionIds(storageKey = SESSION_INDEX_STORAGE_KEY) {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(SESSION_INDEX_STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || '[]');
     return Array.isArray(parsed)
       ? parsed.map((item) => String(item || '').trim()).filter(Boolean)
       : [];
@@ -61,25 +67,25 @@ function readStoredSessionIds() {
   }
 }
 
-function writeStoredSessionIds(sessionIds) {
+function writeStoredSessionIds(sessionIds, storageKey = SESSION_INDEX_STORAGE_KEY) {
   const unique = [];
   for (const sessionId of sessionIds || []) {
     const value = String(sessionId || '').trim();
     if (value && !unique.includes(value)) unique.push(value);
   }
-  window.localStorage.setItem(SESSION_INDEX_STORAGE_KEY, JSON.stringify(unique.slice(0, 100)));
+  window.localStorage.setItem(storageKey, JSON.stringify(unique.slice(0, 100)));
 }
 
-function rememberSessionIds(sessionIds) {
-  writeStoredSessionIds([...readStoredSessionIds(), ...(sessionIds || [])]);
+function rememberSessionIds(sessionIds, storageKey = SESSION_INDEX_STORAGE_KEY) {
+  writeStoredSessionIds([...readStoredSessionIds(storageKey), ...(sessionIds || [])], storageKey);
 }
 
-function rememberSessionId(sessionId) {
-  rememberSessionIds([sessionId]);
+function rememberSessionId(sessionId, storageKey = SESSION_INDEX_STORAGE_KEY) {
+  rememberSessionIds([sessionId], storageKey);
 }
 
-function forgetSessionId(sessionId) {
-  writeStoredSessionIds(readStoredSessionIds().filter((item) => item !== sessionId));
+function forgetSessionId(sessionId, storageKey = SESSION_INDEX_STORAGE_KEY) {
+  writeStoredSessionIds(readStoredSessionIds(storageKey).filter((item) => item !== sessionId), storageKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -552,17 +558,21 @@ function ChatMessageRow({ message, onRegenerate }) {
 // ---------------------------------------------------------------------------
 export default function ChatInterface({ setView }) {
   const { session, token, getAuthToken } = useAuth();
+  const userStorageScope = session?.user?.id || session?.user?.email || 'anonymous';
+  const sessionStorageKey = `${SESSION_STORAGE_KEY}:${userStorageScope}`;
+  const sessionIndexStorageKey = `${SESSION_INDEX_STORAGE_KEY}:${userStorageScope}`;
   const showPlotFixtureGallery = new URLSearchParams(window.location.search).has('plotTest');
   const [sessionId, setSessionId] = useState(() => {
-    const existing = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    const existing = window.localStorage.getItem(sessionStorageKey);
     if (existing) {
-      rememberSessionId(existing);
+      rememberSessionId(existing, sessionIndexStorageKey);
       return existing;
     }
 
-    const nextSessionId = createSessionId();
-    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
-    rememberSessionId(nextSessionId);
+    const cachedSessionId = readCachedSessions(userStorageScope)[0]?.session_id;
+    const nextSessionId = cachedSessionId || createSessionId();
+    window.localStorage.setItem(sessionStorageKey, nextSessionId);
+    rememberSessionId(nextSessionId, sessionIndexStorageKey);
     return nextSessionId;
   });
 
@@ -570,9 +580,12 @@ export default function ChatInterface({ setView }) {
   const [availableModels, setAvailableModels] = useState([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [activeConversationId, setActiveConversationId] = useState(sessionId);
-  const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
+  const [messages, setMessages] = useState(() => {
+    const cachedMessages = readCachedMessages(userStorageScope, sessionId).map((item) => toChatMessage(item, sessionId));
+    return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(sessionId)];
+  });
   const [historyLoaded, setHistoryLoaded] = useState(false);
-  const [chatSessions, setChatSessions] = useState([]);
+  const [chatSessions, setChatSessions] = useState(() => readCachedSessions(userStorageScope));
   const [composerText, setComposerText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [streamStatus, setStreamStatus] = useState('');
@@ -580,20 +593,35 @@ export default function ChatInterface({ setView }) {
   const selectedModelRef = useRef('');
   const messagesEndRef = useRef(null);
   const activeStreamControllerRef = useRef(null);
+  const autoOpenedLatestSessionRef = useRef(false);
 
-  const getAuthorizationHeaders = useCallback(async (headers = {}) => {
+  const getAuthorizationHeaders = useCallback(async (headers = {}, options = {}) => {
     const authToken = token || await getAuthToken();
-    if (!authToken) return headers;
+    if (!authToken) {
+      if (options.required) {
+        throw new Error('Your login session is still loading. Please wait a moment and try again.');
+      }
+      return headers;
+    }
     return {
       ...headers,
       Authorization: `Bearer ${authToken}`,
     };
   }, [getAuthToken, token]);
 
+  const getRequiredAuthorizationHeaders = useCallback((headers = {}) => (
+    getAuthorizationHeaders(headers, { required: true })
+  ), [getAuthorizationHeaders]);
+
   const loadSessionMessages = useCallback(async (targetSessionId) => {
     const params = new URLSearchParams({ limit: '200' });
 
     const headers = await getAuthorizationHeaders();
+    if (!headers.Authorization) {
+      const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
+      return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(targetSessionId)];
+    }
+
     return fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}/messages?${params.toString()}`, {
       headers,
     })
@@ -602,10 +630,12 @@ export default function ChatInterface({ setView }) {
         return res.json();
       })
       .then((data) => {
-        const loadedMessages = (data?.messages || []).map((item) => toChatMessage(item, targetSessionId));
+        const rows = data?.messages || [];
+        writeCachedMessages(userStorageScope, targetSessionId, rows);
+        const loadedMessages = rows.map((item) => toChatMessage(item, targetSessionId));
         return loadedMessages.length ? loadedMessages : [makeWelcomeMessage(targetSessionId)];
       });
-  }, [getAuthorizationHeaders]);
+  }, [getAuthorizationHeaders, userStorageScope]);
 
   // Use a ref to track loadSessionMessages to avoid unnecessary re-runs
   const loadSessionMessagesRef = useRef(loadSessionMessages);
@@ -615,6 +645,11 @@ export default function ChatInterface({ setView }) {
     const params = new URLSearchParams({ limit: '50' });
 
     const headers = await getAuthorizationHeaders();
+    if (!headers.Authorization) {
+      setChatSessions(readCachedSessions(userStorageScope));
+      return undefined;
+    }
+
     return fetch(`${BACKEND_BASE}/chat/sessions?${params.toString()}`, {
       headers,
     })
@@ -624,14 +659,58 @@ export default function ChatInterface({ setView }) {
       })
       .then((data) => {
         const sessions = data?.sessions || [];
-        rememberSessionIds([sessionId, ...sessions.map((item) => item.session_id)]);
+        rememberSessionIds([sessionId, ...sessions.map((item) => item.session_id)], sessionIndexStorageKey);
+        writeCachedSessions(userStorageScope, sessions);
         setChatSessions(sessions);
+
+        const latestSessionId = sessions[0]?.session_id;
+        const currentSessionExists = sessions.some((item) => item.session_id === sessionId);
+        if (!autoOpenedLatestSessionRef.current && latestSessionId && !currentSessionExists) {
+          autoOpenedLatestSessionRef.current = true;
+          window.localStorage.setItem(sessionStorageKey, latestSessionId);
+          rememberSessionId(latestSessionId, sessionIndexStorageKey);
+          setSessionId(latestSessionId);
+          setActiveConversationId(latestSessionId);
+        }
       })
       .catch((err) => {
         console.error('Failed to load chat sessions:', err);
-        setChatSessions([]);
+        setChatSessions(readCachedSessions(userStorageScope));
       });
-  }, [getAuthorizationHeaders, sessionId]);
+  }, [getAuthorizationHeaders, sessionId, sessionIndexStorageKey, sessionStorageKey, userStorageScope]);
+
+  useEffect(() => {
+    const cachedSessions = readCachedSessions(userStorageScope);
+    if (cachedSessions.length) {
+      setChatSessions(cachedSessions);
+    }
+
+    const cachedMessages = readCachedMessages(userStorageScope, sessionId).map((item) => toChatMessage(item, sessionId));
+    if (cachedMessages.length) {
+      setMessages(cachedMessages);
+      setHistoryLoaded(true);
+    }
+  }, [sessionId, userStorageScope]);
+
+  useEffect(() => {
+    const cacheableMessages = messages
+      .filter((message) => message.id !== 'msg-welcome-1')
+      .map((message) => ({
+        id: message.id,
+        role: message.role || (message.senderId === 'assistant' ? 'assistant' : 'user'),
+        content: messageText(message),
+        metadata: {},
+        created_at:
+          typeof message.createdAt === 'string'
+            ? message.createdAt
+            : (message.createdAt ? new Date(message.createdAt).toISOString() : new Date().toISOString()),
+      }))
+      .filter((message) => message.content.trim());
+
+    if (cacheableMessages.length) {
+      writeCachedMessages(userStorageScope, sessionId, cacheableMessages);
+    }
+  }, [messages, sessionId, userStorageScope]);
 
   useEffect(() => {
     selectedModelRef.current = selectedModel;
@@ -640,6 +719,23 @@ export default function ChatInterface({ setView }) {
   useEffect(() => {
     refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    if (!session?.user?.id && !session?.user?.email) return;
+
+    let cancelled = false;
+    getAuthToken()
+      .then(() => {
+        if (!cancelled) refreshSessions();
+      })
+      .catch((err) => {
+        console.error('Failed to refresh chat sessions after login:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getAuthToken, refreshSessions, session?.user?.email, session?.user?.id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -714,7 +810,7 @@ export default function ChatInterface({ setView }) {
     async sendMessage({ message, signal }) {
       const textPart = message.parts?.find(p => p.type === 'text');
       const userText = textPart ? textPart.text : (typeof message === 'string' ? message : '');
-      const headers = await getAuthorizationHeaders({
+      const headers = await getRequiredAuthorizationHeaders({
         'Content-Type': 'application/json',
       });
 
@@ -768,7 +864,7 @@ export default function ChatInterface({ setView }) {
 
       return ndjsonStream.pipeThrough(transformStream).pipeThrough(refreshAfterStream);
     },
-  }), [getAuthorizationHeaders, refreshSessions, sessionId]);
+  }), [getRequiredAuthorizationHeaders, refreshSessions, sessionId]);
 
   const handleMessagesChange = (nextMessages) => {
     const alignedMessages = nextMessages.map((message) => {
@@ -789,41 +885,42 @@ export default function ChatInterface({ setView }) {
   };
 
   const handleNewChat = useCallback(() => {
+    autoOpenedLatestSessionRef.current = true;
     const nextSessionId = createSessionId();
     const nextMessages = [makeWelcomeMessage(nextSessionId)];
 
-    window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId);
-    rememberSessionId(nextSessionId);
+    window.localStorage.setItem(sessionStorageKey, nextSessionId);
+    rememberSessionId(nextSessionId, sessionIndexStorageKey);
 
     setSessionId(nextSessionId);
     setActiveConversationId(nextSessionId);
     setMessages(nextMessages);
     setHistoryLoaded(true);
-  }, []);
+  }, [sessionIndexStorageKey, sessionStorageKey]);
 
   const handleActiveConversationChange = useCallback((nextId) => {
     console.log('handleActiveConversationChange called with:', nextId, 'current active:', activeConversationId);
     if (!nextId || nextId === activeConversationId) return;
 
-    window.localStorage.setItem(SESSION_STORAGE_KEY, nextId);
-    rememberSessionId(nextId);
+    window.localStorage.setItem(sessionStorageKey, nextId);
+    rememberSessionId(nextId, sessionIndexStorageKey);
     setSessionId(nextId);
     setActiveConversationId(nextId);
-  }, [activeConversationId]);
+  }, [activeConversationId, sessionIndexStorageKey, sessionStorageKey]);
 
   const handleDeleteConversation = useCallback(async (event, targetSessionId) => {
     event.stopPropagation();
     if (!targetSessionId) return;
 
     try {
-      const headers = await getAuthorizationHeaders();
+      const headers = await getRequiredAuthorizationHeaders();
       const response = await fetch(`${BACKEND_BASE}/chat/${encodeURIComponent(targetSessionId)}`, {
         method: 'DELETE',
         headers,
       });
       if (!response.ok) throw new Error('Failed to delete chat');
 
-      forgetSessionId(targetSessionId);
+      forgetSessionId(targetSessionId, sessionIndexStorageKey);
       setChatSessions((current) => current.filter((item) => item.session_id !== targetSessionId));
 
       if (targetSessionId === sessionId) {
@@ -834,7 +931,7 @@ export default function ChatInterface({ setView }) {
     } catch (error) {
       console.error('Failed to delete chat session:', error);
     }
-  }, [getAuthorizationHeaders, handleNewChat, refreshSessions, sessionId]);
+  }, [getRequiredAuthorizationHeaders, handleNewChat, refreshSessions, sessionId, sessionIndexStorageKey]);
 
   const stopStreaming = useCallback(() => {
     activeStreamControllerRef.current?.abort();
@@ -876,7 +973,7 @@ export default function ChatInterface({ setView }) {
     activeStreamControllerRef.current = controller;
 
     try {
-      const headers = await getAuthorizationHeaders({
+      const headers = await getRequiredAuthorizationHeaders({
         'Content-Type': 'application/json',
       });
       const response = await fetch(`${BACKEND_BASE}/chat/stream`, {
@@ -954,7 +1051,7 @@ export default function ChatInterface({ setView }) {
       setIsSubmitting(false);
       setStreamStatus('');
     }
-  }, [activeConversationId, getAuthorizationHeaders, isSubmitting, refreshSessions, sessionId]);
+  }, [activeConversationId, getRequiredAuthorizationHeaders, isSubmitting, refreshSessions, sessionId]);
 
   const handleComposerKeyDown = useCallback((event) => {
     if (event.key === 'Enter' && !event.shiftKey) {

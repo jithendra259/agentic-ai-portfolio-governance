@@ -138,6 +138,26 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertIsNone(fake_memory.last_list_user_id)
         self.assertIsNone(fake_memory.last_legacy_session_ids)
 
+    def test_chat_write_endpoints_require_authentication(self):
+        client = TestClient(app)
+
+        chat_response = client.post(
+            "/chat",
+            json={"session_id": "session-1", "user_message": "hello", "model": None},
+        )
+        stream_response = client.post(
+            "/chat/stream",
+            json={"session_id": "session-1", "user_message": "hello", "model": None},
+        )
+        start_response = client.post(
+            "/chat/start",
+            json={"session_id": "session-1", "user_message": "hello", "model": None},
+        )
+
+        self.assertEqual(chat_response.status_code, 401)
+        self.assertEqual(stream_response.status_code, 401)
+        self.assertEqual(start_response.status_code, 401)
+
     def test_chat_sessions_endpoint_uses_authenticated_user_without_legacy_ids(self):
         import api.main as main
 
@@ -370,12 +390,16 @@ class ChatSessionsApiTests(unittest.TestCase):
 
         try:
             client = TestClient(app)
+            token = create_auth_token({"user": {"id": "user-1", "email": "user@example.com"}})
+            auth_headers = {"Authorization": f"Bearer {token}"}
             clarify = client.post(
                 "/chat",
+                headers=auth_headers,
                 json={"session_id": session_id, "user_message": "plot scatter plot", "model": None},
             )
             axes = client.post(
                 "/chat",
+                headers=auth_headers,
                 json={
                     "session_id": session_id,
                     "user_message": "systemic risk score vs portfolio weight",
@@ -384,6 +408,7 @@ class ChatSessionsApiTests(unittest.TestCase):
             )
             repeat = client.post(
                 "/chat",
+                headers=auth_headers,
                 json={"session_id": session_id, "user_message": "plot the scatter plot", "model": None},
             )
         finally:

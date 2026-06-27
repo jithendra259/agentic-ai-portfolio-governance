@@ -136,6 +136,13 @@ def get_current_user_id(request: Request) -> str | None:
     return user.get("id") or user.get("email")
 
 
+def require_current_user_id(request: Request, action: str = "use chat") -> str:
+    user_id = get_current_user_id(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail=f"Authentication is required to {action}")
+    return user_id
+
+
 def _parse_legacy_session_ids(raw_session_ids: str | None) -> list[str]:
     cleaned = []
     for item in str(raw_session_ids or "").split(","):
@@ -891,10 +898,7 @@ def health_check() -> dict:
 
 @app.get("/chat/sessions", response_model=ChatSessionsResponse)
 def chat_sessions(request: Request, limit: int = 50, legacy_session_ids: str | None = None) -> ChatSessionsResponse:
-    user_id = get_current_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required to load chat sessions")
-
+    user_id = require_current_user_id(request, "load chat sessions")
     safe_limit = max(1, min(int(limit or 50), 100))
     sessions = memory_manager.list_chat_sessions(
         limit=safe_limit,
@@ -909,9 +913,7 @@ def claim_legacy_chat_sessions(
     payload: ClaimLegacyChatSessionsRequest,
     request: Request,
 ) -> ClaimLegacyChatSessionsResponse:
-    user_id = get_current_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required to claim legacy chat history")
+    require_current_user_id(request, "claim legacy chat history")
 
     raise HTTPException(status_code=403, detail="Legacy chat claiming is disabled")
 
@@ -926,10 +928,7 @@ def chat_messages(
     if not session_id.strip():
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
-    user_id = get_current_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required to load chat messages")
-
+    user_id = require_current_user_id(request, "load chat messages")
     rows = memory_manager.list_chat_messages(
         session_id,
         limit=limit,
@@ -945,10 +944,7 @@ def delete_chat_session(session_id: str, request: Request) -> DeleteChatSessionR
     if not clean_session_id:
         raise HTTPException(status_code=400, detail="session_id cannot be empty")
 
-    user_id = get_current_user_id(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required to delete chat sessions")
-
+    user_id = require_current_user_id(request, "delete chat sessions")
     deleted_count = 0
     if hasattr(memory_manager, "delete_chat_session"):
         deleted_count = int(memory_manager.delete_chat_session(clean_session_id, user_id=user_id) or 0)
@@ -1026,7 +1022,7 @@ async def start_chat_run(
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
 
-    user_id = get_current_user_id(http_request)
+    user_id = require_current_user_id(http_request, "start chat runs")
     thread_id = f"run-{uuid.uuid4().hex}"
     _set_chat_run(
         thread_id,
@@ -1125,7 +1121,7 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
 
-    user_id = get_current_user_id(http_request)
+    user_id = require_current_user_id(http_request, "send chat messages")
 
     try:
         logger.info("Processing chat request for session_id=%s", request.session_id)
@@ -1321,7 +1317,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
     if not request.user_message.strip():
         raise HTTPException(status_code=400, detail="user_message cannot be empty")
 
-    user_id = get_current_user_id(http_request)
+    user_id = require_current_user_id(http_request, "stream chat messages")
 
     async def event_generator():
         import uuid
