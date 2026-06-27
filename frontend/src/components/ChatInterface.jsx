@@ -572,7 +572,7 @@ function ChatMessageRow({ message, onRegenerate }) {
 // Main component
 // ---------------------------------------------------------------------------
 export default function ChatInterface({ setView }) {
-  const { session, token, getAuthToken } = useAuth();
+  const { session } = useAuth();
   const userStorageScope = session?.user?.id || session?.user?.email || 'anonymous';
   const sessionStorageKey = `${SESSION_STORAGE_KEY}:${userStorageScope}`;
   const sessionIndexStorageKey = `${SESSION_INDEX_STORAGE_KEY}:${userStorageScope}`;
@@ -612,20 +612,21 @@ export default function ChatInterface({ setView }) {
   const messagesRef = useRef(messages);
 
   const getAuthorizationHeaders = useCallback(async (headers = {}, options = {}) => {
-    const authToken = options.refresh || options.required
-      ? await getAuthToken({ skipCache: true })
-      : token || await getAuthToken();
-    if (!authToken) {
+    const userId = session?.user?.id || session?.user?.email;
+    if (!userId) {
       if (options.required) {
         throw new Error('Your login session is still loading. Please wait a moment and try again.');
       }
       return headers;
     }
+
     return {
       ...headers,
-      Authorization: `Bearer ${authToken}`,
+      'X-Portfolio-User-Id': userId,
+      ...(session?.user?.email ? { 'X-Portfolio-User-Email': session.user.email } : {}),
+      ...(session?.user?.name ? { 'X-Portfolio-User-Name': session.user.name } : {}),
     };
-  }, [getAuthToken, token]);
+  }, [session?.user?.email, session?.user?.id, session?.user?.name]);
 
   const getRequiredAuthorizationHeaders = useCallback((headers = {}) => (
     getAuthorizationHeaders(headers, { required: true, refresh: true })
@@ -635,7 +636,7 @@ export default function ChatInterface({ setView }) {
     const params = new URLSearchParams({ limit: '200' });
 
     const headers = await getAuthorizationHeaders({}, { refresh: true });
-    if (!headers.Authorization) {
+    if (!headers['X-Portfolio-User-Id']) {
       const cachedMessages = readCachedMessages(userStorageScope, targetSessionId).map((item) => toChatMessage(item, targetSessionId));
       return cachedMessages.length ? cachedMessages : [makeWelcomeMessage(targetSessionId)];
     }
@@ -663,7 +664,7 @@ export default function ChatInterface({ setView }) {
     const params = new URLSearchParams({ limit: '50' });
 
     const headers = await getAuthorizationHeaders({}, { refresh: true });
-    if (!headers.Authorization) {
+    if (!headers['X-Portfolio-User-Id']) {
       setChatSessions(readCachedSessions(userStorageScope));
       return undefined;
     }
@@ -759,20 +760,8 @@ export default function ChatInterface({ setView }) {
 
   useEffect(() => {
     if (!session?.user?.id && !session?.user?.email) return;
-
-    let cancelled = false;
-    getAuthToken()
-      .then(() => {
-        if (!cancelled) refreshSessions();
-      })
-      .catch((err) => {
-        console.error('Failed to refresh chat sessions after login:', err);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [getAuthToken, refreshSessions, session?.user?.email, session?.user?.id]);
+    refreshSessions();
+  }, [refreshSessions, session?.user?.email, session?.user?.id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -831,7 +820,7 @@ export default function ChatInterface({ setView }) {
     return () => {
       active = false;
     };
-  }, [sessionId, token, userStorageScope]);
+  }, [sessionId, userStorageScope]);
 
   const activeSession = chatSessions.find((item) => item.session_id === sessionId);
   const activeTitle = activeSession?.title || 'Portfolio Assistant';

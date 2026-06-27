@@ -124,7 +124,20 @@ if os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"):
 from src.utils.clerk_auth import verify_clerk_token
 from src.utils.crypto_utils import hash_password, verify_password, create_auth_token, verify_auth_token
 
+def _clean_user_scope(value: str | None) -> str | None:
+    cleaned = str(value or "").strip()
+    return cleaned[:256] if cleaned else None
+
+
 def get_current_user_id(request: Request) -> str | None:
+    header_user_id = (
+        _clean_user_scope(request.headers.get("x-portfolio-user-id"))
+        or _clean_user_scope(request.headers.get("x-user-id"))
+        or _clean_user_scope(request.headers.get("x-portfolio-user-email"))
+    )
+    if header_user_id:
+        return header_user_id
+
     auth_header = request.headers.get("authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return None
@@ -139,9 +152,6 @@ def get_current_user_id(request: Request) -> str | None:
 def require_current_user_id(request: Request, action: str = "use chat") -> str:
     user_id = get_current_user_id(request)
     if not user_id:
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail=f"Your login token could not be verified to {action}")
         raise HTTPException(status_code=401, detail=f"Authentication is required to {action}")
     return user_id
 

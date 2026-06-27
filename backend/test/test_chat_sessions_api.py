@@ -178,6 +178,24 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(fake_memory.last_list_user_id, "user-1")
         self.assertEqual(fake_memory.last_legacy_session_ids, [])
 
+    def test_chat_sessions_endpoint_accepts_portfolio_user_header(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        try:
+            client = TestClient(app)
+            response = client.get(
+                "/chat/sessions?limit=25",
+                headers={"X-Portfolio-User-Id": "user_clerk_123"},
+            )
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_memory.last_list_user_id, "user_clerk_123")
+
     def test_chat_sessions_endpoint_accepts_clerk_session_token(self):
         import api.main as main
 
