@@ -1,0 +1,51 @@
+════════════════════════════════════════════════════════════
+  PHASE 12 — MONTE CARLO STRESS TEST
+════════════════════════════════════════════════════════════
+
+============================================================
+  STEP 65: GFC Covariance Estimation
+============================================================
+  ⚠️  No exact GFC overlap found — using highest I_t window
+  GFC window selected : W09
+  Window period       : None → None
+  I_t                 : 1.0000  (Crisis)
+  Assets              : 17
+  Observations        : 252 trading days
+  Covariance matrix   : (17, 17)
+  Mean pairwise corr  : 0.6403
+  ✅ Step 65 complete
+
+============================================================
+  STEP 66: Synthetic Path Generation
+============================================================
+  Standard scenarios  : 10,000
+  Fat-tail scenarios  : 500  (×2.5 stress)
+  Total scenarios     : 10,500
+  ✅ Step 66 complete
+
+============================================================
+  STEP 67: Apply 4 Strategies to 10,500 Scenarios
+============================================================
+  G-CVaR          weight sum=1.0000  max=0.1500
+  Std CVaR        weight sum=1.0000  max=0.1500
+  Mean-Var        weight sum=1.0000  max=0.1500
+  Equal Weight    weight sum=1.0000  max=0.0588
+
+  ✅ Step 67 complete
+
+============================================================
+  STEP 68: Table 14 + Plot 15
+============================================================
+
+════════════════════════════════════════════════════════════════════════
+  TABLE 14 — MONTE CARLO SURVIVAL STATISTICS
+  GFC Window: W09  |  Universe: U1  |  Paths: 10,500
+════════════════════════════════════════════════════════════════════════
+    Strategy Mean MDD P95 MDD Max Loss CVaR@95% Surv MDD<30% Surv MDD<20%
+      G-CVaR    0.96%   3.88%   20.07%    5.42%       100.0%       100.0%
+    Std CVaR    0.96%   3.86%   19.86%    5.40%       100.0%       100.0%
+    Mean-Var    0.95%   3.83%   19.69%    5.37%       100.0%       100.0%
+Equal Weight    1.12%   4.57%   24.40%    6.36%       100.0%       100.0%
+
+  G-CVaR mean MDD reduction vs Std CVaR: -0.18%
+  G-CVaR survival improvement (MDD<30%): +0.00 pp

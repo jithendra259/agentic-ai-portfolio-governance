@@ -1,0 +1,1 @@
+.dataframe tbody tr th:only-of-type { vertical-align: middle; } .dataframe tbody tr th { vertical-align: top; } .dataframe thead th { text-align: right; } threshold avg_sharpe 0 1 0.38440 1 2 0.38440 2 3 0.38440 3 5 0.37384

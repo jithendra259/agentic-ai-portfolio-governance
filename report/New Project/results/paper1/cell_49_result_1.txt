@@ -1,0 +1,5 @@
+return        0.04436
+volatility    0.17768
+sharpe        0.38440
+drawdown     -0.17154
+dtype: float64

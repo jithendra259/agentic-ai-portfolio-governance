@@ -1,0 +1,208 @@
+\contentsline {section}{Certificate}{i}{section*.1}%
+\contentsline {section}{Declaration}{ii}{section*.2}%
+\contentsline {section}{Acknowledgements}{iii}{section*.3}%
+\contentsline {section}{Abstract}{iv}{section*.4}%
+\contentsline {section}{List of Figures}{xiv}{section*.6}%
+\contentsline {section}{List of Tables}{xv}{section*.7}%
+\contentsline {section}{Nomenclature}{xvi}{section*.8}%
+\contentsline {section}{Implementation Artifacts}{xvii}{section*.9}%
+\contentsline {section}{\numberline {1}Introduction}{1}{section.1}%
+\contentsline {subsection}{\numberline {1.1}Background of the Study}{1}{subsection.1.1}%
+\contentsline {subsection}{\numberline {1.2}Need for Intelligent Portfolio Assistance}{2}{subsection.1.2}%
+\contentsline {subsection}{\numberline {1.3}Problem Statement}{2}{subsection.1.3}%
+\contentsline {subsection}{\numberline {1.4}Motivation for the Research}{3}{subsection.1.4}%
+\contentsline {paragraph}{Performance and governance are not the same problem.}{3}{section*.10}%
+\contentsline {paragraph}{Architecture matters more than LLM fluency.}{3}{section*.11}%
+\contentsline {paragraph}{Multi-agent governance remains underexplored.}{3}{section*.12}%
+\contentsline {subsection}{\numberline {1.5}Aim and Objectives of the Thesis}{4}{subsection.1.5}%
+\contentsline {subsection}{\numberline {1.6}Research Questions}{4}{subsection.1.6}%
+\contentsline {subsection}{\numberline {1.7}Scope and Limitations of the Study}{5}{subsection.1.7}%
+\contentsline {subsection}{\numberline {1.8}Organization of the Thesis}{5}{subsection.1.8}%
+\contentsline {section}{\numberline {2}Review of Literature}{6}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Portfolio Management in the Digital Era}{6}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Traditional Investment Dashboards and Robo-Advisors}{6}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Conversational Artificial Intelligence in Finance}{7}{subsection.2.3}%
+\contentsline {subsection}{\numberline {2.4}Agentic AI and Multi-Agent Frameworks}{7}{subsection.2.4}%
+\contentsline {subsection}{\numberline {2.5}Large Language Models for Planning and Tool Use}{8}{subsection.2.5}%
+\contentsline {subsection}{\numberline {2.6}Risk Analysis, Optimisation, and Rebalancing Approaches}{8}{subsection.2.6}%
+\contentsline {subsubsection}{\numberline {2.6.1}Shrinkage Estimation}{8}{subsubsection.2.6.1}%
+\contentsline {subsubsection}{\numberline {2.6.2}Regime-Switching Models}{8}{subsubsection.2.6.2}%
+\contentsline {subsubsection}{\numberline {2.6.3}Graph-Based Contagion and Tail-Risk Optimisation}{9}{subsubsection.2.6.3}%
+\contentsline {subsection}{\numberline {2.7}Explainability, Compliance, and Trust in Financial AI}{9}{subsection.2.7}%
+\contentsline {subsection}{\numberline {2.8}Research Gaps and Study Positioning}{9}{subsection.2.8}%
+\contentsline {section}{\numberline {3}Problem Definition and Research Direction}{11}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Challenges in Personal Stock Portfolio Management}{11}{subsection.3.1}%
+\contentsline {paragraph}{Information asymmetry.}{11}{section*.13}%
+\contentsline {paragraph}{Behavioural bias amplification.}{11}{section*.14}%
+\contentsline {paragraph}{Estimation instability.}{11}{section*.15}%
+\contentsline {paragraph}{Regulatory opacity.}{11}{section*.16}%
+\contentsline {subsection}{\numberline {3.2}Gaps in Existing Chatbot-Based Financial Assistance}{11}{subsection.3.2}%
+\contentsline {subsection}{\numberline {3.3}Need for an Agentic Portfolio Intelligence Framework}{12}{subsection.3.3}%
+\contentsline {subsection}{\numberline {3.4}Research Objectives Revisited}{12}{subsection.3.4}%
+\contentsline {subsection}{\numberline {3.5}Research Questions and Working Propositions}{13}{subsection.3.5}%
+\contentsline {subsubsection}{\numberline {3.5.1}Core Research Questions}{13}{subsubsection.3.5.1}%
+\contentsline {subsubsection}{\numberline {3.5.2}Analytical Expectations and Propositions}{13}{subsubsection.3.5.2}%
+\contentsline {subsection}{\numberline {3.6}Contributions of the Thesis}{13}{subsection.3.6}%
+\contentsline {paragraph}{Conceptual contributions.}{13}{section*.17}%
+\contentsline {paragraph}{Methodological contributions.}{14}{section*.18}%
+\contentsline {paragraph}{Empirical contributions.}{14}{section*.19}%
+\contentsline {section}{\numberline {4}Research Methodology}{15}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Research Design and Methodological Approach}{15}{subsection.4.1}%
+\contentsline {subsubsection}{\numberline {4.1.1}Design Science Orientation}{15}{subsubsection.4.1.1}%
+\contentsline {subsubsection}{\numberline {4.1.2}System-Building Research Perspective}{15}{subsubsection.4.1.2}%
+\contentsline {subsection}{\numberline {4.2}System-Centered Design Strategy}{15}{subsection.4.2}%
+\contentsline {subsubsection}{\numberline {4.2.1}User-Centered Portfolio Assistance Goals}{15}{subsubsection.4.2.1}%
+\contentsline {subsubsection}{\numberline {4.2.2}Agent-Oriented Decomposition Strategy}{15}{subsubsection.4.2.2}%
+\contentsline {subsection}{\numberline {4.3}Data Sources and Data Collection Process}{16}{subsection.4.3}%
+\contentsline {subsubsection}{\numberline {4.3.1}Market Data Sources}{16}{subsubsection.4.3.1}%
+\contentsline {subsubsection}{\numberline {4.3.2}Portfolio and Interaction Inputs}{16}{subsubsection.4.3.2}%
+\contentsline {subsubsection}{\numberline {4.3.3}PRISMA-Based Literature Selection}{16}{subsubsection.4.3.3}%
+\contentsline {subsection}{\numberline {4.4}Analytical and Evaluation Methodology}{17}{subsection.4.4}%
+\contentsline {subsubsection}{\numberline {4.4.1}Analytical Measures and Indicators}{17}{subsubsection.4.4.1}%
+\contentsline {subsubsection}{\numberline {4.4.2}Comparative Evaluation Design}{17}{subsubsection.4.4.2}%
+\contentsline {subsection}{\numberline {4.5}Experimental Planning and Validation Strategy}{17}{subsection.4.5}%
+\contentsline {subsubsection}{\numberline {4.5.1}Scenario-Based Validation}{17}{subsubsection.4.5.1}%
+\contentsline {subsubsection}{\numberline {4.5.2}Comparative Evaluation Design}{18}{subsubsection.4.5.2}%
+\contentsline {subsection}{\numberline {4.6}Ethical, Compliance, HITL, and Governance Considerations}{18}{subsection.4.6}%
+\contentsline {subsubsection}{\numberline {4.6.1}Safe Advisory Boundaries}{18}{subsubsection.4.6.1}%
+\contentsline {subsubsection}{\numberline {4.6.2}Transparency and Auditability Requirements}{18}{subsubsection.4.6.2}%
+\contentsline {subsection}{\numberline {4.7}Validation and Robustness Planning}{18}{subsection.4.7}%
+\contentsline {subsubsection}{\numberline {4.7.1}Walk-Forward Validation Plan}{18}{subsubsection.4.7.1}%
+\contentsline {subsubsection}{\numberline {4.7.2}Sensitivity and Ablation Plan}{18}{subsubsection.4.7.2}%
+\contentsline {subsection}{\numberline {4.8}Walk-Forward Governance G-CVaR Evaluation Protocol}{19}{subsection.4.8}%
+\contentsline {section}{\numberline {5}Proposed Agentic AI Framework}{21}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Overview of the Proposed Framework}{21}{subsection.5.1}%
+\contentsline {subsubsection}{\numberline {5.1.1}Core Design Principles}{21}{subsubsection.5.1.1}%
+\contentsline {subsection}{\numberline {5.2}End-to-End Interaction Flow}{21}{subsection.5.2}%
+\contentsline {subsubsection}{\numberline {5.2.1}User Query Intake}{22}{subsubsection.5.2.1}%
+\contentsline {subsubsection}{\numberline {5.2.2}Response Assembly and Structural Isolation}{22}{subsubsection.5.2.2}%
+\contentsline {subsection}{\numberline {5.3}LangGraph Orchestrator and Deterministic Routing}{23}{subsection.5.3}%
+\contentsline {subsubsection}{\numberline {5.3.1}Intent Interpretation and Regime Detection}{23}{subsubsection.5.3.1}%
+\contentsline {subsubsection}{\numberline {5.3.2}Deterministic Tool and Agent Selection}{23}{subsubsection.5.3.2}%
+\contentsline {subsection}{\numberline {5.4}Market Data Retrieval and Processing Flow}{24}{subsection.5.4}%
+\contentsline {subsubsection}{\numberline {5.4.1}Data Access and Validation}{24}{subsubsection.5.4.1}%
+\contentsline {subsubsection}{\numberline {5.4.2}Preprocessing and Normalisation}{24}{subsubsection.5.4.2}%
+\contentsline {subsection}{\numberline {5.5}Portfolio Diagnostics and Interpretation Flow}{24}{subsection.5.5}%
+\contentsline {subsubsection}{\numberline {5.5.1}Allocation Diagnostics}{24}{subsubsection.5.5.1}%
+\contentsline {subsubsection}{\numberline {5.5.2}Diversification and Exposure Insights}{25}{subsubsection.5.5.2}%
+\contentsline {subsection}{\numberline {5.6}Risk Analysis and Recommendation Flow}{25}{subsection.5.6}%
+\contentsline {subsubsection}{\numberline {5.6.1}Risk Scoring Logic}{25}{subsubsection.5.6.1}%
+\contentsline {subsubsection}{\numberline {5.6.2}Recommendation Triggers}{25}{subsubsection.5.6.2}%
+\contentsline {subsection}{\numberline {5.7}Rebalancing Decision Flow}{26}{subsection.5.7}%
+\contentsline {subsubsection}{\numberline {5.7.1}Threshold and Constraint Checks}{26}{subsubsection.5.7.1}%
+\contentsline {subsubsection}{\numberline {5.7.2}Suggested Allocation Revision}{26}{subsubsection.5.7.2}%
+\contentsline {subsection}{\numberline {5.8}Memory, HITL, Compliance, and Governance Flow}{27}{subsection.5.8}%
+\contentsline {subsubsection}{\numberline {5.8.1}Context Retention Strategy}{27}{subsubsection.5.8.1}%
+\contentsline {subsubsection}{\numberline {5.8.2}Human-in-the-Loop Review and Compliance Layer}{27}{subsubsection.5.8.2}%
+\contentsline {subsection}{\numberline {5.9}Functional Architecture of the Proposed System}{29}{subsection.5.9}%
+\contentsline {subsubsection}{\numberline {5.9.1}Module Boundaries and Interfaces}{29}{subsubsection.5.9.1}%
+\contentsline {subsubsection}{\numberline {5.9.2}Fault Isolation and Audit Trail Properties}{29}{subsubsection.5.9.2}%
+\contentsline {subsubsection}{\numberline {5.9.3}Replayability from Stored Checkpoints}{30}{subsubsection.5.9.3}%
+\contentsline {subsection}{\numberline {5.10}Architecture and Interaction Diagrams}{30}{subsection.5.10}%
+\contentsline {section}{\numberline {6}Analytical Flow and Decision Logic}{32}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Mathematical Foundations of Portfolio Guidance}{32}{subsection.6.1}%
+\contentsline {subsubsection}{\numberline {6.1.1}Return, Risk, and Allocation Basics}{32}{subsubsection.6.1.1}%
+\contentsline {subsection}{\numberline {6.2}Portfolio State Representation and Diagnostic Logic}{33}{subsection.6.2}%
+\contentsline {subsubsection}{\numberline {6.2.1}State Variables and Inputs}{33}{subsubsection.6.2.1}%
+\contentsline {subsubsection}{\numberline {6.2.2}Composite Instability Index ($I_t$)}{33}{subsubsection.6.2.2}%
+\contentsline {subsubsection}{\numberline {6.2.3}Governance Stability Metric ($GS_t$)}{34}{subsubsection.6.2.3}%
+\contentsline {subsection}{\numberline {6.3}Risk Evaluation and Stability Analysis}{35}{subsection.6.3}%
+\contentsline {subsubsection}{\numberline {6.3.1}Volatility and Risk Indicators}{35}{subsubsection.6.3.1}%
+\contentsline {subsubsection}{\numberline {6.3.2}Deterministic Regime Operator ($R(I_t)$)}{36}{subsubsection.6.3.2}%
+\contentsline {subsection}{\numberline {6.4}Rebalancing Objective and Decision Constraints}{37}{subsection.6.4}%
+\contentsline {subsubsection}{\numberline {6.4.1}Graph-Regularised CVaR (G-CVaR) Formulation}{37}{subsubsection.6.4.1}%
+\contentsline {paragraph}{Supplemental linear-centrality extension.}{37}{section*.20}%
+\contentsline {subsubsection}{\numberline {6.4.2}Practical Constraint Handling}{39}{subsubsection.6.4.2}%
+\contentsline {subsubsection}{\numberline {6.4.3}Threshold Calibration and Sensitivity Logic}{39}{subsubsection.6.4.3}%
+\contentsline {subsection}{\numberline {6.5}Consistency of Planner-Guided Decision Flow}{40}{subsection.6.5}%
+\contentsline {subsubsection}{\numberline {6.5.1}Routing Consistency}{40}{subsubsection.6.5.1}%
+\contentsline {subsubsection}{\numberline {6.5.2}Output Consistency Across Agents}{40}{subsubsection.6.5.2}%
+\contentsline {subsection}{\numberline {6.6}Constraint Satisfaction and Safe Recommendation Design}{41}{subsection.6.6}%
+\contentsline {subsubsection}{\numberline {6.6.1}Safety Rules}{41}{subsubsection.6.6.1}%
+\contentsline {subsubsection}{\numberline {6.6.2}Compliance-Constrained Output}{41}{subsubsection.6.6.2}%
+\contentsline {subsection}{\numberline {6.7}Explanation Logic and Auditability of Decisions}{41}{subsection.6.7}%
+\contentsline {subsubsection}{\numberline {6.7.1}Traceable Explanation Structure}{43}{subsubsection.6.7.1}%
+\contentsline {subsubsection}{\numberline {6.7.2}Logged Decision Rationale}{43}{subsubsection.6.7.2}%
+\contentsline {subsection}{\numberline {6.8}Continuity of Analytical Flow Across Agents}{44}{subsection.6.8}%
+\contentsline {subsubsection}{\numberline {6.8.1}Input-Output Continuity}{44}{subsubsection.6.8.1}%
+\contentsline {subsubsection}{\numberline {6.8.2}Cross-Agent Dependency Flow}{44}{subsubsection.6.8.2}%
+\contentsline {subsection}{\numberline {6.9}Decision Trace and Algorithmic Representation}{44}{subsection.6.9}%
+\contentsline {subsubsection}{\numberline {6.9.1}Query Handling Sequence}{45}{subsubsection.6.9.1}%
+\contentsline {subsubsection}{\numberline {6.9.2}Recommendation Generation Sequence}{45}{subsubsection.6.9.2}%
+\contentsline {section}{\numberline {7}System Design and Implementation}{46}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Code-Audited Implementation Baseline}{46}{subsection.7.1}%
+\contentsline {subsubsection}{\numberline {7.1.1}Frontend Implementation and Interactive Visualisation}{46}{subsubsection.7.1.1}%
+\contentsline {subsubsection}{\numberline {7.1.2}Backend Architecture and Multi-Agent Orchestration}{48}{subsubsection.7.1.2}%
+\contentsline {subsection}{\numberline {7.2}Overall System Architecture}{49}{subsection.7.2}%
+\contentsline {subsubsection}{\numberline {7.2.1}Pipeline View of the Architecture}{50}{subsubsection.7.2.1}%
+\contentsline {subsubsection}{\numberline {7.2.2}Architectural Layers}{51}{subsubsection.7.2.2}%
+\contentsline {subsection}{\numberline {7.3}Planner and Modular Agent Design}{51}{subsection.7.3}%
+\contentsline {subsubsection}{\numberline {7.3.1}Planner Module}{52}{subsubsection.7.3.1}%
+\contentsline {subsubsection}{\numberline {7.3.2}Agent Responsibilities}{52}{subsubsection.7.3.2}%
+\contentsline {subsection}{\numberline {7.4}Data Retrieval and External Integration}{53}{subsection.7.4}%
+\contentsline {subsubsection}{\numberline {7.4.1}API and Tool Connectivity}{53}{subsubsection.7.4.1}%
+\contentsline {subsubsection}{\numberline {7.4.2}Data Reliability Handling}{54}{subsubsection.7.4.2}%
+\contentsline {subsection}{\numberline {7.5}Portfolio Analytics Engine}{54}{subsection.7.5}%
+\contentsline {subsubsection}{\numberline {7.5.1}Diagnostics Pipeline}{55}{subsubsection.7.5.1}%
+\contentsline {subsubsection}{\numberline {7.5.2}Recommendation Engine}{55}{subsubsection.7.5.2}%
+\contentsline {subsection}{\numberline {7.6}Memory, Context, and Session Handling}{55}{subsection.7.6}%
+\contentsline {subsubsection}{\numberline {7.6.1}Session Memory Design}{55}{subsubsection.7.6.1}%
+\contentsline {subsubsection}{\numberline {7.6.2}Context Update Policy}{55}{subsubsection.7.6.2}%
+\contentsline {subsection}{\numberline {7.7}HITL Logging, Compliance, and Audit Trail Support}{56}{subsection.7.7}%
+\contentsline {subsubsection}{\numberline {7.7.1}HITL Logging Schema}{56}{subsubsection.7.7.1}%
+\contentsline {subsubsection}{\numberline {7.7.2}Audit Trace Preservation}{56}{subsubsection.7.7.2}%
+\contentsline {subsection}{\numberline {7.8}Prototype Implementation and Execution Flow}{56}{subsection.7.8}%
+\contentsline {subsubsection}{\numberline {7.8.1}Execution Sequence}{58}{subsubsection.7.8.1}%
+\contentsline {subsubsection}{\numberline {7.8.2}Exception and Fallback Handling}{58}{subsubsection.7.8.2}%
+\contentsline {subsection}{\numberline {7.9}Performance and Reproducibility Considerations}{58}{subsection.7.9}%
+\contentsline {subsubsection}{\numberline {7.9.1}Runtime Behaviour}{58}{subsubsection.7.9.1}%
+\contentsline {subsubsection}{\numberline {7.9.2}Reproducibility Controls}{59}{subsubsection.7.9.2}%
+\contentsline {subsubsection}{\numberline {7.9.3}Storage, Versioning, and Checkpoint Recovery}{59}{subsubsection.7.9.3}%
+\contentsline {subsection}{\numberline {7.10}Figure, Table, and Presentation Design Guidelines}{59}{subsection.7.10}%
+\contentsline {subsubsection}{\numberline {7.10.1}Diagram Styling Rules}{59}{subsubsection.7.10.1}%
+\contentsline {subsubsection}{\numberline {7.10.2}Table and Caption Standards}{60}{subsubsection.7.10.2}%
+\contentsline {section}{\numberline {8}Experimental Setup and Evaluation Strategy}{61}{section.8}%
+\contentsline {subsection}{\numberline {8.1}Experimental Objectives}{61}{subsection.8.1}%
+\contentsline {subsection}{\numberline {8.2}Prototype Description}{61}{subsection.8.2}%
+\contentsline {subsection}{\numberline {8.3}Baseline System for Comparative Study}{62}{subsection.8.3}%
+\contentsline {subsection}{\numberline {8.4}Data Sources and Evaluation Scenarios}{62}{subsection.8.4}%
+\contentsline {subsection}{\numberline {8.5}Simulated User Interaction Design}{62}{subsection.8.5}%
+\contentsline {subsection}{\numberline {8.6}Evaluation Metrics}{62}{subsection.8.6}%
+\contentsline {subsubsection}{\numberline {8.6.1}Quantitative Performance Metrics}{62}{subsubsection.8.6.1}%
+\contentsline {subsubsection}{\numberline {8.6.2}Qualitative and Trust Metrics}{63}{subsubsection.8.6.2}%
+\contentsline {subsection}{\numberline {8.7}Criteria for Responsiveness, Coherence, and Realism}{63}{subsection.8.7}%
+\contentsline {subsection}{\numberline {8.8}Reliability, Transparency, HITL, and Compliance Criteria}{63}{subsection.8.8}%
+\contentsline {subsection}{\numberline {8.9}Statistical Testing, Walk-Forward, and Robustness Protocols}{63}{subsection.8.9}%
+\contentsline {section}{\numberline {9}Results and Discussion}{65}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Executive empirical result summary}{65}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Interpretation of the Authoritative Primary Protocol}{67}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Universe-Specific Performance and Behavioural Analysis}{68}{subsection.9.3}%
+\contentsline {paragraph}{Universe 1: Technology and Semiconductors.}{68}{section*.21}%
+\contentsline {paragraph}{Universe 2: Financials.}{69}{figure.bodyfig.20}%
+\contentsline {paragraph}{Universe 3: Healthcare and Biotechnology.}{69}{figure.bodyfig.21}%
+\contentsline {paragraph}{Universe 4: Consumer Discretionary and Travel.}{69}{section*.24}%
+\contentsline {paragraph}{Universe 5: Industrials and Defence.}{71}{section*.25}%
+\contentsline {paragraph}{Universe 6: Energy and Pipelines.}{71}{section*.26}%
+\contentsline {paragraph}{Universe 7: Consumer Staples.}{72}{section*.27}%
+\contentsline {paragraph}{Universe 8: Utilities and Infrastructure.}{72}{section*.28}%
+\contentsline {paragraph}{Universe 9: Real Estate and REITs.}{72}{section*.29}%
+\contentsline {paragraph}{Universe 10: Materials and Chemicals.}{72}{section*.30}%
+\contentsline {paragraph}{Universe 11: Communication Services and Media.}{73}{section*.31}%
+\contentsline {subsection}{\numberline {9.4}Adaptive Gate Behaviour and Crisis Evidence}{73}{subsection.9.4}%
+\contentsline {subsection}{\numberline {9.5}Graph-Penalty Frontier and Structural Trade-off}{75}{subsection.9.5}%
+\contentsline {subsection}{\numberline {9.6}Comprehensive Comparative Evaluation and Ablation Studies}{75}{subsection.9.6}%
+\contentsline {subsection}{\numberline {9.7}Simulated Human-in-the-Loop Evidence}{78}{subsection.9.7}%
+\contentsline {subsection}{\numberline {9.8}Supplemental Linear-Centrality V2}{80}{subsection.9.8}%
+\contentsline {subsection}{\numberline {9.9}NaN-Safe Governance Ranking}{80}{subsection.9.9}%
+\contentsline {subsection}{\numberline {9.10}Chatbot Comparative Scenario Evaluation}{80}{subsection.9.10}%
+\contentsline {paragraph}{Baseline Chatbot Specifications.}{81}{section*.32}%
+\contentsline {subsection}{\numberline {9.11}Overall Result}{82}{subsection.9.11}%
+\contentsline {section}{\numberline {10}Conclusion and Future Scope}{82}{section.10}%
+\contentsline {subsection}{\numberline {10.1}Summary of Research Question Answers}{82}{subsection.10.1}%
+\contentsline {subsection}{\numberline {10.2}Research Conclusion}{82}{subsection.10.2}%
+\contentsline {subsection}{\numberline {10.3}Verified Contributions}{83}{subsection.10.3}%
+\contentsline {subsection}{\numberline {10.4}Limitations}{84}{subsection.10.4}%
+\contentsline {subsection}{\numberline {10.5}Future Work}{84}{subsection.10.5}%
+\contentsline {subsection}{\numberline {10.6}Final Statement}{84}{subsection.10.6}%
+\contentsline {section}{\numberline {A}Managed Result Figure Manifest}{84}{appendix.A}%
+\contentsline {section}{References}{87}{section*.34}%

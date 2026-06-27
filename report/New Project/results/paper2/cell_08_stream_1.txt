@@ -1,0 +1,52 @@
+Step 1: Connecting to MongoDB Atlas...
+  ✅ Connected to Atlas cluster.
+  ✅ Using database: Stock_data
+
+Step 2: Initializing collections...
+  ✓  Exists:  ticker
+  ✓  Exists:  prices
+  ✓  Exists:  returns
+  ✓  Exists:  institutional_holdings
+  ✓  Exists:  graph_snapshots
+  ✓  Exists:  regime_transitions
+  ✓  Exists:  backtest_results
+  ✓  Exists:  hitl_decisions
+  ✓  Exists:  fallback_logs
+  ✓  Exists:  data_quality
+  ✓  Exists:  blackboard_mpi
+  ✓  Exists:  xai_audits
+  ✓  Exists:  chatbot_logs
+
+Step 3: Creating indexes...
+  ✓  Exists:  Index 'I_t_descending' (or equivalent) on 'regime_transitions' already exists. Skipping creation.
+  ✓  Exists:  Index 'graph_ttl_7day' (or equivalent) on 'graph_snapshots' already exists. Skipping creation.
+  ✅ Created/Ensured: Index 'hitl_window_universe' on 'hitl_decisions'
+  ✅ Created/Ensured: Index 'blackboard_universe_window' on 'blackboard_mpi'
+  ✅ Created/Ensured: Index 'backtest_universe_window' on 'backtest_results'
+
+Step 4: Verification...
+  Active collections in 'Stock_data':
+    - backtest_results               (552 documents)
+    - blackboard_mpi                 (552 documents)
+    - chatbot_logs                   (41 documents)
+    - data_quality                   (101 documents)
+    - fallback_logs                  (0 documents)
+    - graph_snapshots                (51 documents)
+    - hitl_decisions                 (11 documents)
+    - institutional_holdings         (11 documents)
+    - pdf_chunks                     (8254 documents)
+    - plan_cache                     (11 documents)
+    - prices                         (0 documents)
+    - regime_patterns                (4 documents)
+    - regime_transitions             (552 documents)
+    - returns                        (11 documents)
+    - ticker                         (218 documents)
+    - xai_audits                     (584 documents)
+
+═══════════════════════════════════════════════════════
+  DATABASE:    Stock_data
+  COLLECTIONS: 16
+  INDEXES:     5 created
+  RULE:        Every agent uses db = client[CONFIG.DB_NAME]
+═══════════════════════════════════════════════════════
+✅ MongoDB ready. Phase 1 complete.

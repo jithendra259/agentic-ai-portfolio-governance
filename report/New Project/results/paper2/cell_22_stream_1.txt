@@ -1,0 +1,198 @@
+═════════════════════════════════════════════════════════════════
+  MULTI-UNIVERSE PIPELINE: Agents 1 → 2 → 3 → 4
+═════════════════════════════════════════════════════════════════
+
+  Universes found in blackboard : ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U1
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (83 docs)
+
+  U1 done in 0.2s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U10
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: Running (49 existing docs)...
+    ✅ 49 windows | Crisis=2 | I_t std=0.2049
+
+  Agent 2: ✅ Already done (49 windows with centrality)
+
+  Agent 3: Running (49 existing results)...
+    ✅ 49 windows | HITL events=22 (10.3s)
+
+  Agent 4: Running attribution pass (49 existing)...
+    ✅ 49 xai_audit docs written (5.6s)
+
+  U10 done in 23.0s | Agents: {'agent1': 49, 'agent2': 'skipped_done', 'agent3': 49, 'agent4': 49}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U11
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (51 docs)
+
+  U11 done in 0.2s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U2
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (51 docs)
+
+  U2 done in 0.2s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U3
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: Running (50 existing docs)...
+    ✅ 50 windows | Crisis=2 | I_t std=0.2178
+
+  Agent 2: ✅ Already done (50 windows with centrality)
+
+  Agent 3: Running (50 existing results)...
+    ✅ 50 windows | HITL events=2 (8.9s)
+
+  Agent 4: Running attribution pass (50 existing)...
+    ✅ 50 xai_audit docs written (4.9s)
+
+  U3 done in 17.3s | Agents: {'agent1': 50, 'agent2': 'skipped_done', 'agent3': 50, 'agent4': 50}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U4
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: Running (49 existing docs)...
+    ✅ 49 windows | Crisis=2 | I_t std=0.2111
+
+  Agent 2: ✅ Already done (49 windows with centrality)
+
+  Agent 3: Running (49 existing results)...
+    ✅ 49 windows | HITL events=8 (9.1s)
+
+  Agent 4: Running attribution pass (49 existing)...
+    ✅ 49 xai_audit docs written (4.8s)
+
+  U4 done in 18.1s | Agents: {'agent1': 49, 'agent2': 'skipped_done', 'agent3': 49, 'agent4': 49}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U5
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (51 docs)
+
+  U5 done in 0.1s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U6
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (51 docs)
+
+  U6 done in 0.1s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U7
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: Running (49 existing docs)...
+    ✅ 49 windows | Crisis=2 | I_t std=0.2030
+
+  Agent 2: ✅ Already done (49 windows with centrality)
+
+  Agent 3: Running (49 existing results)...
+    ✅ 49 windows | HITL events=27 (11.5s)
+
+  Agent 4: Running attribution pass (49 existing)...
+    ✅ 49 xai_audit docs written (6.0s)
+
+  U7 done in 20.9s | Agents: {'agent1': 49, 'agent2': 'skipped_done', 'agent3': 49, 'agent4': 49}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U8
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: Running (49 existing docs)...
+    ✅ 49 windows | Crisis=2 | I_t std=0.2198
+
+  Agent 2: ✅ Already done (49 windows with centrality)
+
+  Agent 3: Running (49 existing results)...
+    ✅ 49 windows | HITL events=21 (10.7s)
+
+  Agent 4: Running attribution pass (49 existing)...
+    ✅ 49 xai_audit docs written (4.5s)
+
+  U8 done in 19.5s | Agents: {'agent1': 49, 'agent2': 'skipped_done', 'agent3': 49, 'agent4': 49}
+
+█████████████████████████████████████████████████████████████████
+  UNIVERSE: U9
+█████████████████████████████████████████████████████████████████
+
+  Agent 1: ✅ Already done (51 windows)
+
+  Agent 2: ✅ Already done (51 windows with centrality)
+
+  Agent 3: ✅ Already done (51 windows)
+
+  Agent 4: ✅ Already done (51 docs)
+
+  U9 done in 0.1s | Agents: {'agent1': 'skipped_done', 'agent2': 'skipped_done', 'agent3': 'skipped_done', 'agent4': 'skipped_done'}
+
+═════════════════════════════════════════════════════════════════
+  PIPELINE COMPLETE — 11 universes
+  Total time: 100s (1.7 min)
+═════════════════════════════════════════════════════════════════
+
+  Universe     A1     A2     A3     A4     Time
+  ─────────────────────────────────────────────
+  U1       skippe skippe skippe skippe      0.2s
+  U10          49 skippe     49     49     23.0s
+  U11      skippe skippe skippe skippe      0.2s
+  U2       skippe skippe skippe skippe      0.2s
+  U3           50 skippe     50     50     17.3s
+  U4           49 skippe     49     49     18.1s
+  U5       skippe skippe skippe skippe      0.1s
+  U6       skippe skippe skippe skippe      0.1s
+  U7           49 skippe     49     49     20.9s
+  U8           49 skippe     49     49     19.5s
+  U9       skippe skippe skippe skippe      0.1s
+
+  CURRENT_UNIVERSE = 'U1'
+  All completed universes: ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+  ✅ Ready to run Phase 8 → 16 for cross-universe aggregation

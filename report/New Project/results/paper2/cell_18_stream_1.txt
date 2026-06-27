@@ -1,0 +1,3 @@
+⚠️ No windows with numeric I_t found on blackboard. Checking regime_transitions...
+Visualizing: W09 | I_t = 0.0000
+Date range : 2008-03-11 → 2009-03-10

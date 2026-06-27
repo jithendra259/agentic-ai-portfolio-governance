@@ -1,0 +1,6 @@
+Installing / upgrading required packages...
+
+Note: you may need to restart the kernel to use updated packages.
+
+✅ All packages installed successfully!
+🔄 Please go to 'Runtime' → 'Restart Session' now for best results.

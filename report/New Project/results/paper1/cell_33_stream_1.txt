@@ -1,0 +1,8 @@
+SHRINKAGE MV PORTFOLIO PERFORMANCE
+annualized_return: 0.0636
+annualized_volatility: 0.1793
+sharpe_ratio: 0.3546
+max_drawdown: -0.3404
+calmar_ratio: 0.1868
+hhi: 0.1511
+effective_n: 6.6200

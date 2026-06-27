@@ -1,0 +1,3 @@
+James–Stein shrinkage coefficient: 0.0
+Ledoit–Wolf covariance shrinkage alpha: 0.010136
+Number of observations used: 1257

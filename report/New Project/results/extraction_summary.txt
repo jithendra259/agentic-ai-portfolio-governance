@@ -1,0 +1,2 @@
+paper1: 7 figures, 6 html tables, 29 text outputs
+paper2: 23 figures, 1 html tables, 59 text outputs

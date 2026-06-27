@@ -1,0 +1,91 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 16 — MULTI-UNIVERSE EXECUTION LOOP
+═════════════════════════════════════════════════════════════════
+
+=================================================================
+  STEP 78: Discover Universes in MongoDB
+=================================================================
+  Universes with backtest_results: ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+  Universes in blackboard_mpi    : ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+  Universe → Sector mapping:
+    U1     | Technology                     | ✅ Done | 51 windows
+    U10    | Real Estate                    | ✅ Done | 49 windows
+    U11    | Communication Services         | ✅ Done | 51 windows
+    U2     | Financial Services             | ✅ Done | 51 windows
+    U3     | Healthcare                     | ✅ Done | 50 windows
+    U4     | Energy                         | ✅ Done | 49 windows
+    U5     | Consumer Defensive             | ✅ Done | 51 windows
+    U6     | Consumer Cyclical              | ✅ Done | 51 windows
+    U7     | Industrials                    | ✅ Done | 49 windows
+    U8     | Basic Materials                | ✅ Done | 49 windows
+    U9     | Utilities                      | ✅ Done | 51 windows
+
+  Total completed universes : 11
+  Total pending universes   : 0
+
+  All universes already completed — proceeding to aggregation.
+
+  Final completed universes: ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+=================================================================
+  STEP 79: Two-Level Cross-Sector Optimization
+=================================================================
+  Collecting sector metrics for 11 universes...
+  Running Level-2 MV optimization across sectors...
+  Windows with full sector coverage: 49
+  ✅ Level-2 weights computed for 49 windows
+
+=================================================================
+  STEP 80: Cross-Universe Performance Aggregation
+=================================================================
+
+  TABLE 9 (Extended): Cross-Universe Performance
+  ────────────────────────────────────────────────────────────────────────────────
+
+  Strategy: G_CVAR
+Universe             Sector  Ann.Ret(%)  Vol(%)  Sharpe  MDD(%)  CVaR95(%)
+      U1         Technology      13.783  19.108  0.5644  73.817      2.849
+     U10        Real Estate      13.951  17.397  0.6295  70.802      2.551
+     U11 Communication Serv      12.007  16.534  0.5447  78.013      2.440
+      U2 Financial Services      10.368  21.449  0.3435  87.774      3.304
+      U3         Healthcare       9.900  15.225  0.4532  56.547      2.167
+      U4             Energy      15.426  15.974  0.7779  59.878      2.357
+      U5 Consumer Defensive      13.302  11.616  0.8869  51.523      1.626
+      U6  Consumer Cyclical      12.886  16.273  0.6075  64.755      2.449
+      U7        Industrials      14.843  11.701  1.0122  44.515      1.628
+      U8    Basic Materials      10.789  14.419  0.5402  70.006      2.053
+      U9          Utilities      13.837  14.603  0.7421  65.247      2.110
+
+  Strategy: STD_CVAR
+Universe             Sector  Ann.Ret(%)  Vol(%)  Sharpe  MDD(%)  CVaR95(%)
+      U1         Technology      13.764  19.102  0.5635  73.701      2.848
+     U10        Real Estate      13.854  17.355  0.6254  67.086      2.535
+     U11 Communication Serv      12.103  16.465  0.5529  74.881      2.431
+      U2 Financial Services      10.689  21.325  0.3606  85.862      3.278
+      U3         Healthcare      10.120  15.180  0.4690  51.121      2.157
+      U4             Energy      15.295  15.554  0.7905  54.398      2.272
+      U5 Consumer Defensive      13.350  11.549  0.8962  49.283      1.607
+      U6  Consumer Cyclical      12.922  15.966  0.6214  61.478      2.382
+      U7        Industrials      14.886  11.645  1.0207  43.055      1.614
+      U8    Basic Materials      10.783  14.414  0.5400  69.818      2.053
+      U9          Utilities      13.871  14.591  0.7450  64.548      2.107
+
+  Strategy: EQUAL_WEIGHT
+Universe             Sector  Ann.Ret(%)  Vol(%)  Sharpe  MDD(%)  CVaR95(%)
+      U1         Technology      16.041  24.404  0.5344  84.279      3.657
+     U10        Real Estate      10.716  21.910  0.3522  78.664      3.401
+     U11 Communication Serv      13.089  18.773  0.5374  75.524      2.793
+      U2 Financial Services       9.278  25.936  0.2421  93.870      4.058
+      U3         Healthcare       9.983  19.569  0.3568  80.258      2.906
+      U4             Energy       9.237  22.605  0.2759  85.993      3.514
+      U5 Consumer Defensive      10.457  15.064  0.4950  75.674      2.336
+      U6  Consumer Cyclical       8.542  22.875  0.2423  89.502      3.536
+      U7        Industrials      11.166  15.805  0.5167  73.931      2.452
+      U8    Basic Materials       8.642  19.635  0.2873  79.354      3.035
+      U9          Utilities      10.476  17.678  0.4229  79.670      2.765
+
+  Summary (mean ± std across 11 universes):
+  g_cvar           Ann.Ret(%)=12.827±1.835  Vol(%)=15.845±2.901  Sharpe=0.646±0.194  MDD(%)=65.716±12.320  CVaR95(%)=2.321±0.493
+  std_cvar         Ann.Ret(%)=12.876±1.738  Vol(%)=15.741±2.889  Sharpe=0.653±0.193  MDD(%)=63.203±12.833  CVaR95(%)=2.299±0.491
+  equal_weight     Ann.Ret(%)=10.693±2.194  Vol(%)=20.387±3.477  Sharpe=0.388±0.119  MDD(%)=81.520±6.241  CVaR95(%)=3.132±0.540

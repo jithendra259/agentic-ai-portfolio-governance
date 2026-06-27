@@ -1,0 +1,67 @@
+Windows retrieved: 51
+
+  I_t Statistics:
+    min  : 0.0000
+    max  : 1.0000
+    mean : 0.3594
+    std  : 0.2357
+  ✅ I_t varies meaningfully.
+
+  Window      I_t  Regime      Crisis Tags
+  ───────────────────────────────────────────────────────
+  W01      0.1264  Calm        —
+  W02      0.0773  Calm        —
+  W03      0.2577  Calm        —
+  W04      0.2529  Calm        —
+  W05      0.1009  Calm        —
+  W06      0.1970  Calm        —
+  W07      0.4147  Calm        —
+  W08      0.6946  Elevated    2008 GFC
+  W09      1.0000  Crisis      2008 GFC ◀
+  W10      0.9935  Crisis      2008 GFC ◀
+  W11      0.5495  Elevated    2008 GFC
+  W12      0.3331  Calm        —
+  W13      0.4025  Calm        —
+  W14      0.3536  Calm        —
+  W15      0.2259  Calm        —
+  W16      0.5734  Elevated    —
+  W17      0.5517  Elevated    —
+  W18      0.4004  Calm        —
+  W19      0.2989  Calm        —
+  W20      0.1433  Calm        —
+  W21      0.0352  Calm        —
+  W22      0.0333  Calm        —
+  W23      0.0000  Calm        —
+  W24      0.1229  Calm        —
+  W25      0.1485  Calm        —
+  W26      0.2984  Calm        —
+  W27      0.3485  Calm        —
+  W28      0.3019  Calm        —
+  W29      0.1408  Calm        —
+  W30      0.0684  Calm        —
+  W31      0.0327  Calm        —
+  W32      0.2921  Calm        —
+  W33      0.2634  Calm        —
+  W34      0.5111  Elevated    —
+  W35      0.4795  Calm        —
+  W36      0.4104  Calm        —
+  W37      0.6532  Elevated    2020 COVID
+  W38      0.6601  Elevated    2020 COVID
+  W39      0.6661  Elevated    2020 COVID
+  W40      0.3057  Calm        —
+  W41      0.1922  Calm        —
+  W42      0.4488  Calm        2022 Rate Hike
+  W43      0.7041  Elevated    2022 Rate Hike
+  W44      0.7998  Elevated    2022 Rate Hike
+  W45      0.5673  Elevated    —
+  W46      0.3007  Calm        —
+  W47      0.2104  Calm        —
+  W48      0.2731  Calm        —
+  W49      0.2543  Calm        —
+  W50      0.4712  Calm        —
+  W51      0.3864  Calm        —
+
+  TABLE 4: Regime Distribution
+  ──────────────────────────────────────────────────────────────────────
+Universe  Calm Windows  Elevated Win.  Crisis Windows  Mean I_t  Std I_t  Min I_t  Max I_t
+      U1            38             11               2    0.3594   0.2357      0.0      1.0

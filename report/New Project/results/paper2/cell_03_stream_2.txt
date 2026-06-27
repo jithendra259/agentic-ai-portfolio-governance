@@ -1,0 +1,12 @@
+  ✅ Ollama server running
+
+Step 3: Pulling gpt-oss:120b-cloud model (large model — may take 10-20+ minutes)...
+  This may take a long time on first run. Watch the progress below:
+  ✅ gpt-oss:120b-cloud pulled successfully
+
+Step 4: Test inference...
+  Response: 
+  ⚠️  Response unexpected but server is running
+
+  IMPORTANT: Ollama resets every Colab session restart.
+  Re-run this cell after every Runtime → Restart Session.

@@ -1,0 +1,63 @@
+════════════════════════════════════════════════════════════
+  PHASE 9 — WALK-FORWARD VALIDATION
+════════════════════════════════════════════════════════════
+
+============================================================
+  STEP 53: In-Sample / Out-of-Sample Split
+============================================================
+  Pre-extracting numpy arrays for 51 windows...
+  ✅ Pre-extracted 51 windows (0 skipped)
+  In-sample  : 26 windows (end_date < 2016-01-01)
+  OOS        : 25 windows (start_date ≥ 2016-01-01)
+
+============================================================
+  STEP 54: Parameter Calibration (Fast Grid Search)
+============================================================
+  Grid: k ∈ [5, 10, 15, 20] × I_thresh ∈ [0.75, 0.8, 0.85, 0.9]
+  Total solves: 4×4×26 = 416
+  Solver: SCS (fast grid search) — arrays pre-built
+  ─────────────────────────────────────────────────
+  k= 5  thresh=0.75  Sharpe=0.6418  (n=26)
+  k= 5  thresh=0.80  Sharpe=0.6438  (n=26)
+  k= 5  thresh=0.85  Sharpe=0.6444  (n=26)
+  k= 5  thresh=0.90  Sharpe=0.6430  (n=26)
+  k=10  thresh=0.75  Sharpe=0.6420  (n=26)
+  k=10  thresh=0.80  Sharpe=0.6501  (n=26)
+  k=10  thresh=0.85  Sharpe=0.6398  (n=26) ← DEFAULT
+  k=10  thresh=0.90  Sharpe=0.6462  (n=26)
+  k=15  thresh=0.75  Sharpe=0.6398  (n=26)
+  k=15  thresh=0.80  Sharpe=0.6433  (n=26)
+  k=15  thresh=0.85  Sharpe=0.6464  (n=26)
+  k=15  thresh=0.90  Sharpe=0.6418  (n=26)
+  k=20  thresh=0.75  Sharpe=0.6448  (n=26)
+  k=20  thresh=0.80  Sharpe=0.6428  (n=26)
+  k=20  thresh=0.85  Sharpe=0.6423  (n=26)
+  k=20  thresh=0.90  Sharpe=0.6422  (n=26)
+
+  ✅ Optimal: k*=10, I_thresh*=0.8, IS Sharpe=0.6501
+  Parameters FROZEN — never adjusted again.
+
+  Top 5 from grid search:
+ k  I_thresh  Mean Sharpe  N Windows
+10      0.80       0.6501         26
+15      0.85       0.6464         26
+10      0.90       0.6462         26
+20      0.75       0.6448         26
+ 5      0.85       0.6444         26
+
+============================================================
+  STEP 55: Out-of-Sample (Frozen params: k=10, thresh=0.8)
+============================================================
+  IS  mean Sharpe  : 0.6410  (26 windows)
+  OOS mean Sharpe  : 0.8779  (25 windows)
+  Degradation      : -36.96%
+  ✅ Degradation ≤ 20% — parameters generalize well.
+
+============================================================
+  STEP 56: Table 11 + Plot 12
+============================================================
+
+  TABLE 11: Walk-Forward Calibrated Parameters
+  ───────────────────────────────────────────────────────────────────────────
+Universe  Optimal k  Optimal I_thresh  IS Mean Sharpe  OOS Mean Sharpe  Degradation %  IS Windows  OOS Windows Status
+      U1         10               0.8           0.641           0.8779         -36.96          26           25   ✅ OK

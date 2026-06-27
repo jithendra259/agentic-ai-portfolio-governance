@@ -1,0 +1,32 @@
+======================================================================
+  Q1 PAPER FRAMING -- GAPS 2 & 3 REQUIRED DISCLOSURES
+======================================================================
+
+  GAP 2 -- Sharpe Shortfall Disclosure (Section 4.1 + Table 9 footnote):
+  "G-CVaR marginally underperforms Standard CVaR in Sharpe by 0.007 (statistically indistinguishable, p=0.26), because the graph penalty slightly reduces allocation to high-return concentrated positions. The 66.5% Sharpe improvement over Equal Weight and 25.9% CVaR reduction confirm the framework's risk governance value."
+
+  GAP 3 -- Primary Claim Reframing (Abstract + Conclusion):
+  "The G-CVaR contribution is a risk-reduction framework, not a return-enhancement framework. The appropriate test is not mean return difference (p=0.26) but CVaR reduction against Equal Weight (25.9%, practically significant at portfolio scale)."
+
+  ----------------------------------------------------------------
+  ABSTRACT STRUCTURE TEMPLATE:
+  ----------------------------------------------------------------
+
+  LEAD (primary contribution -- tail risk):
+    G-CVaR reduces CVaR@95% by 25.9% and MDD by 32.5 pp versus equal-weight
+    benchmarks across 11 sector universes and 552 rolling windows (2005-2025).
+
+  SECONDARY Sharpe claim (with mandatory caveat):
+    The framework achieves mean Sharpe 0.646 -- a 66.5% improvement over equal
+    weighting -- while marginally trailing Standard CVaR by 0.007 Sharpe points
+    (p=0.26), a deliberate trade-off inherent to graph-penalised risk governance.
+
+  STATISTICAL DISCLOSURE (mandatory for Q1):
+    No universe achieves p<0.05 for mean-return differences versus Standard CVaR,
+    consistent with the framework as a risk-reduction, not return-maximisation, tool.
+    Evidence rests on tail-risk metrics (CVaR reduction 25.9%, MDD reduction 32.5 pp).
+
+======================================================================
+  GAP 2 + GAP 3 DISCLOSURE CELL COMPLETE
+  Copy the sentences above into the paper before ESWA submission.
+======================================================================

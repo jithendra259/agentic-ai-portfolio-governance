@@ -1,0 +1,5 @@
+Training period: 2015-01-05 to 2019-12-31
+Test period: 2020-01-02 to 2024-12-30
+Number of training days: 1257
+Number of test days: 1257
+Number of assets: 19

@@ -1,0 +1,2 @@
+dict_keys(['annualized_return', 'annualized_volatility', 'sharpe_ratio', 'max_drawdown', 'calmar_ratio', 'hhi', 'effective_n', 'governance_stability', 'cumulative_returns'])
+dict_keys(['annualized_return', 'annualized_volatility', 'sharpe_ratio', 'max_drawdown', 'calmar_ratio', 'hhi', 'effective_n', 'governance_stability', 'cumulative_returns'])

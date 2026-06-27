@@ -1,0 +1,6 @@
+  ✅ Plot 4 saved.
+
+════════════════════════════════════════════════════════════
+  ✅ AGENT 2 COMPLETE — U1
+  Blackboard updated with centrality_vector for all windows.
+════════════════════════════════════════════════════════════

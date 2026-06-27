@@ -1,0 +1,27 @@
+═══════════════════════════════════════════════════════
+  FROZEN GLOBAL CONFIGURATION
+═══════════════════════════════════════════════════════
+  START_DATE             = 2005-01-01
+  END_DATE               = 2025-12-31
+  WINDOW_SIZE            = 252
+  STEP_SIZE              = 100
+  N_WINDOWS              = 51
+  CVAR_ALPHA             = 0.95
+  MAX_WEIGHT             = 0.15
+  CONSTRAIN_WEIGHT       = 0.08
+  RISK_FREE              = 0.03
+  LAMBDA_MAX             = 1.0
+  K_STEEPNESS            = 10
+  I_THRESH               = 0.85
+  TAU_CALM               = 0.5
+  TAU_CRISIS             = 0.85
+  TAU_TURNOVER           = 0.4
+  N_MONTE_CARLO          = 10000
+  STRESS_FACTOR          = 2.5
+  N_FAT_TAIL             = 500
+  LLM_MODEL              = mistral
+  LLM_TEMPERATURE        = 0.3
+  LLM_MAX_TOKENS         = 400
+  DB_NAME                = Stock_data
+═══════════════════════════════════════════════════════
+✅ Config locked. Use CONFIG.<param> everywhere.

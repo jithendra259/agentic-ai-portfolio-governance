@@ -1,0 +1,27 @@
+Regime applied: shrunk_mv
+Optimizer status: optimal
+Expected portfolio return: 0.000537
+Portfolio risk: 5.2e-05
+HHI concentration: 0.151058
+Effective number of assets: 6.62
+
+Portfolio weights:
+AAPL: 0.0158
+AMZN: 0.0010
+BA: 0.0041
+BAC: 0.0068
+CAT: 0.0000
+COP: 0.0000
+CVX: 0.0024
+GOOGL: 0.0139
+GS: 0.0000
+JNJ: 0.1278
+JPM: 0.0215
+KO: 0.2644
+MS: 0.0000
+MSFT: 0.0000
+PEP: 0.1427
+PFE: 0.1034
+PG: 0.1448
+UNH: 0.0623
+XOM: 0.0891

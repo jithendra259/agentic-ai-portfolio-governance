@@ -1,0 +1,46 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 14 — REGIME SPARSITY DISCLOSURE
+═════════════════════════════════════════════════════════════════
+
+=================================================================
+  STEP 72: Count Activations
+=================================================================
+
+  U1  ⚠️  LOW ACTIVATION
+    Total windows : 51
+    Calm          : 38  Elevated: 11  Crisis: 2
+    % Crisis      : 3.9%
+    λ_t (calm)    : 0.00502
+    λ_t (crisis)  : 0.81266
+    HITL events   : 3
+
+=================================================================
+  STEP 73: Honest Disclosure Statement
+=================================================================
+
+  ┌─────────────────────────────────────────────────────────┐
+  │  REGIME SPARSITY — ARCHITECTURAL DISCLOSURE             │
+  │                                                          │
+  │  The adaptive sigmoid design intentionally limits        │
+  │  the contagion penalty to genuine crisis conditions.     │
+  │  In calm regimes (I_t < 0.50), λ_t ≈ 0 and the graph   │
+  │  penalty is dormant — the optimizer behaves as          │
+  │  standard CVaR. This is a FEATURE, not a limitation:    │
+  │  penalising contagion risk in calm markets would        │
+  │  introduce unnecessary drag on returns.                  │
+  │                                                          │
+  │  Universes with < 5 crisis activations are flagged      │
+  │  with ⚠️  LOW ACTIVATION and disclosed in the paper.    │
+  └─────────────────────────────────────────────────────────┘
+
+  ⚠️  U1: Only 2/51 windows (3.9%) reached crisis regime. Graph penalty was dormant in 38 calm windows.
+
+=================================================================
+  STEP 74: Table 16 + Plot 18
+=================================================================
+
+═════════════════════════════════════════════════════════════════════════════════════
+  TABLE 16 — REGIME ACTIVATION COUNT PER UNIVERSE
+═════════════════════════════════════════════════════════════════════════════════════
+Universe  Total Win  Calm  Elevated  Crisis % Activated  λ>0.5 Count λ_t (calm) λ_t (crisis)  HITL Events Low Act?
+      U1         51    38        11       2        3.9%            2    0.00502      0.81266            3   ⚠️ Yes

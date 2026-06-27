@@ -1,0 +1,83 @@
+════════════════════════════════════════════════════════════
+  PHASE 8 — BACKTEST RESULTS EXTRACTION
+════════════════════════════════════════════════════════════
+
+============================================================
+  STEP 49: Reconstruct Daily Return Series
+============================================================
+  Windows found: 51
+  Daily return obs. per strategy: 12852
+  Date range: 2005-01-04 00:00:00 → 2025-11-17 00:00:00
+
+============================================================
+  STEP 50: Compute Performance Metrics
+============================================================
+
+  G-CVaR:
+    Ann. Return (%)     : 13.783
+    Ann. Vol (%)        : 19.108
+    Sharpe              : 0.5644
+    Sortino             : 0.7771
+    Calmar              : 0.1867
+    Max Drawdown (%)    : 73.817
+    CVaR@95% (%)        : 2.849
+
+  Std CVaR:
+    Ann. Return (%)     : 13.764
+    Ann. Vol (%)        : 19.102
+    Sharpe              : 0.5635
+    Sortino             : 0.7758
+    Calmar              : 0.1868
+    Max Drawdown (%)    : 73.701
+    CVaR@95% (%)        : 2.848
+
+  Mean-Var:
+    Ann. Return (%)     : 13.334
+    Ann. Vol (%)        : 18.769
+    Sharpe              : 0.5506
+    Sortino             : 0.7405
+    Calmar              : 0.1847
+    Max Drawdown (%)    : 72.196
+    CVaR@95% (%)        : 2.852
+
+  Equal Weight:
+    Ann. Return (%)     : 16.041
+    Ann. Vol (%)        : 24.404
+    Sharpe              : 0.5344
+    Sortino             : 0.7367
+    Calmar              : 0.1903
+    Max Drawdown (%)    : 84.279
+    CVaR@95% (%)        : 3.657
+
+
+  TABLE 9: Cross-Universe Performance Summary
+  ───────────────────────────────────────────────────────────────────────────
+    Strategy  Ann. Return (%)  Ann. Vol (%)  Sharpe  Sortino  Calmar  Max Drawdown (%)  CVaR@95% (%)
+      G-CVaR           13.783        19.108  0.5644   0.7771  0.1867            73.817         2.849
+    Std CVaR           13.764        19.102  0.5635   0.7758  0.1868            73.701         2.848
+    Mean-Var           13.334        18.769  0.5506   0.7405  0.1847            72.196         2.852
+Equal Weight           16.041        24.404  0.5344   0.7367  0.1903            84.279         3.657
+
+============================================================
+  STEP 51: Crisis Period Isolation
+============================================================
+
+  TABLE 10: Crisis Period Isolation
+  ──────────────────────────────────────────────────────────────────────
+ Crisis Period     Strategy  MDD (%)  CVaR@95% (%) MDD Reduction %
+      2008 GFC       G-CVaR   66.321         4.983           -0.59
+      2008 GFC     Std CVaR   65.932         4.983               —
+      2008 GFC     Mean-Var   66.985         5.097               —
+      2008 GFC Equal Weight   76.162         6.123               —
+    2020 COVID       G-CVaR   41.419         5.055           -0.06
+    2020 COVID     Std CVaR   41.393         5.056               —
+    2020 COVID     Mean-Var   42.954         4.971               —
+    2020 COVID Equal Weight   39.270         6.307               —
+2022 Rate Hike       G-CVaR   26.578         3.391           -0.35
+2022 Rate Hike     Std CVaR   26.484         3.391               —
+2022 Rate Hike     Mean-Var   26.628         3.367               —
+2022 Rate Hike Equal Weight   44.152         4.473               —
+
+============================================================
+  STEP 52: Generating Plots 7–11
+============================================================

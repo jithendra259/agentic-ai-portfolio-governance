@@ -1,0 +1,6 @@
+WARNING: Ignoring invalid distribution ~umpy (c:\Users\jithe\AppData\Local\Programs\Python\Python311\Lib\site-packages)
+WARNING: Ignoring invalid distribution ~umpy (c:\Users\jithe\AppData\Local\Programs\Python\Python311\Lib\site-packages)
+WARNING: Ignoring invalid distribution ~umpy (c:\Users\jithe\AppData\Local\Programs\Python\Python311\Lib\site-packages)
+
+[notice] A new release of pip is available: 25.2 -> 26.0.1
+[notice] To update, run: python.exe -m pip install --upgrade pip

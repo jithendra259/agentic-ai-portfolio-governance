@@ -1,0 +1,7 @@
+Instability index: 4.2036
+Signal: EXTREME
+Above threshold: True
+Threshold used: 1.0
+Volatility Z-score: 0.6061
+Correlation Z-score: -1.4955
+Drift Z-score: 13.5003

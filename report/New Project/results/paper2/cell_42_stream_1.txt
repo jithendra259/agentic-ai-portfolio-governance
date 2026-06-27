@@ -1,0 +1,41 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 13 — SENSITIVITY ANALYSIS
+═════════════════════════════════════════════════════════════════
+
+  Pre-extracting window data for U1…
+  Windows cached: 51  |  Skipped: 0
+
+=================================================================
+  STEP 69: I_thresh Sensitivity  (k=10 fixed)
+=================================================================
+  I_thresh=0.75  mean Sharpe=+0.7580  mean MDD=0.1489
+  I_thresh=0.80  mean Sharpe=+0.7596  mean MDD=0.1489
+  I_thresh=0.85  mean Sharpe=+0.7598  mean MDD=0.1489
+  I_thresh=0.90  mean Sharpe=+0.7591  mean MDD=0.1489
+  I_thresh=0.95  mean Sharpe=+0.7584  mean MDD=0.1490
+  ✅ Step 69 complete (14.3s)
+
+=================================================================
+  STEP 70: k Sensitivity  (I_thresh=0.85 fixed)
+=================================================================
+  k=5     mean Sharpe=+0.7643  mean MDD=0.1488
+  k=10    mean Sharpe=+0.7598  mean MDD=0.1489
+  k=15    mean Sharpe=+0.7577  mean MDD=0.1487
+  k=20    mean Sharpe=+0.7549  mean MDD=0.1489
+  ✅ Step 70 complete (10.8s)
+
+=================================================================
+  STEP 71: Table 15, Plot 16, Plot 17
+=================================================================
+
+════════════════════════════════════════════════════════════════════════
+  TABLE 15 — SENSITIVITY SUMMARY  |  Universe: U1
+════════════════════════════════════════════════════════════════════════
+         Parameter                Values Tested  Config Value  Optimal    Sharpe Range       MDD Range
+  I_thresh  (k=10) [0.75, 0.8, 0.85, 0.9, 0.95]          0.85     0.85 0.7580 → 0.7598 0.1489 → 0.1490
+k  (I_thresh=0.85)              [5, 10, 15, 20]         10.00     5.00 0.7549 → 0.7643 0.1487 → 0.1489
+
+  Config I_thresh=0.85  |  Optimal=0.85
+  ✅ Config I_thresh matches optimal — calibration confirmed
+  Config k=10  |  Optimal=5
+  ℹ️  Optimal k (5) differs from config (10) — note in paper

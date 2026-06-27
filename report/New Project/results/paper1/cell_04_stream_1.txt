@@ -1,0 +1,5 @@
+U1_US_LargeCap : 5 assets
+U2_European_ETFs : 5 assets
+U3_AsiaPacific_ETFs : 5 assets
+U4_US_Sectors : 5 assets
+U5_MultiAsset : 5 assets

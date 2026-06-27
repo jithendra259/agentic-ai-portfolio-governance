@@ -1,0 +1,27 @@
+Regime applied: equal_weight
+Optimizer status: equal_weight_governance
+Expected portfolio return: 0.000537
+Portfolio risk: 8.5e-05
+HHI concentration: 0.052632
+Effective number of assets: 19.0
+
+Portfolio weights:
+AAPL: 0.0526
+AMZN: 0.0526
+BA: 0.0526
+BAC: 0.0526
+CAT: 0.0526
+COP: 0.0526
+CVX: 0.0526
+GOOGL: 0.0526
+GS: 0.0526
+JNJ: 0.0526
+JPM: 0.0526
+KO: 0.0526
+MS: 0.0526
+MSFT: 0.0526
+PEP: 0.0526
+PFE: 0.0526
+PG: 0.0526
+UNH: 0.0526
+XOM: 0.0526

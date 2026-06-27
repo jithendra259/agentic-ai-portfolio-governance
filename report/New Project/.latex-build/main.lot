@@ -1,0 +1,19 @@
+\contentsline {table}{\numberline {1}{\ignorespaces Strict estimation, calibration, and untouched-test boundaries}}{19}{table.bodytable.1}%
+\contentsline {table}{\numberline {2}{\ignorespaces G-CVaR Objective, Constraints, and Governance Logic}}{40}{table.bodytable.2}%
+\contentsline {table}{\numberline {3}{\ignorespaces Safety Rules and Compliance-Constrained Outputs}}{42}{table.bodytable.3}%
+\contentsline {table}{\numberline {4}{\ignorespaces Explanation Structure and Logged Rationale Fields}}{43}{table.bodytable.4}%
+\contentsline {table}{\numberline {5}{\ignorespaces Implemented frontend stack and evolution from the chat-history prototype}}{47}{table.bodytable.5}%
+\contentsline {table}{\numberline {6}{\ignorespaces Implemented FastAPI and LangGraph backend surfaces}}{48}{table.bodytable.6}%
+\contentsline {table}{\numberline {7}{\ignorespaces Implementation Modules and External Integration Points}}{54}{table.bodytable.7}%
+\contentsline {table}{\numberline {8}{\ignorespaces Logging Schema, Audit Fields, and Checkpoint Design}}{57}{table.bodytable.8}%
+\contentsline {table}{\numberline {9}{\ignorespaces Experiment-lane interpretation hierarchy}}{65}{table.bodytable.9}%
+\contentsline {table}{\numberline {10}{\ignorespaces Verified data coverage and walk-forward boundaries}}{66}{table.bodytable.10}%
+\contentsline {table}{\numberline {11}{\ignorespaces Authoritative untouched-test primary-protocol means across 11 universes}}{66}{table.bodytable.11}%
+\contentsline {table}{\numberline {12}{\ignorespaces Adaptive G-CVaR untouched-test results by universe}}{66}{table.bodytable.12}%
+\contentsline {table}{\numberline {13}{\ignorespaces Adaptive G-CVaR pairwise universe wins in the authoritative protocol}}{66}{table.bodytable.13}%
+\contentsline {table}{\numberline {14}{\ignorespaces Supplemental Linear-Centrality Adaptive G-CVaR V2 means}}{66}{table.bodytable.14}%
+\contentsline {table}{\numberline {15}{\ignorespaces NaN-safe ranking eligibility and explicit rejection audit}}{67}{table.bodytable.15}%
+\contentsline {table}{\numberline {16}{\ignorespaces Reproducibility and execution environment}}{67}{table.bodytable.16}%
+\contentsline {table}{\numberline {17}{\ignorespaces Detailed metrics for the progressive ablation study}}{78}{table.bodytable.17}%
+\contentsline {table}{\numberline {18}{\ignorespaces Chatbot scenario evaluation and comparative scoring}}{81}{table.bodytable.18}%
+\contentsline {table}{\numberline {19}{\ignorespaces Summary of Answers to Research Questions}}{82}{table.bodytable.19}%

@@ -1,0 +1,75 @@
+═════════════════════════════════════════════════════════════════
+  AGENT 0 — MULTI-UNIVERSE EXECUTOR
+═════════════════════════════════════════════════════════════════
+
+=================================================================
+  PHASE A: Discovering & Tagging Universes
+=================================================================
+  Total ticker documents found : 218
+  Sector values found in DB    : ['Basic Materials', 'Communication Services', 'Consumer Cyclical', 'Consumer Defensive', 'Energy', 'Financial Services', 'Healthcare', 'Industrials', 'None', 'Real Estate', 'Technology', 'Utilities']
+
+  Universe assignment preview:
+  Universe Sector Label                 Tickers List
+  ────────────────────────────────────────────────────────────────────────────────
+  U1     Technology                   29    ['AAPL', 'MSFT', 'NVDA', 'AVGO', 'ADBE', 'CRM', 'AMD', 'CSCO']...
+  U10    Real Estate                  19    ['AMT', 'PLD', 'CCI', 'EQIX', 'DLR', 'ARE', 'PSA', 'SPG']...
+  U11    Communication Services       12    ['GOOGL', 'META', 'NFLX', 'DIS', 'CMCSA', 'CHTR', 'T', 'VZ']...
+  U2     Financial Services           18    ['JPM', 'BAC', 'GS', 'WFC', 'BLK', 'SCHW', 'AXP', 'PNC']...
+  U3     Healthcare                   16    ['JNJ', 'PFE', 'UNH', 'MRK', 'ABBV', 'AMGN', 'LLY', 'GILD']...
+  U4     Energy                       19    ['XOM', 'CVX', 'COP', 'MPC', 'PSX', 'VLO', 'EQNR', 'FANG']...
+  U5     Consumer Staples             21    ['ALCO', 'CHD', 'KO', 'PG', 'WMT', 'COST', 'MO', 'PM']...
+  U6     Consumer Discretionary       12    ['AMZN', 'TSLA', 'MCD', 'NKE', 'SBUX', 'DHI', 'LVS', 'MGM']...
+  U7     Industrials                  24    ['CAR', 'POOL', 'UAL', 'DAL', 'AAL', 'BA', 'CAT', 'GE']...
+  U8     Materials                    18    ['LIN', 'FCX', 'NUE', 'SCCO', 'AA', 'ALB', 'CDE', 'SQM']...
+  U9     Utilities                    16    ['NEE', 'DUK', 'SO', 'EXC', 'AEP', 'PEG', 'ETR', 'WEC']...
+
+  ⚠️  14 tickers with unmapped sectors:
+  ['BIOPSY(None)', 'NYCB(None)', 'ADIDAS(None)', 'RAYTHEON(None)', 'ABB(None)', 'SPX(None)', 'HES(None)', 'ADNCY(None)', 'BRK(None)', 'WEE(None)', 'X(None)', 'DISH(None)', 'IPHI(None)', 'ATVI(None)']
+  These tickers will NOT be included in any universe.
+  → Add their sector strings to SECTOR_TO_UNIVERSE above if needed.
+
+  Clearing stale universe tags from all ticker docs...
+  Cleared tags from 204 docs.
+  Tagging ticker documents in MongoDB...
+    U1: tagged 29 docs (29 matched)
+    U2: tagged 18 docs (18 matched)
+    U3: tagged 16 docs (16 matched)
+    U7: tagged 24 docs (24 matched)
+    U5: tagged 21 docs (21 matched)
+    U6: tagged 12 docs (12 matched)
+    U4: tagged 19 docs (19 matched)
+    U9: tagged 16 docs (16 matched)
+    U10: tagged 19 docs (19 matched)
+    U8: tagged 18 docs (18 matched)
+    U11: tagged 12 docs (12 matched)
+
+  ✅ Total docs tagged: 204
+  Verification — distinct universes now in ticker collection:
+    ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9', None]
+  U1: trimmed to top 20 by market cap — removed 9 tickers
+  U5: trimmed to top 20 by market cap — removed 1 tickers
+  U7: trimmed to top 20 by market cap — removed 4 tickers
+
+=================================================================
+  PHASE B: Final Universe Validation
+=================================================================
+  U1     | Technology                   |  20 tickers | ✅ Already done (51 windows)
+  U10    | Real Estate                  |  19 tickers | ✅ Already done (49 windows)
+  U11    | Communication Services       |  12 tickers | ✅ Already done (51 windows)
+  U2     | Financial Services           |  18 tickers | ✅ Already done (51 windows)
+  U3     | Healthcare                   |  16 tickers | ✅ Already done (50 windows)
+  U4     | Energy                       |  19 tickers | ✅ Already done (49 windows)
+  U5     | Consumer Staples             |  20 tickers | ✅ Already done (51 windows)
+  U6     | Consumer Discretionary       |  12 tickers | ✅ Already done (51 windows)
+  U7     | Industrials                  |  20 tickers | ✅ Already done (49 windows)
+  U8     | Materials                    |  18 tickers | ✅ Already done (49 windows)
+  U9     | Utilities                    |  16 tickers | ✅ Already done (51 windows)
+
+  Universes to run   : []
+  Universes skipped  : ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+=================================================================
+  PHASE C: Running Agent 0 for 0 Universe(s)
+=================================================================
+
+  ✅ All universes already complete. Nothing to run.

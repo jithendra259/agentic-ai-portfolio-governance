@@ -1,0 +1,3 @@
+New regime: shrunk_mv
+Equal weight activated: False
+Threshold used: 10

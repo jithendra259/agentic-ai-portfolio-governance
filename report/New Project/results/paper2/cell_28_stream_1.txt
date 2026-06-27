@@ -1,0 +1,13 @@
+
+============================================================
+  STEP 42: Query Pending HITL Events — [U1]
+============================================================
+  Pending HITL events : 3
+  ✅ W09 | Crisis (I_t=1.0000 ≥ 0.85) | Regime: Crisis
+  ✅ W10 | Crisis (I_t=0.9935 ≥ 0.85) | Regime: Crisis
+  ✅ W27 | Turnover (0.000 > 0.4) | Regime: Calm
+
+============================================================
+  STEP 43: Building Gradio HITL Interface
+============================================================
+* Running on public URL: https://f00826845edf504911.gradio.live

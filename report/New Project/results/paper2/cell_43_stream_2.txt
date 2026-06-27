@@ -1,0 +1,8 @@
+  ✅ Plot 18 saved
+
+═════════════════════════════════════════════════════════════════
+  ✅ PHASE 14 COMPLETE
+  Note: When all 11 universes have run (Phase 16),
+  re-run this cell with ALL_UNIVERSES = full list
+  to produce the complete 11-row Table 16 and heatmap.
+═════════════════════════════════════════════════════════════════

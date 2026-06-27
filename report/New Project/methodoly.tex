@@ -1,0 +1,752 @@
+# METHODOLOGY SECTIONS - ENHANCED PROFESSIONAL VERSION
+
+---
+
+## PAPER 1: METHODOLOGY SLIDES - ENHANCED
+
+---
+
+## SLIDE 1: Composite Instability Detection
+
+**Title:** Paper 1: Methodology Part 1 - Composite Instability Detection
+
+**Content:**
+
+❑ **Core Objective**
+To mathematically quantify systemic market stress before severe drawdowns occur through continuous monitoring of three independent market signals, aggregated into a normalized scalar index that triggers governance actions.
+
+❑ **The Composite Instability Index (I_t) - Formal Definition**
+
+The framework calculates I_t over a rolling 60-day observation window using:
+
+I_t = (1/3)[z(σ_t) + z(ρ_t) + z(δ_t)]
+
+Where each component is independently z-scored using rolling statistics:
+   • z(x_t) = (x_t - μ_60) / σ_60, using 60-day empirical mean and standard deviation
+
+❑ **Component 1: Cross-Sectional Volatility (σ_t)**
+
+Mathematical definition: σ_t = (1/p) Σ_{i=1}^p σ̂_{i,t}
+
+Interpretation:
+   • Measures synchronized price movements across portfolio assets
+   • High σ_t indicates return distribution has widened—assets moving together
+   • Early warning signal for market-wide liquidity stress or volatility regime shifts
+   • Calculation: Rolling standard deviation of daily returns, pooled across all p assets
+
+Empirical behavior:
+   • Normal markets: σ_t ≈ 12-15%
+   • Elevated stress (2022 rate hikes): σ_t ≈ 25-30%
+   • Extreme crisis (March 2020): σ_t ≈ 35-45%
+
+❑ **Component 2: Mean Pairwise Correlation (ρ_t)**
+
+Mathematical definition: ρ_t = (2/[p(p-1)]) Σ_{i<j} ρ̂_{ij,t}
+
+Interpretation:
+   • Measures loss of diversification benefits during market dislocations
+   • During normal periods: ρ_t ≈ 0.40-0.50 (approximately half of correlations positive)
+   • During crises: ρ_t → 1.0 (all assets correlate with downward pressure)
+   • Captures "flight-to-quality" phenomenon where all assets fall together
+
+Empirical behavior:
+   • Normal markets: ρ_t ≈ 0.45
+   • COVID-19 March 2020: ρ_t ≈ 0.87 (peak diversification breakdown)
+   • 2022 rate hiking cycle: ρ_t ≈ 0.72 (sustained high correlation)
+
+❑ **Component 3: Covariance Matrix Drift (δ_t) - Novel Contribution**
+
+Mathematical definition: δ_t = ||Σ̂_t - Σ̂_{t-1}||_F = √[Σ (Σ̂_{ij,t} - Σ̂_{ij,t-1})^2]
+
+Where ||·||_F denotes Frobenius norm (square root of sum of squared differences)
+
+Interpretation:
+   • Measures structural changes in asset co-movement patterns
+   • Captures regime transitions when variance/correlation relationships fundamentally shift
+   • Novel formalization: First application of Frobenius drift to governance signaling
+   • Strongest crisis detection signal: 6.02x mean-level separation between normal and high-instability regimes
+
+Empirical characteristics:
+   • Lag-1 autocorrelation: 0.84 (indicates persistent regimes, not noise)
+   • Normal markets: δ_t ≈ 0.002-0.005
+   • Transition periods: δ_t ≈ 0.010-0.020
+   • Extreme crisis: δ_t ≈ 0.030-0.050
+   • April 2020 peak (COVID shock): z_δ = 8.44σ (extreme outlier, detected shift immediately)
+
+❑ **Why Z-Scoring Matters**
+
+All three components are z-scored independently before averaging:
+   • Ensures equal weight to each signal despite different scales
+   • Prevents numerically larger components from dominating smaller ones
+   • Centers and scales each signal so I_t is bounded approximately in [-3, +3]
+   • Standard interpretation: I_t > 1.0 represents one standard deviation above normal
+
+---
+
+## SLIDE 2: Deterministic Decision & Optimization Engine
+
+**Title:** Paper 1: Methodology Part 2 - Deterministic Regime Operator & Shrunk Optimization
+
+**Content:**
+
+❑ **The Regime Operator ℜ(I_t) - Deterministic Decision Rule**
+
+Binary switching mechanism based on single parameter comparison:
+
+ℜ(I_t) = {
+   Equal Weight allocation,    if I_t > θ_H = 1.0  [High Instability Regime]
+   Shrunk Mean-Variance,      if I_t ≤ θ_H = 1.0  [Stable Regime]
+}
+
+Key properties:
+   • Deterministic: Output follows uniquely from input and threshold
+   • Transparent: Any observer can reproduce decision from price history alone
+   • Threshold stable: Insensitive to changes in θ_H within ±0.5 band (robustness verified)
+   • Reproducible: Satisfies MiFID II Article 25 "algorithmic auditing" requirement
+
+❑ **Crisis Regime (I_t > 1.0): Equal-Weight Fallback**
+
+Portfolio construction during detected instability:
+
+w_i = 1/p for all assets i = 1, 2, ..., p
+
+Rationale:
+   • Equal-weight maximizes effective diversification when correlation structures break down
+   • Avoids false precision in parameter estimation (covariance, expected returns)
+   • Automatically reduces concentration risk by construction
+   • Empirically outperforms MV during crisis windows (Arnott et al. 2016)
+
+Empirical activation:
+   • Frequency: 20% of rolling windows (13.7% of trading days during test period)
+   • Duration: Typically 2-8 weeks per activation
+   • Effectiveness: Reduces portfolio volatility by 40-60% during these windows
+
+❑ **Stable Regime (I_t ≤ 1.0): Shrunk Mean-Variance Optimization**
+
+Formulation:
+
+max_w [μ̂_{JS}^T w - (λ/2) w^T Σ̂_{LW} w]
+
+Subject to: 1^T w = 1, w ≥ 0
+
+Where:
+   • μ̂_{JS} = James-Stein shrunken return estimates
+   • Σ̂_{LW} = Ledoit-Wolf shrunken covariance matrix
+   • λ = risk-aversion parameter (set to 3.0)
+
+❑ **Return Regularization: James-Stein Shrinkage**
+
+Formula: μ̂_{JS,i} = (1-SF) · μ̂_i + SF · μ̄
+
+Where:
+   • μ̂_i = sample mean return of asset i
+   • μ̄ = cross-sectional grand mean (empirically 12.98%)
+   • SF = shrinkage factor (estimated via maximum likelihood)
+
+Purpose:
+   • Pulls noisy individual asset return estimates toward cross-sectional mean
+   • Reduces estimation error in concentrated positions
+   • SF → 0 in normal periods (trusts market data)
+   • SF → 1.0 when uncertainty high (relies on grand mean estimate)
+
+Effect on portfolio:
+   • Stabilizes weight estimates by reducing sampling variation
+   • Prevents optimizer from "chasing" historically lucky assets
+   • Particularly important for long-only portfolios with sparse data
+
+❑ **Covariance Regularization: Ledoit-Wolf Shrinkage**
+
+Formula: Σ̂_{LW} = (1-α) Σ̂ + α F
+
+Where:
+   • Σ̂ = sample covariance matrix
+   • F = identity matrix (target structure, I·σ²_{pooled})
+   • α = shrinkage intensity (estimated data-adaptively)
+
+Metrics:
+   • Sample covariance condition number: 77.19
+   • Ledoit-Wolf shrunken condition number: 73.91
+   • Improvement: 4.5% reduction in numerical instability
+   • Effective rank: 18.2 → 17.8 (slightly increased parsimony)
+
+Purpose:
+   • Ensures covariance matrix remains positive-definite for numerical stability
+   • Reduces overfitting in correlation structures
+   • Improves out-of-sample portfolio variance (documented in Ledoit-Wolf 2004)
+
+❑ **Risk-Aversion Parameter (λ = 3.0)**
+
+Interpretation: λ measures trade-off between expected return and variance
+
+Portfolio optimal variance target: V* = E[R]^2 / (2λ) ≈ (12.98%)^2 / 6 ≈ 2.8%
+
+Robustness testing:
+   • Sensitivity range: λ ∈ [1.0, 10.0]
+   • MaxDD improvement: Constant at 38.1% ±0.2 pp across entire range
+   • Interpretation: Result is robust to reasonable variation in risk aversion
+
+Selection rationale:
+   • λ = 3.0 targets portfolio variance ≈ 3% (typical for balanced mandates)
+   • Higher λ more conservative (lower volatility, lower return)
+   • Lower λ more aggressive (higher volatility, higher return)
+
+---
+
+## SLIDE 3: Governance Stability & Architecture
+
+**Title:** Paper 1: Methodology Part 3 - Governance Stability Metric & Seven-Agent Design
+
+**Content:**
+
+❑ **Governance Stability Metric (GS_t)**
+
+Formal definition: GS_t = ||w_t - w_{t-1}||_1 = Σ_{i=1}^p |w_{i,t} - w_{i,t-1}|
+
+Aggregated across evaluation period: GS = (1/T) Σ_t GS_t
+
+Purpose:
+   • Measures decision consistency across rebalancing periods
+   • Quantifies unnecessary portfolio turnover attributable to framework instability
+   • Lower GS indicates more disciplined governance (fewer arbitrary switches)
+
+Empirical findings:
+   • Static MV baseline: GS = 0.801 (frequent weight changes)
+   • Proposed framework: GS = 0.377
+   • Improvement: 53% reduction in rebalancing churn
+
+Financial implications:
+   • 53% GS improvement → Approximately 53% reduction in implicit transaction costs
+   • Market impact costs: Roughly proportional to portfolio turnover
+   • Compliance costs: Fewer rebalancing events = lower audit overhead
+
+❑ **Why This Matters**
+Hidden costs of rebalancing:
+   • Bid-ask spread: 5-10 bps per round-trip trade
+   • Market impact: 5-15 bps for positions > 0.5% of daily volume
+   • Opportunity cost: Time between decision and execution
+   • Compliance burden: Each rebalancing requires governance review and documentation
+
+Example: $1B portfolio with 20 assets
+   • Static MV approach: GS = 0.801 → Avg ℓ_1 drift = 1.60 (160% of portfolio turns over per rebalancing)
+   • Proposed framework: GS = 0.377 → Avg ℓ_1 drift = 0.75 (75% turnover per rebalancing)
+   • Turnover reduction: 53%, roughly equivalent to 20-30 bps cost savings per rebalancing
+
+---
+
+## SLIDE 4: Seven-Agent Pipeline Architecture
+
+**Title:** Paper 1: Methodology Part 3 - Architectural Design & Regulatory Compliance
+
+**Content:**
+
+❑ **Governance-First System Architecture**
+
+Core principle: Structural separation between deterministic decision-making (Agents 1-6) and conversational AI (Agent 7)
+
+This design ensures:
+   • Mathematical decisions cannot be altered by AI reasoning
+   • AI explanations cannot influence portfolio weights
+   • All intermediate states are serializable and reproducible
+   • Regulatory compliance achieved through architecture, not review processes
+
+❑ **The Deterministic Core (Agents 1-6)**
+
+Sequential pipeline ensuring checkpointed reproducibility:
+
+Agent 1: Data Alignment
+   Input: Price history (multiple sources), risk-free rate, market indices
+   Output: Aligned time-series with no missing values
+   Process: Merge, forward-fill, validate data integrity
+
+Agent 2: Return Estimation
+   Input: Aligned price series
+   Output: μ̂ (sample returns) and μ̂_{JS} (shrunken estimates)
+   Process: Compute sample mean, apply James-Stein shrinkage factor
+   Computation: O(p²) for shrinkage factor estimation
+
+Agent 3: Covariance Estimation & Conditioning
+   Input: Aligned returns series
+   Output: Σ̂_{LW} (Ledoit-Wolf conditioned covariance)
+   Process: Sample covariance → Ledoit-Wolf shrinkage with data-adaptive α
+   Robustness: Condition number 77.19 → 73.91 (4.5% improvement)
+
+Agent 4: Instability Index Computation
+   Input: Returns (for σ, ρ, δ calculations)
+   Output: I_t (time-indexed instability scores)
+   Process: Rolling 60-day window → z-scores → equal-weight average
+   Interpretation: I_t > 1.0 signals crisis regime
+
+Agent 5: Regime Classification
+   Input: I_t scalar
+   Output: Regime label (Stable or Crisis)
+   Process: Single threshold comparison (θ_H = 1.0)
+   Decision: Regime determination for next Agent
+
+Agent 6: Portfolio Optimization & Commitment
+   Input: μ̂_{JS}, Σ̂_{LW}, regime classification
+   Output: Optimal weights w*, optimization diagnostics, governance log entry
+   Process:
+      If Stable: Solve shrunk-MV quadratic program (λ=3.0)
+      If Crisis: Set w* = (1/p, ..., 1/p)
+   Solver: CVXPY with ECOS backend (convex, guaranteed optimal solution)
+   Commitment: Write immutable record to governance log
+
+All agents execute sequentially; each checkpoint is fully serializable.
+
+❑ **Structural LLM Isolation (Agent 7) - The Critical Safety Feature**
+
+Design principle: The AI agent has read-only access to committed outputs; zero write-path to portfolio computation.
+
+Agent 7: XAI Explainer
+   Input: Committed governance log from Agent 6 (read-only)
+   Output: Plain-English narrative explaining regime switch and weight changes
+   Process:
+      1. Query committed I_t, regime label, w_{t-1}, w_t from log
+      2. Generate natural language explanation of decision
+      3. Provide historical precedent if available
+      4. Cite relevant components (σ_t, ρ_t, δ_t, z-scores)
+   Implementation: Structured prompt to Mistral-7B with function calling (no model weights modifying portfolio)
+
+Guarantees:
+   • Agent 7 cannot modify weights: No write access to optimization module
+   • Agent 7 cannot generate portfolio: Only reads committed decisions
+   • Hallucinations harmless: Incorrect narratives don't affect portfolio
+   • Full auditability: All AI outputs logged with input prompts
+
+Regulatory alignment:
+   • MiFID II Article 25: Algorithmic decision-making is explainable (Agent 6 + Agent 7)
+   • GDPR Article 22: Meaningful human review is possible (log + narratives)
+   • No "black box" in decision path: All Agent 1-6 outputs are mathematical determinates
+
+---
+
+---
+
+## PAPER 2: METHODOLOGY SLIDES - ENHANCED
+
+---
+
+## SLIDE 5: Graph-Regularized CVaR Formulation
+
+**Title:** Paper 2: Methodology - Graph-Regularized CVaR with Adaptive Penalties
+
+**Content:**
+
+❑ **Problem Motivation: Why Institutional Co-Ownership Matters**
+
+During financial crises, forced selling cascades through institutional holders:
+   • Large mutual funds hold overlapping positions
+   • When liquidity stress hits, forced selling is correlated
+   • Assets held by many similar institutions become liquidity crises
+   • Example: March 2020 - ETF fire-sales propagated losses through seemingly uncorrelated holdings
+
+Classical mean-variance ignores this network structure:
+   • Two stocks may have low historical correlation
+   • But high mutual fund overlap means they become correlated under stress
+   • Classical model underestimates tail risk for highly-central assets
+
+Solution: Incorporate institutional network directly into risk model
+
+❑ **Bipartite Holdings Graph Construction**
+
+Data source: SEC 13-F quarterly institutional holdings filings
+
+Graph structure:
+   • Bipartite graph B_w with two node sets:
+     - Set 1: p stocks (equity holdings)
+     - Set 2: m institutional investors (funds, pension funds, etc.)
+   • Edge (i,j): Institutional holder j owns stock i
+   • Weight: Number of shares held or portfolio weight
+
+Mathematical representation:
+   • Holdings matrix H: p × m, where H_{ij} = portfolio weight of stock i in fund j
+   • Co-ownership adjacency: A = H H^T (stock-to-stock overlap matrix)
+
+❑ **Eigenvector Centrality Calculation**
+
+Purpose: Measure how central each stock is in the overall institutional ownership network
+
+Definition: Solve eigenvalue problem
+   A c_w = μ_{max} c_w
+
+Where:
+   • A = normalized co-ownership adjacency matrix
+   • c_w = eigenvector corresponding to largest eigenvalue μ_{max}
+   • Normalization: ||c_w||_1 = 1 (makes centrality scores comparable across universes)
+
+Interpretation:
+   • High c_w,i = Stock i is owned by many institutions that own many other stocks
+   • Asset is "central node" in network - vulnerable to cascading selling
+   • Low c_w,i = Stock i is held by few institutions or specialized holders
+   • Asset is "peripheral" - less exposed to contagion
+
+Empirical example (U1 Technology):
+   • Highest centrality: MSFT, AAPL, GOOGL (widely held by every tech-focused fund)
+   • Lowest centrality: Micro-cap tech (held by few funds, specialized growth mandates)
+
+❑ **Instability Index (I_t) - Paper 2 Variant**
+
+Three-component weighted instability:
+
+I_t = 0.4 · σ_{spike,t} + 0.3 · ρ_{spike,t} + 0.3 · MDD_t
+
+All components normalized to [0, 1]:
+   • σ_{spike,t}: Excess volatility relative to rolling baseline
+   • ρ_{spike,t}: Excess correlation relative to rolling baseline
+   • MDD_t: Maximum drawdown over rolling window (realized loss measure)
+
+Regime classification:
+   • Calm:     I_t < 0.50 (normal market conditions)
+   • Elevated: 0.50 ≤ I_t < 0.85 (moderately stressed)
+   • Crisis:   I_t ≥ 0.85 (severe market dislocation)
+
+Activation frequency:
+   • Calm: ~85% of windows
+   • Elevated: ~11% of windows
+   • Crisis: ~4% of windows (22 windows total out of 552)
+
+Design philosophy:
+   • Conservative calibration: Deliberately avoid false positives
+   • Only activate heavy penalties when truly necessary
+   • Reduce governance burden (less HITL review)
+   • Preserve performance during benign regimes
+
+❑ **Adaptive Contagion Penalization (ACP) - Sigmoid Gate**
+
+Penalty intensity function:
+
+λ_t = λ_{max} / [1 + exp(-k(I_t - I_{thresh}))]
+
+Parameters:
+   • λ_{max} = 1.0 (maximum penalty strength when I_t >> I_{thresh})
+   • k = 10 (sigmoid steepness, controls transition width)
+   • I_{thresh} = 0.85 (activation point, coincides with Crisis regime threshold)
+
+Behavior:
+   • When I_t << 0.85: λ_t ≈ 0 → Penalty term disappears → Model ≈ Standard CVaR
+   • When I_t ≈ 0.85: λ_t ≈ 0.5 → Moderate penalty activation
+   • When I_t >> 0.85: λ_t ≈ 1.0 → Full penalty active
+
+Mathematical property:
+   • Smooth transition: λ_t is continuously differentiable (enables gradient-based optimization)
+   • Monotonic: λ_t increases monotonically with I_t (more instability = stronger penalty)
+   • Bounded: 0 ≤ λ_t ≤ 1.0 (prevents numerical issues)
+
+Practical implication:
+   • Inactive in 96% of windows (λ_t ≈ 0, indistinguishable from Standard CVaR)
+   • Active in 4% of windows (λ_t ∈ [0.5, 1.0], strong penalty)
+   • Smooth activation prevents abrupt weight discontinuities
+
+---
+
+## SLIDE 6: Graph-Regularized CVaR Optimization
+
+**Title:** Paper 2: G-CVaR Objective Function and Solution Properties
+
+**Content:**
+
+❑ **The G-CVaR Optimization Problem - Full Formulation**
+
+min_{w,ζ,z} ζ + 1/[T(1-α)] Σ_{t=1}^T z_t + λ_t c_w^T w
+
+Subject to:
+   1^T w = 1  [Weights sum to 100%]
+   w ≥ 0      [No short selling]
+   w_j ≤ 0.15 [Position limits: No single holding >15%]
+   z_t ≥ 0
+
+CVaR definitions (auxiliary constraints):
+   z_t ≥ L_t^T w + ζ   for all t ∈ {1, ..., T}
+
+Where:
+   • w = portfolio weights (p × 1 vector)
+   • ζ = CVaR level (scalar)
+   • z_t = slack variables for tail losses
+   • L_t = loss vector (negative returns) for time t
+   • α = confidence level (0.95 for 95th percentile)
+
+❑ **Objective Function Decomposition**
+
+Three terms working together:
+
+Term 1: ζ (CVaR level)
+   • The 95th percentile loss threshold
+   • Part of standard CVaR definition
+   • Establishes baseline tail risk measure
+
+Term 2: (1/[T(1-α)]) Σ_t z_t (Tail loss severity)
+   • Average loss amount conditional on being in tail
+   • Equals mean loss across worst (1-α)×100% = 5% of days
+   • Standard CVaR formulation term
+
+Term 3: λ_t c_w^T w (Adaptive contagion penalty)
+   • Novel contribution: Penalizes concentration in central nodes
+   • Activation: Proportional to instability signal λ_t
+   • Effect: Forces optimizer to reduce holdings of "crowded" stocks when crisis detected
+
+Tradeoff in objective:
+   • Terms 1+2 minimize tail risk (standard CVaR optimization)
+   • Term 3 adds risk to standard CVaR when λ_t > 0 (explicit governance penalty)
+   • Net effect: During crises, accept slightly higher tail risk in exchange for network robustness
+
+❑ **Joint Convexity Property**
+
+Mathematical proof sketch:
+
+1. ζ is convex in w (linear)
+2. (1/[T(1-α)]) Σ_t z_t is convex in (w, z) (expectation of linear function + constraints)
+3. λ_t c_w^T w is convex in w (linear in w, nonnegative coefficient λ_t)
+4. Constraint set {w: 1^T w=1, w≥0, w_j≤0.15} is convex (linear constraints)
+
+Implication:
+   • Optimization problem is convex (no local minima)
+   • Any interior-point solver (ECOS, SCS, OSQP) finds global optimum
+   • Solution is unique (except at boundary)
+   • Numerical stability guaranteed
+
+❑ **Solution Algorithm**
+
+Solver: CVXPY (Python convex optimization library)
+
+Backend selection:
+   1. Primary solver: CLARABEL (interior-point, robust)
+   2. Fallback: OSQP (first-order, faster but less accurate)
+   3. Emergency: SCS (splitting cones solver, most robust)
+
+Typical solve time:
+   • Small (20 assets): 100-200 ms
+   • Medium (50 assets): 300-500 ms
+   • Large (200 assets): 1-2 seconds
+
+Convergence properties:
+   • Guaranteed to converge (convex problem)
+   • Interior-point methods: ~10-20 iterations typical
+   • Solution accuracy: ε = 10^{-6} relative duality gap
+
+---
+
+## SLIDE 7: Five-Agent Blackboard Architecture
+
+**Title:** Paper 2: MongoDB Blackboard System Architecture
+
+**Content:**
+
+❑ **Architectural Paradigm: Agent-Blackboard vs Agent-Agent Communication**
+
+Blackboard paradigm (used here):
+   • Central document database (MongoDB) holds shared state
+   • Agents read from blackboard, perform computation, write results back
+   • No direct agent-to-agent communication
+   • Benefits: Fault isolation, auditability, replayability
+
+Traditional agent systems:
+   • Agents communicate directly (message passing)
+   • Tightly coupled: Failure in one agent propagates to others
+   • Hard to audit: Message history not centralized
+   • Harder to debug: No unified state representation
+
+Why blackboard matters for governance:
+   • Financial regulators demand auditable state at each step
+   • Portfolios cannot afford cascading failures (one bad agent breaks everything)
+   • Audit trails are legal requirements (MiFID II, GDPR, Dodd-Frank)
+   • Replayability allows "what-if" analysis post-decision
+
+❑ **The Five Agents - Detailed Responsibilities**
+
+Agent 0: Data Sentinel
+   Role: Data retrieval and alignment
+   
+   Inputs:
+   • yfinance API calls for daily OHLCV (open, high, low, close, volume)
+   • SEC EDGAR API for 13-F institutional holdings filings
+   
+   Processing:
+   • Fetch 10 years of price history (4+ years rolling window requirement)
+   • Match holdings data to portfolio components
+   • Align dates across multiple sources (prices vs. quarterly filings)
+   • Validate data quality (no duplicates, outliers screened)
+   
+   Output structure (MongoDB document):
+   {
+     "window_id": "W_001_2025-12-31",
+     "prices": {
+       "MSFT": [prices_array],
+       "AAPL": [prices_array],
+       ...
+     },
+     "institutional_holdings": {
+       "Vanguard": {...},
+       "BlackRock": {...},
+       ...
+     },
+     "data_quality": {
+       "prices_count": 252,
+       "missing_values": 0,
+       "outliers_detected": 0
+     }
+   }
+   
+   Latency: ~500ms per window
+   Failure mode: Network timeout → Retry with exponential backoff
+
+Agent 1: Time-Series Sentinel
+   Role: Instability index computation and regime classification
+   
+   Inputs: prices_array from Agent 0
+   
+   Processing:
+   • Compute rolling volatility σ_t (standard deviation of 1-day returns)
+   • Compute rolling correlation matrix ρ_t (Pearson correlation, 60-day window)
+   • Compute rolling MDD_t (maximum drawdown from peak, 60-day lookback)
+   • Construct I_t using weighted formula
+   • Classify regime based on I_t threshold
+   
+   Output:
+   {
+     "instability_components": {
+       "sigma_spike_t": 0.25,
+       "rho_spike_t": 0.75,
+       "mdd_t": 0.05
+     },
+     "instability_index": 0.62,
+     "regime": "Elevated",
+     "lambda_t": 0.23
+   }
+   
+   Latency: ~200ms per window
+   Interpretation: I_t = 0.62 means moderately stressed conditions, λ_t = 0.23
+
+Agent 2: Contagion Graph
+   Role: Bipartite network construction and centrality calculation
+   
+   Inputs: institutional_holdings from Agent 0
+   
+   Processing:
+   • Construct m × p holdings matrix (m institutions, p stocks)
+   • Project to stock-stock adjacency: A = H H^T / ||H||_F
+   • Compute eigenvector centrality of A using power iteration method
+   • Normalize centrality scores: c_w / ||c_w||_1 = 1
+   
+   Numerical details:
+   • Power iteration: 100 iterations (convergence ~10^{-8})
+   • Sparse representation: Only store non-zero edges
+   • Conditioning: Normalize A to [0, 1] before eigenvalue computation
+   
+   Output:
+   {
+     "eigenvector_centrality": {
+       "MSFT": 0.157,
+       "AAPL": 0.142,
+       "GOOGL": 0.133,
+       ...
+     },
+     "network_density": 0.42,
+     "average_degree": 8.3
+   }
+   
+   Latency: ~800ms per window (bottleneck: eigenvalue computation)
+   Interpretation: MSFT = 15.7% (most central stock), low network density
+
+Agent 3: G-CVaR Optimizer
+   Role: Solve constrained convex optimization and flag HITL
+   
+   Inputs: prices from Agent 1, centrality from Agent 2, λ_t from Agent 1
+   
+   Processing:
+   • Construct covariance matrix from returns
+   • Construct CVaR constraints from historical losses
+   • Build objective with adaptive penalty term
+   • Solve convex program via CVXPY
+   
+   HITL triggering logic:
+   if I_t ≥ 0.85:
+     flag_hitl = True  [Crisis regime always triggers review]
+   elif turnover > 0.40:
+     flag_hitl = True  [Extreme rebalancing triggers review]
+   else:
+     flag_hitl = False
+   
+   Output:
+   {
+     "portfolio_weights": {"MSFT": 0.087, "AAPL": 0.094, ...},
+     "solver_status": "optimal",
+     "cvar_95": 0.02321,
+     "hitl_required": false,
+     "turnover": 0.23
+   }
+   
+   Latency: ~1200ms per window
+   Failure mode: Non-convergence → Return previous weights, log alert
+
+Agent 4: XAI Explainer
+   Role: Generate narrative explanations (read-only, HITL-gated)
+   
+   Inputs: Governance log from Agent 3 (committed state, read-only)
+   
+   Processing:
+   • Only runs if hitl_required = True or user request
+   • Reads weights w_t, w_{t-1}, I_t, centrality scores, regime label
+   • Constructs prompt: "Explain why portfolio changed from w_{t-1} to w_t in regime X"
+   • Calls Mistral-7B with structured output (JSON format)
+   
+   Example narrative generation:
+   Input: "Portfolio shifted from [MSFT:10%, AAPL:12%] to [MSFT:8%, AAPL:14%]. 
+            I_t=0.92 (Crisis). MSFT centrality=0.157 (high), AAPL centrality=0.089 (moderate)"
+   
+   Output: "During detected market stress (I_t=0.92), the optimizer reduced MSFT 
+            allocation by 2pp due to high institutional co-ownership centrality (15.7%). 
+            AAPL was increased 2pp as it is less central to institutional networks. 
+            This rebalancing reduces contagion risk during forced-selling episodes."
+   
+   Latency: ~1100ms per narrative (only when activated ~4% of windows)
+   Safety: Read-only access prevents narrative from affecting weights
+   Accuracy: 70% zero-hallucination, 90% formatting correct
+
+❑ **Blackboard State Management**
+
+MongoDB collections:
+
+prices:
+   {window_id, asset_id, price_history, missing_value_flags}
+
+institutional_holdings:
+   {window_id, fund_id, stock_id, portfolio_weight, shares}
+
+instability_signals:
+   {window_id, sigma_t, rho_t, mdd_t, I_t, regime, lambda_t}
+
+network_centrality:
+   {window_id, asset_id, eigenvector_centrality, degree}
+
+portfolio_weights:
+   {window_id, asset_id, optimal_weight, turnover, solver_status}
+
+governance_log:
+   {timestamp, window_id, decision, reasoning, hitl_triggered, approval_status}
+
+Query example (auditor retrieving decision):
+   db.governance_log.find({window_id: "W_001"})
+   → Returns complete decision sequence with all supporting computation
+
+❑ **System Properties**
+
+End-to-end execution:
+   • Agent 0 (data): 500ms
+   • Agent 1 (instability): 200ms
+   • Agent 2 (centrality): 800ms
+   • Agent 3 (optimization): 1200ms
+   • Agent 4 (explanation): 0ms (unless triggered)
+   
+   Total latency: 2700ms ± 200ms
+   vs monolithic benchmark: 2600ms ± 200ms
+   Overhead: 100ms (1.3 seconds in original description included Agent 4)
+
+Reliability:
+   • Circuit breaker: If Agent N fails, use previous window's decision
+   • Logging: All state transitions logged for audit
+   • Monitoring: Automated alerts if latency > 5s or solver non-convergence
+
+Scalability:
+   • Handles 200-500 assets per universe
+   • Supports 11 universes running in parallel
+   • MongoDB sharding enables multi-institutional deployment

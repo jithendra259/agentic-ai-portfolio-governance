@@ -1,0 +1,94 @@
+════════════════════════════════════════════════════════════
+  PHASE 10 — ABLATION STUDY
+════════════════════════════════════════════════════════════
+
+============================================================
+  STEP 57: Four Ablation Conditions
+============================================================
+  Full G-CVaR (λ_t sigmoid + real c_t)
+  No Graph   (λ_t active, c_t = uniform)
+  Static λ   (λ_t = λ_max, real c_t)
+  No Both    (λ_t=0, c_t = uniform ≡ Std CVaR)
+
+  ℹ️  Conditions 'full_gcvar' and 'no_both' reuse MongoDB results.
+  ℹ️  'no_graph' and 'static_lambda' solved fresh (SCS, pre-built arrays).
+
+  Pre-extracting window arrays...
+  ✅ 51 windows pre-extracted.
+
+============================================================
+  STEP 58: Run All Four Conditions
+============================================================
+  Window 1/51 — W01 done
+  Window 10/51 — W10 done
+  Window 20/51 — W20 done
+  Window 30/51 — W30 done
+  Window 40/51 — W40 done
+  Window 50/51 — W50 done
+  ✅ All 4 conditions solved for 51 windows.
+
+============================================================
+  STEP 59: Compare Conditions
+============================================================
+
+  Full G-CVaR (λ_t sigmoid + real c_t):
+    Ann. Return (%)   : 13.783
+    Ann. Vol (%)      : 19.108
+    Sharpe            : 0.5644
+    Sortino           : 0.7771
+    Calmar            : 0.1867
+    Max DD (%)        : 73.817
+    CVaR@95% (%)      : 2.849
+    Turnover          : 0.2075
+
+  No Graph   (λ_t active, c_t = uniform):
+    Ann. Return (%)   : 13.764
+    Ann. Vol (%)      : 19.102
+    Sharpe            : 0.5635
+    Sortino           : 0.7758
+    Calmar            : 0.1868
+    Max DD (%)        : 73.701
+    CVaR@95% (%)      : 2.848
+    Turnover          : 0.2071
+
+  Static λ   (λ_t = λ_max, real c_t):
+    Ann. Return (%)   : 14.23
+    Ann. Vol (%)      : 19.235
+    Sharpe            : 0.5838
+    Sortino           : 0.8029
+    Calmar            : 0.1985
+    Max DD (%)        : 71.7
+    CVaR@95% (%)      : 2.874
+    Turnover          : 0.1905
+
+  No Both    (λ_t=0, c_t = uniform ≡ Std CVaR):
+    Ann. Return (%)   : 13.764
+    Ann. Vol (%)      : 19.102
+    Sharpe            : 0.5635
+    Sortino           : 0.7758
+    Calmar            : 0.1868
+    Max DD (%)        : 73.701
+    CVaR@95% (%)      : 2.848
+    Turnover          : 0.2071
+
+============================================================
+  STEP 60: Table 12 + Plot 13
+============================================================
+
+  TABLE 12: Ablation Study Results
+  ────────────────────────────────────────────────────────────────────────────────
+                                   Condition  Ann. Return (%)  Ann. Vol (%)  Sharpe  Sortino  Calmar  Max DD (%)  CVaR@95% (%)  Turnover
+        Full G-CVaR (λ_t sigmoid + real c_t)           13.783        19.108  0.5644   0.7771  0.1867      73.817         2.849    0.2075
+      No Graph   (λ_t active, c_t = uniform)           13.764        19.102  0.5635   0.7758  0.1868      73.701         2.848    0.2071
+          Static λ   (λ_t = λ_max, real c_t)           14.230        19.235  0.5838   0.8029  0.1985      71.700         2.874    0.1905
+No Both    (λ_t=0, c_t = uniform ≡ Std CVaR)           13.764        19.102  0.5635   0.7758  0.1868      73.701         2.848    0.2071
+
+  ── Component Contribution Analysis ──
+  Graph penalty removed (No Graph vs Full):
+    Sharpe:   0.5635 vs 0.5644  (↓ degraded)
+    CVaR@95%: 2.848% vs 2.849%  (↓ better risk)
+  Regime gate removed (Static Lambda vs Full):
+    Sharpe:   0.5838 vs 0.5644  (↑ improved)
+    Max DD:   71.700% vs 73.817%  (↓ better)
+  Both removed (No Both vs Full):
+    Sharpe:   0.5635 vs 0.5644  (↓ degraded)

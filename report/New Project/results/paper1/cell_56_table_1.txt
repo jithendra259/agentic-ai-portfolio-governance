@@ -1,0 +1,1 @@
+.dataframe tbody tr th:only-of-type { vertical-align: middle; } .dataframe tbody tr th { vertical-align: top; } .dataframe thead th { text-align: right; } crisis instability_index regime_selected 0 COVID_CRASH -0.9409 shrunk_mv 1 TECH_SELL_OFF 0.7118 shrunk_mv

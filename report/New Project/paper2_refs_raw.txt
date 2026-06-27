@@ -1,0 +1,114 @@
+
+Acemoglu,D.,Ozdaglar,A.,Tahbaz-Salehi,A.,2015. Systemicriskandstabilityinfinancialnetworks. AmericanEconomicReview105,564–608.
+doi:10.1257/aer.20130456.
+Allen, F., Gale, D., 2000. Financial contagion. Journal of Political Economy 108, 1–33. doi:10.1086/262109.
+Amershi, S., Cakmak, M., Knox, W.B., Kulesza, T., 2014. Power to the people: The role of humans in interactive machine learning. AI Magazine
+35, 105–120. doi:10.1609/aimag.v35i4.2513.
+Ang, A., Bekaert, G., 2002. International asset allocation with regime shifts. Review of Financial Studies 15, 1137–1187. doi:10.1093/rfs/15.
+4.1137.
+Ang, A., Bekaert, G., 2004. How regimes affect asset allocation. Financial Analysts Journal 60, 86–99. doi:10.2469/faj.v60.n2.2612.
+Arrieta, A.B., et al., 2020. Explainable artificial intelligence (XAI): Concepts, taxonomies, opportunities and challenges toward responsible AI.
+Information Fusion 58, 82–115. doi:10.1016/j.inffus.2019.12.012.
+Azar, J., Schmalz, M.C., Tecu, I., 2018. Anticompetitive effects of common ownership. Journal of Finance 73, 1513–1565. doi:10.1111/jofi.
+12698.
+Bahrammirzaee, A., 2010. A comparative survey of artificial intelligence applications in finance. Neural Computing and Applications 19, 1165–
+1195. doi:10.1007/s00521-010-0362-z.
+Bailey, D.H., Lopez de Prado, M., 2012. The sharpe ratio efficient frontier. Journal of Risk 15, 3–44. doi:10.21314/JOR.2012.255.
+Bebchuk, L.A., Cohen, A., Hirst, S., 2017. The agency problems of institutional investors. Journal of Economic Perspectives 31, 89–112.
+doi:10.1257/jep.31.3.89.
+Billio, M., Getmansky, M., Lo, A.W., Pelizzon, L., 2012. Econometric measures of connectedness and systemic risk in the finance and insurance
+sectors. Journal of Financial Economics 104, 535–559. doi:10.1016/j.jfineco.2011.12.010.
+Bollerslev, T., 1986. Generalized autoregressive conditional heteroskedasticity. Journal of Econometrics 31, 307–327. doi:10.1016/
+0304-4076(86)90063-1.
+Bonacich, P., 1987. Power and centrality: A family of measures. American Journal of Sociology 92, 1170–1182. doi:10.1086/228631.
+Boyd, S., Vandenberghe, L., 2004. Convex Optimization. Cambridge University Press, Cambridge.
+Cai,C.J.,Winter,S.,Steiner,D.,Wilcox,L.,Terry,M.,2019. “HelloAI”:Uncoveringtheonboardingneedsofmedicalpractitionersforhuman-AI
+collaborative decision-making. Proceedings of the ACM on Human-Computer Interaction 3, 1–24. doi:10.1145/3359206.
+Cont, R., 2001. Empirical properties of asset returns: Stylized facts and statistical issues. Quantitative Finance 1, 223–236. doi:10.1080/
+713665670.
+DeMiguel,V.,Garlappi,L.,Uppal,R.,2009. Optimalversusnaivediversification:Howinefficientisthe1/Nportfoliostrategy? ReviewofFinancial
+Studies 22, 1915–1953. doi:10.1093/rfs/hhm075.
+Diamond, S., Boyd, S., 2016. CVXPY: A Python-embedded modeling language for convex optimization. Journal of Machine Learning Research
+17, 1–5.
+Domahidi,A.,Chu,E.,Boyd,S.,2013. ECOS:AnSOCPsolverforembeddedsystems,in:ProceedingsoftheEuropeanControlConference(ECC),
+IEEE, Zürich, Switzerland. pp. 3071–3076. doi:10.23919/ECC.2013.6669541.
+Elliott,M.,Golub,B.,Jackson,M.O.,2014. Financialnetworksandcontagion. AmericanEconomicReview104,3115–3153. doi:10.1257/aer.
+104.10.3115.
+Engle, R.F., 1982. Autoregressive conditional heteroscedasticity with estimates of the variance of united kingdom inflation. Econometrica 50,
+987–1007. doi:10.2307/1912773.
+Erman, L.D., Hayes-Roth, F., Lesser, V.R., Reddy, D.R., 1980. The Hearsay-II speech-understanding system: Integrating knowledge to resolve
+uncertainty. ACM Computing Surveys 12, 213–253. doi:10.1145/356810.356816.
+European Parliament and Council of the EU, 2014. Directive 2014/65/EU on Markets in Financial Instruments (MiFID II). Technical
+Report L 173/349. Official Journal of the European Union. URL:https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:
+32014L0065.
+European Parliament and Council of the EU, 2024. Regulation (EU) 2024/1689 of the European Parliament and of the Council on Artificial
+Intelligence (the AI Act). Technical Report L 2024/1689. Official Journal of the European Union. URL:https://eur-lex.europa.eu/
+legal-content/EN/TXT/?uri=OJ:L_202401689.
+Fama, E.F., French, K.R., 1993. Common risk factors in the returns on stocks and bonds. Journal of Financial Economics 33, 3–56.
+doi:10.1016/0304-405X(93)90023-5.
+Glasserman, P., 2004. Monte Carlo Methods in Financial Engineering. Springer, New York. doi:10.1007/978-0-387-21617-1.
+K J Subramanyam:Preprint submitted to ElsevierPage 22 of 23
+
+Graph-Regularized CVaR with Agentic Portfolio Governance
+Gu, S., Kelly, B., Xiu, D., 2020. Empirical asset pricing via machine learning. Review of Financial Studies 33, 2223–2273. doi:10.1093/rfs/
+hhaa009.
+Guidolin, M., Timmermann, A., 2007. Asset allocation under multivariate regime switching. Journal of Economic Dynamics and Control 31,
+3503–3544. doi:10.1016/j.jedc.2006.11.004.
+Gunning, D., Aha, D., 2019. DARPA’s explainable artificial intelligence (XAI) program. AI Magazine 40, 44–58. doi:10.1609/aimag.v40i2.
+2850.
+Haddad, V., Moreira, A., Muir, T., 2021. When selling becomes viral: Disruptions in debt markets in the COVID-19 crisis and the Fed’s response.
+Review of Financial Studies 34, 5309–5351. doi:10.1093/rfs/hhab063.
+Hamilton, J.D., 1989. A new approach to the economic analysis of nonstationary time series and the business cycle. Econometrica 57, 357–384.
+doi:10.2307/1912559.
+Hamilton, W.L., Ying, R., Leskovec, J., 2017. Inductive representation learning on large graphs, in: Advances in Neural Information Processing
+Systems (NeurIPS), Curran Associates, Inc.. pp. 1024–1034.
+Harvey,C.R.,Liu,Y.,Zhu,H.,2016.... andthecross-sectionofexpectedreturns.ReviewofFinancialStudies29,5–68.doi:10.1093/rfs/hhv059.
+Hayes-Roth, B., 1985. A blackboard architecture for control. Artificial Intelligence 26, 251–321. doi:10.1016/0004-3702(85)90063-3.
+Holzinger, A., 2016. Interactive machine learning for health informatics: When do we need the human-in-the-loop? Brain Informatics 3, 119–131.
+doi:10.1007/s40708-016-0042-6.
+Jagannathan, R., Ma, T., 2003. Risk reduction in large portfolios: Why imposing the wrong constraints helps. Journal of Finance 58, 1651–1684.
+doi:10.1111/1540-6261.00580.
+Jennings, N.R., Sycara, K., Wooldridge, M., 1998. A roadmap of agent research and development. Autonomous Agents and Multi-Agent Systems
+1, 7–38. doi:10.1023/A:1010090405266.
+Ji, Z., et al., 2023. Survey of hallucination in natural language generation. ACM Computing Surveys 55, 1–38. doi:10.1145/3571730.
+Jiang, Z., Xu, D., Liang, J., 2017. A deep reinforcement learning framework for the financial portfolio management problem. arXiv preprint
+arXiv:1706.10059 .
+Kipf, T.N., Welling, M., 2017. Semi-supervised classification with graph convolutional networks, in: 5th International Conference on Learning
+Representations (ICLR), Toulon, France. pp. 1–14. ArXiv:1609.02907.
+Kolm, P.N., Tütüncü, R., Fabozzi, F.J., 2014. 60 years of portfolio optimization: Practical challenges and current trends. European Journal of
+Operational Research 234, 356–371. doi:10.1016/j.ejor.2013.10.060.
+Krokhmal, P., Palmquist, J., Uryasev, S., 2002. Portfolio optimization with conditional value-at-risk objective and constraints. Journal of Risk 4,
+43–68. doi:10.21314/JOR.2002.057.
+Longin, F., Solnik, B., 2001. Extreme correlation of international equity markets. Journal of Finance 56, 649–676. doi:10.1111/0022-1082.
+00340.
+Lopez de Prado, M., 2016. Building diversified portfolios that outperform out-of-sample. Journal of Portfolio Management 42, 59–69.
+doi:10.3905/jpm.2016.42.4.059.
+Lundberg, S.M., Lee, S.I., 2017. A unified approach to interpreting model predictions, in: Advances in Neural Information Processing Systems
+(NeurIPS), Curran Associates, Inc.. pp. 4765–4774.
+Maillard, S., Roncalli, T., Teïletche, J., 2010. The properties of equally weighted risk contribution portfolios. Journal of Portfolio Management 36,
+60–70. doi:10.3905/jpm.2010.36.4.060.
+Mantegna, R.N., 1999. Hierarchical structure in financial markets. European Physical Journal B 11, 193–197. doi:10.1007/s100510050929.
+Markowitz, H., 1952. Portfolio selection. Journal of Finance 7, 77–91. doi:10.2307/2975974.
+Onnela, J.P., et al., 2003. Dynamics of market correlations: Taxonomy and portfolio analysis. Physical Review E 68, 056110. doi:10.1103/
+PhysRevE.68.056110.
+Peralta, G., Zareei, A., 2016. A network approach to portfolio selection. Journal of Empirical Finance 38, 157–180. doi:10.1016/j.jempfin.
+2016.06.003.
+Pozzi, F., Di Matteo, T., Aste, T., 2013. Spread of risk across financial markets: Better to invest in the peripheries. Scientific Reports 3, 1665.
+doi:10.1038/srep01665.
+Ribeiro, M.T., Singh, S., Guestrin, C., 2016. “Why should I trust you?”: Explaining the predictions of any classifier, in: Proceedings of the 22nd
+ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, ACM, New York, NY. pp. 1135–1144. doi:10.1145/
+2939672.2939778.
+Rockafellar, R.T., Uryasev, S., 2000. Optimization of conditional value-at-risk. Journal of Risk 2, 21–41. doi:10.21314/JOR.2000.038.
+Rockafellar, R.T., Uryasev, S., 2002. Conditional value-at-risk for general loss distributions. Journal of Banking & Finance 26, 1443–1471.
+doi:10.1016/S0378-4266(02)00271-6.
+Wang, Y., et al., 2024. FinAgent: A multimodal foundation agent for financial trading: Tool-augmented, diversified, and generalist. arXiv preprint
+arXiv:2402.18485 .
+White, H., 2000. A reality check for data snooping. Econometrica 68, 1097–1126. doi:10.1111/1468-0262.00152.
+Wooldridge, M., 2009. An Introduction to MultiAgent Systems. 2nd ed., John Wiley & Sons, Chichester.
+Wu, S., et al., 2023. BloombergGPT: A large language model for finance. arXiv preprint arXiv:2303.17564 .
+Yu, P., et al., 2023. FinMem: A performance-enhanced LLM trading agent with layered memory and character design. arXiv preprint
+arXiv:2311.13743 .
+Zhao, W.X., et al., 2023. A survey of large language models. arXiv preprint arXiv:2303.18223 .
+Zhu, S., Fukushima, M., 2009. Worst-case conditional value-at-risk with application to robust portfolio management. Operations Research 57,
+1155–1168. doi:10.1287/opre.1080.0684.
+K J Subramanyam:Preprint submitted to ElsevierPage 23 of 23

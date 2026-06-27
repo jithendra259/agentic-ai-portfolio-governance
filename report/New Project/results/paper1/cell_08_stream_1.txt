@@ -1,0 +1,7 @@
+Original number of assets: 19
+Assets with full history: 19
+
+Remaining tickers:
+['AAPL', 'AMZN', 'BA', 'BAC', 'CAT', 'COP', 'CVX', 'GOOGL', 'GS', 'JNJ', 'JPM', 'KO', 'MS', 'MSFT', 'PEP', 'PFE', 'PG', 'UNH', 'XOM']
+
+New dataset shape: (2515, 19)

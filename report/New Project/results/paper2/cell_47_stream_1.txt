@@ -1,0 +1,57 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 17 — HITL GOVERNANCE ABLATION
+═════════════════════════════════════════════════════════════════
+
+=================================================================
+  STEP 81: Define Four Governance Conditions
+=================================================================
+  Universes available: ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+=================================================================
+  STEP 82: Reconstruct Daily Return Series
+=================================================================
+  Full Governed (G-CVaR + HITL Constrain)   : 139,104 daily obs
+  Auto G-CVaR (no HITL override)            : 139,104 daily obs
+  Std CVaR (no governance)                  : 139,104 daily obs
+  Equal Weight (no oversight)               : 139,104 daily obs
+
+=================================================================
+  STEP 83: Crisis Period Comparison
+=================================================================
+
+  TABLE 26: HITL Governance Ablation Results
+  ────────────────────────────────────────────────────────────────────────────────
+
+  Period: ALL 11 universe(s) — 552 windows
+                              Condition  sharpe    mdd  cvar95  ann_ret  MDD Red. vs Std (%)
+Full Governed (G-CVaR + HITL Constrain)  0.4834 90.894   2.664   11.458                -5.86
+         Auto G-CVaR (no HITL override)  0.6098 87.774   2.388   12.818                -2.23
+               Std CVaR (no governance)  0.6169 85.862   2.365   12.869                 0.00
+            Equal Weight (no oversight)  0.3729 93.870   3.195   10.706                -9.33
+
+  Period: CRISIS WINDOWS
+
+  2008 GFC:
+                              Condition  sharpe    mdd  cvar95  MDD Red. vs Std (%)
+Full Governed (G-CVaR + HITL Constrain) -0.6495 99.998   4.958                -0.25
+         Auto G-CVaR (no HITL override) -0.4784 99.841   4.026                -0.09
+               Std CVaR (no governance) -0.4596 99.750   3.896                 0.00
+            Equal Weight (no oversight) -0.6419 99.999   5.181                -0.25
+
+  2020 COVID:
+                              Condition  sharpe    mdd  cvar95  MDD Red. vs Std (%)
+Full Governed (G-CVaR + HITL Constrain)  0.1932 53.562   3.856                -9.20
+         Auto G-CVaR (no HITL override)  0.3906 47.909   3.516                 2.32
+               Std CVaR (no governance)  0.3805 49.049   3.495                 0.00
+            Equal Weight (no oversight)  0.1033 80.196   4.611               -63.50
+
+  2022 Rate Hike:
+                              Condition  sharpe    mdd  cvar95  MDD Red. vs Std (%)
+Full Governed (G-CVaR + HITL Constrain)  0.1131 67.123   2.509                 0.21
+         Auto G-CVaR (no HITL override)  0.2144 66.749   2.385                 0.76
+               Std CVaR (no governance)  0.2049 67.263   2.382                 0.00
+            Equal Weight (no oversight)  0.0141 80.240   3.171               -19.29
+
+  KEY FINDING:
+  HITL constrain reduces MDD by -3.120pp vs auto G-CVaR (all windows)
+  This quantifies the human oversight contribution.

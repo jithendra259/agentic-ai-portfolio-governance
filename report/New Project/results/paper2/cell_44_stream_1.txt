@@ -1,0 +1,51 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 15 — COMPUTATIONAL COMPLEXITY
+═════════════════════════════════════════════════════════════════
+
+=================================================================
+  STEP 75: Theoretical Big-O Analysis
+=================================================================
+
+  TABLE 22: Big-O Complexity Analysis
+  ──────────────────────────────────────────────────────────────────────────────────────────
+                        Component        Complexity                          Variables             Dominant?
+             Agent 0 — Data Fetch            O(S·T)           S=stocks, T=trading days        No — I/O bound
+       Agent 0 — Blackboard Write          O(W·S·T) W=windows, S=stocks, T=window size                    No
+        Agent 1 — I_t Computation         O(W·S²·T)       S² from pairwise correlation                    No
+     Agent 2 — Graph Construction          O(V + E)           V=S+I nodes, E=S×I edges                    No
+ Agent 2 — Eigenvector Centrality      O(V² · iter)          V=stock nodes, iter≈20–50                    No
+       Agent 2 — Stock Projection           O(S²·I)     S²=stock pairs, I=institutions                    No
+Agent 3 — G-CVaR (CVXPY/CLARABEL)       O(n²T + n³)            n=assets, T=window days                 ✅ YES
+  Agent 3 — Per-window (4 solves)          O(4·n²T)            4 strategies per window                 ✅ YES
+            Agent 4 — Attribution            O(S·W)                S=stocks, W=windows                    No
+          Agent 4 — LLM Inference             O(L²)              L=prompt token length     Context-dependent
+       Full Pipeline (per window)  O(n²T + V²·iter)    n=assets, T=days, V=graph nodes ✅ Optimizer dominates
+      Full Pipeline (all windows) O(W·U·(n²T + V²))       W=51 windows, U=11 universes          ✅ Full scale
+
+=================================================================
+  STEP 76: Empirical Latency Measurement
+=================================================================
+  Timing each agent on live data from MongoDB...
+  Running 5 windows for stable estimates...
+
+    W01 timed ✅
+    W02 timed ✅
+    W03 timed ✅
+    W04 timed ✅
+    W05 timed ✅
+
+  TABLE 23: Empirical Latency (averaged over 5 windows)
+  ─────────────────────────────────────────────────────────────────
+                       Component  Mean (s)  Std (s)  Max (s)  Min (s)
+       MongoDB Read (per window)    0.0447   0.0044   0.0525   0.0401
+       Agent 1 — I_t Computation    0.0016   0.0008   0.0031   0.0010
+    Agent 2 — Graph Construction    0.0005   0.0000   0.0005   0.0005
+Agent 2 — Eigenvector Centrality    0.0084   0.0076   0.0237   0.0041
+          Agent 3 — G-CVaR Solve    0.0304   0.0076   0.0448   0.0248
+        Agent 3 — Std CVaR Solve    0.0294   0.0058   0.0405   0.0252
+   Agent 3 — Mean-Variance Solve    0.0166   0.0055   0.0275   0.0131
+           Agent 4 — Attribution    0.0221   0.0022   0.0260   0.0197
+      Full Pipeline (per window)    0.1121   0.0260   0.1636   0.0953
+
+  Agent 3 optimizer share of pipeline : 68.2%
+  Extrapolated — 51 windows × 11 universes: ~1.0 minutes total

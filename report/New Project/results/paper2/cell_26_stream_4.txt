@@ -1,0 +1,5 @@
+  ✅ Plot 21 saved.
+
+  ✅ AGENT 4 COMPLETE — U1
+
+  ⏱  Agent 4 wall-clock time: 507.8s (8.5 min)

@@ -1,0 +1,7 @@
+
+  ✅ Q1 Benchmark comparison plot saved.
+
+══════════════════════════════════════════════════════════════════════
+  ✅ Q1 RECTIFICATION 2 COMPLETE
+     HRP + Risk Parity | Precise MDD wording | MC fix | ZH fix | CoG
+══════════════════════════════════════════════════════════════════════

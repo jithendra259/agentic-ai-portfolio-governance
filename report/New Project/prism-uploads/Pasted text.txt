@@ -1,0 +1,265 @@
+%% ============================================================
+%%  main.tex — Elsevier cas-sc single-column
+%%  "A Supervisory Portfolio Governance Framework"
+%%  Author: K J Subramanyam, K J Somaiya College of Engineering
+%%
+%%  IMAGE FILES (in images/ folder — rename once in Overleaf):
+%%    fig1_cumulative_wealth.png
+%%    fig2_cumulative_compare.png
+%%    fig3_rolling_sharpe.png
+%%    fig4_regime_frequency.png
+%%    fig5_regime_timeline.png
+%%    fig6_instability_crisis.png
+%%    fig7_cross_universe.png
+%%    ochestrator.png
+%%
+%%  SECTION FILES (in sections/ folder — NO spaces in filenames):
+%%    introduction.tex
+%%    literature-review.tex
+%%    methodology.tex
+%%    empirical-results.tex
+%%    system-implementation.tex
+%%    conclusion.tex
+%% ============================================================
+
+\documentclass[a4paper, fleqn]{cas-sc}
+
+%% ---- Bibliography (author-year, matches cas-model2-names.bst) ----
+\usepackage[authoryear, round]{natbib}
+
+%% ---- Graphics ----
+\usepackage{graphicx}
+
+
+
+\usepackage{longtable}
+\usepackage{caption}
+
+%% ---- Inline placement (replaces all figure*/table* floats) ----
+\usepackage{caption}
+\usepackage{float}
+\usepackage{placeins}
+
+%% ---- Inline figure macro ----
+%% Usage: \inlinefig[width]{path}{caption}{label}
+%%        width = fraction of \linewidth (default 0.88)
+\newcommand{\inlinefig}[4][0.88]{%
+\vspace{6pt}%
+\noindent
+\begin{minipage}{\linewidth}%
+  \centering%
+  \includegraphics[width=#1\linewidth]{#2}%
+  \captionof{figure}{#3}%
+  \label{#4}%
+\end{minipage}%
+\vspace{6pt}%
+}
+
+%% ---- Inline table macro ----
+%% Usage: \inlinetab{caption}{label}{tabular block}
+\newcommand{\inlinetab}[3]{%
+\vspace{6pt}%
+\noindent
+\begin{longtable}{#3}
+\caption{#1}\label{#2}\\
+}
+
+%% ---- Float spacing (algorithms only — figures/tables are inline) ----
+\raggedbottom
+\setlength{\floatsep}{4pt plus 2pt minus 2pt}
+\setlength{\textfloatsep}{6pt plus 2pt minus 2pt}
+\setlength{\intextsep}{4pt plus 2pt minus 2pt}
+\setlength{\abovecaptionskip}{3pt}
+\setlength{\belowcaptionskip}{1pt}
+
+%% ---- Algorithms ----
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\renewcommand{\algorithmicrequire}{\textbf{Input:}}
+\renewcommand{\algorithmicensure}{\textbf{Output:}}
+
+%% ---- TikZ (for agent pipeline DAG in Section 5) ----
+\usepackage{tikz}
+\usetikzlibrary{
+  shapes.geometric,
+  arrows.meta,
+  positioning,
+  fit,
+  backgrounds,
+  calc,
+  decorations.pathreplacing
+}
+
+%% ---- Math ----
+\usepackage{amsthm}
+
+%% ---- Tables ----
+\usepackage{booktabs, array}
+
+%% ---- URLs / Hyperlinks ----
+
+
+%% ---- Definitions (cas-sc native environment) ----
+\newdefinition{defn}{Definition}
+
+%% ---- Float density (algorithms only) ----
+\setcounter{topnumber}{3}
+\setcounter{bottomnumber}{0}
+\setcounter{totalnumber}{4}
+\renewcommand{\topfraction}{0.80}
+\renewcommand{\textfraction}{0.15}
+\renewcommand{\floatpagefraction}{0.80}
+
+%% ---- cas-sc required shorthand ----
+\def\tsc#1{\csdef{#1}{\textsc{\lowercase{#1}}\xspace}}
+\tsc{WGM}\tsc{QE}\tsc{EP}\tsc{PMS}\tsc{BEC}\tsc{DE}
+
+%% ============================================================
+\begin{document}
+  \let\WriteBookmarks\relax \def\floatpagepagefraction{1} \def\textpagefraction{.001}
+
+  \shorttitle{Supervisory Portfolio Governance Framework} \shortauthors{K J Subramanyam}
+
+  %% ---- Title ----
+  \title[mode=title]{A Multi-Agent Portfolio Governance Framework with Graph-Regularized CVaR, Adaptive Contagion Penalization, and Explainable Human-in-the-Loop Oversight}
+
+  %% ---- Author block ----
+  \author[1]{K J Subramanyam}
+  [role=Author, orcid=0009-0005-7593-7871] \cormark[1] \fnmark[1] \ead{kandula.s@somaiya.edu}
+  \credit{Conceptualization, Methodology, Software, Formal Analysis, Data Curation, Writing~-- Original Draft, Writing~-- Review and Editing, Validation, Visualization}
+
+  \affiliation[1]{organization={Department of Information Technology, K J Somaiya College of Engineering, Somaiya Vidyavihar University}, city={Mumbai}, postcode={400077}, country={India}}
+
+  \cortext[cor1]{Corresponding author.} \fntext[fn1]{%
+  ORCID: 0009-0005-7593-7871.\\ Replication code and data retrieval scripts are publicly available at \url{https://github.com/jithendra259/fintech_chatbotk}.}
+
+\begin{abstract}
+Institutional portfolio managers face a structural problem that standard
+tail-risk optimizers do not address: during financial crises, the assets
+most exposed to forced liquidation are precisely those in which multiple
+large institutions hold overlapping positions. Standard Conditional
+Value-at-Risk (CVaR) controls tail losses within individual rebalancing
+windows but contains no mechanism to penalize the hidden cross-sector
+linkages created by common institutional ownership. This paper introduces
+the Graph-Regularized CVaR Agentic Portfolio Governance System
+(G-CVaR-APGS), a five-agent supervisory framework in which a persistent
+MongoDB blackboard coordinates deterministic agents responsible for data
+ingestion, composite instability detection, bipartite contagion graph
+construction, graph-penalized CVaR optimization, and explainable
+attribution auditing. The core optimizer penalizes each asset's weight
+proportionally to its eigenvector centrality in the institutional
+holdings graph, scaled by a sigmoid adaptive trust parameter
+$\lambda_t$ that activates selectively when the composite instability
+index $I_t$ crosses a calibrated crisis threshold.Human-in-the-Loop
+(HITL) governance layer intercepts crisis and high-turnover windows,
+offering Approve, Reject, or Constrain overrides with full XAI audit
+trails.
+ 
+The framework was tested against 11 GICS sectors universes, 218 stocks, and
+552 rolling windows for the period between 2005 and 2025 — covering the
+Global Financial Crisis of 2008, the COVID-19 shock of 2020, and the rate
+hike cycle of 2022 — and delivered a mean reduction in CVaR@95\% of
+25.9\% and a maximum reduction in drawdown.
+The mean Sharpe ratio of 0.646 represents a
+66.5\% improvement over equal weighting. G-CVaR trails Standard CVaR by
+0.007 Sharpe points ($p = 0.052$, Wilcoxon), a deliberate consequence of
+the graph penalty redistributing weight away from systemically
+concentrated positions — a risk-governance trade-off, not a modeling
+failure. Walk-forward validation, four-condition ablation, Monte Carlo
+stress testing across 10,500 synthetic paths, and cross-universe
+robustness analysis confirm that crisis-regime performance improvements
+are attributable to the adaptive graph penalty rather than parameter
+overfitting.
+\end{abstract}
+
+%% ---- Keywords (1-7, ESWA requirement) ----
+%% ---- Keywords (1-7, ESWA requirement) ----
+
+
+\begin{keywords}
+portfolio governance \sep
+instability detection \sep
+Graph-regularized CVaR  \sep
+shrinkage estimation \sep
+explainable AI \sep
+drawdown protection  \sep
+Graph-regularized CVaR   \sep
+Multi-agent systems  \sep
+Portfolio governance  \sep
+Contagion centrality  \sep
+Explainable AI  \sep
+Human-in-the-loop  \sep
+Systemic risk  \sep
+\end{keywords}
+\maketitle
+
+  %%==============================================================
+  %% BODY SECTIONS
+  %%==============================================================
+
+  \input{sections/introduction}
+  \input{sections/literature-review}
+  \input{sections/Mathematical-Formulation}
+  \input{sections/System-Architecture}
+  \input{sections/Experimental-Design}
+  \input{sections/Results-and-Discussion}
+  \input{sections/limitations}
+  \input{sections/conclusion}
+
+  %%==============================================================
+  %% MANDATORY ESWA SECTIONS — before \bibliography
+  %%==============================================================
+
+  \section*{CRediT Authorship Contribution Statement}
+
+  \textbf{K J Subramanyam:} Conceptualization, Methodology, Software, Formal analysis,
+  Data curation, Writing~-- original draft, Writing~-- review and editing, Visualization,
+  Investigation.
+
+  \section*{Declaration of Competing Interests}
+
+  The author declares that he has no known competing financial interests or personal
+  relationships that could have appeared to influence the work reported in this paper.
+
+  \section*{Funding}
+
+  This research did not receive any specific grant from funding agencies in the
+  public, commercial, or not-for-profit sectors.
+
+  \section*{Data Availability}
+
+  Replication code, data retrieval scripts, and a reproducibility notebook regenerating
+  all tables and figures are publicly available at \url{https://github.com/jithendra259/fintech_chatbotk}.
+  Daily price data are retrieved from Yahoo Finance via the open-source \texttt{yfinance}
+  Python library and are freely accessible for research purposes.
+
+  \section*{Declaration of Generative AI and AI-Assisted Technologies in the
+  Manuscript Preparation Process}
+
+  During the preparation of this work the author used an AI language model to
+  assist with manuscript structuring, \LaTeX{} formatting, and language editing.
+  After using this tool, the author reviewed and edited all content as needed and
+  takes full responsibility for the content of the published article.
+
+  %%==============================================================
+  %% BIBLIOGRAPHY
+  %%
+  %%  FIX 2: elsarticle-harv produces APA author-year output.
+  %%          This is the correct style for ESWA (APA 7th edition).
+  %%          cas-model2-names.bst produces NUMBERED output and
+  %%          WILL cause references to disappear with authoryear natbib.
+  %%
+  %%  FIX 3: references.bib must be in the Overleaf ROOT folder
+  %%          (same level as main.tex), not inside any subfolder.
+  %%          If you store it as bib/references.bib, change the
+  %%          argument below to {bib/references}.
+  %%
+  %%  AFTER EDITING THIS FILE IN OVERLEAF:
+  %%    Do NOT just click Recompile.
+  %%    Click the dropdown arrow > "Recompile from scratch"
+  %%    to force the full BibTeX pass.
+  %%==============================================================
+
+  \bibliographystyle{elsarticle-harv}
+  \bibliography{references}
+\end{document}

@@ -1,0 +1,80 @@
+
+Acharya,V.V.,Pedersen,L.H.,Philippon,T.,Richardson,M.,2017. Measuringsystemicrisk. ReviewofFinancialStudies30,2–47. doi:10.1093/
+rfs/hhw088.
+Adadi, A., Berrada, M., 2018. Peeking inside the black-box: A survey on explainable artificial intelligence (XAI). IEEE Access 6, 52138–52160.
+doi:10.1109/ACCESS.2018.2870052.
+Ang, A., Bekaert, G., 2002. International asset allocation with regime shifts. Review of Financial Studies 15, 1137–1187. doi:10.1093/rfs/15.
+4.1137.
+Ang, A., Bekaert, G., 2004. How do regimes affect asset allocation? Financial Analysts Journal 60, 86–99. doi:10.2469/faj.v60.n2.2504.
+Arrieta, A.B., Díaz-Rodríguez, N., Del Ser, J., Bennetot, A., Tabik, S., Herrera, F., 2020. Explainable artificial intelligence (XAI): Concepts,
+taxonomies, opportunities and challenges. Information Fusion 58, 82–115. doi:10.1016/j.inffus.2019.12.012.
+BaselCommitteeonBankingSupervision,2011. BaselIII:Aglobalregulatoryframeworkformoreresilientbanksandbankingsystems. Technical
+Report. Bank for International Settlements. Basel. URL:https://www.bis.org/publ/bcbs189.pdf.
+Best, M.J., Grauer, R.R., 1991. On the sensitivity of mean-variance-efficient portfolios to changes in asset means. Review of Financial Studies 4,
+315–342. doi:10.1093/rfs/4.2.315.
+Billio, M., Getmansky, M., Lo, A.W., Pelizzon, L., 2012. Econometric measures of connectedness and systemic risk in the finance and insurance
+sectors. Journal of Financial Economics 104, 535–559. doi:10.1016/j.jfineco.2011.12.010.
+Bollerslev, T., 1986. Generalized autoregressive conditional heteroskedasticity. Journal of Econometrics 31, 307–327. doi:10.1016/
+0304-4076(86)90063-1.
+Chopra, V.K., Ziemba, W.T., 1993. The effect of errors in means, variances and covariances on optimal portfolio choice. Journal of Portfolio
+Management 19, 6–11. doi:10.3905/jpm.1993.409440.
+Cont, R., 2001. Empirical properties of asset returns: Stylized facts and statistical issues. Quantitative Finance 1, 223–236. doi:10.1080/
+713665670.
+Costa, G., Kwon, R.H., 2019. Risk parity portfolio optimization under a Markov regime-switching framework. Quantitative Finance 19, 453–471.
+doi:10.1080/14697688.2018.1486701.
+DeMiguel,V.,Garlappi,L.,Uppal,R.,2009. Optimalversusnaivediversification:Howinefficientisthe1/Nportfoliostrategy? ReviewofFinancial
+Studies 22, 1915–1953. doi:10.1093/rfs/hhm075.
+Doshi-Velez, F., Kim, B., 2017. Towards a rigorous science of interpretable machine learning. arXiv preprint arXiv:1702.08608 URL:https:
+//arxiv.org/abs/1702.08608.
+Engle, R.F., 1982. Autoregressive conditional heteroskedasticity with estimates of the variance of UK inflation. Econometrica 50, 987–1008.
+doi:10.2307/1912773.
+EuropeanParliament,2014. Directive2014/65/EUonmarketsinfinancialinstruments(MiFIDII),Article25. URL:https://eur-lex.europa.
+eu/legal-content/EN/TXT/?uri=CELEX:32014L0065. official Journal of the European Union, L 173, 349–496.
+European Parliament, 2016. Regulation (EU) 2016/679 (GDPR), Article 22. URL:https://gdpr-info.eu/art-22-gdpr/. official Journal of
+the European Union, L 119, 1–88.
+Guidolin, M., Timmermann, A., 2007. Asset allocation under multivariate regime switching. Journal of Economic Dynamics and Control 31,
+3503–3544. doi:10.1016/j.jedc.2006.11.004.
+Hamilton, J.D., 1989. A new approach to the economic analysis of nonstationary time series and the business cycle. Econometrica 57, 357–384.
+doi:10.2307/1912559.
+James, W., Stein, C., 1961. Estimation with quadratic loss, in: Proceedings of the 4th Berkeley Symposium on Mathematical Statistics and
+Probability. University of California Press, Berkeley. volume 1, pp. 361–379. URL:https://projecteuclid.org/euclid.bsmsp/
+1200512173.
+Jorion,P.,1986. Bayes-Steinestimationforportfolioanalysis. JournalofFinancialandQuantitativeAnalysis21,279–292. doi:10.2307/2331042.
+Ledoit, O., Wolf, M., 2004a. Honey, I shrunk the sample covariance matrix. Journal of Portfolio Management 30, 110–119. doi:10.3905/jpm.
+2004.110.
+Ledoit,O.,Wolf,M.,2004b. Awell-conditionedestimatorforlarge-dimensionalcovariancematrices. JournalofMultivariateAnalysis88,365–411.
+doi:10.1016/S0047-259X(03)00096-4.
+Ledoit,O.,Wolf,M.,2017. Nonlinearshrinkageofthecovariancematrixforportfolioselection:MarkowitzmeetsGoldilocks. ReviewofFinancial
+Studies 30, 4349–4388. doi:10.1093/rfs/hhx052.
+Li, Y., Wang, J., Cao, J., 2023. Large language models in finance: A survey. arXiv preprint arXiv:2311.10723 URL:https://arxiv.org/abs/
+2311.10723.
+Lo, A.W., 2002. The statistics of Sharpe ratios. Financial Analysts Journal 58, 36–52. doi:10.2469/faj.v58.n4.2453.
+Longin, F., Solnik, B., 2001. Extreme correlation of international equity markets. Journal of Finance 56, 649–676. doi:10.1111/0022-1082.
+00340.
+Markowitz, H., 1952. Portfolio selection. Journal of Finance 7, 77–91. doi:10.2307/2975974.
+Michaud, R.O., 1989. The Markowitz optimization enigma: Is ‘optimized’ optimal? Financial Analysts Journal 45, 31–42. doi:10.2469/faj.
+v45.n1.31.
+Nystrup, P., Boyd, S., Lindström, E., Madsen, H., 2019. Multi-period portfolio selection with drawdown control. Annals of Operations Research
+282, 245–271. doi:10.1007/s10479-017-2619-8.
+Roncalli, T., 2013. Introduction to Risk Parity and Budgeting. CRC Press, Boca Raton.
+Wang,M.,Lin,Y.,Mikhelson,I.,2020. Regime-switchingfactorinvestingwithhiddenMarkovmodels. JournalofRiskandFinancialManagement
+13, 311. doi:10.3390/jrfm13120311.
+Wooldridge, M., 2009. An Introduction to MultiAgent Systems. 2nd ed., Wiley, Chichester.
+K J Subramanyam:Preprint submitted to ElsevierPage 24 of 25
+
+Supervisory Portfolio Governance Framework
+Wu, S., Irsoy, O., Lu, S., Dabravolski, V., Dredze, M., Gehrmann, S., Kambadur, P., Rosenberg, D., Mann, G., 2023. BloombergGPT: A large
+language model for finance. arXiv preprint arXiv:2303.17564 URL:https://arxiv.org/abs/2303.17564.
+Zhou,Z.,Liu,B.,Guo,C.,Jiang,D.,2024. FinAgent:Amultimodalfoundationagentforfinancialtrading. arXivpreprintarXiv:2402.18485URL:
+https://arxiv.org/abs/2402.18485.
+K J Subramanyam:Preprint submitted to ElsevierPage 25 of 25
+
+Supervisory Portfolio Governance Framework
+Figure 2:Complete architecture of the Supervisory Portfolio Governance Framework. The system comprises four functional
+layers coordinated by a central Orchestrator (main.py):Layer 1(Data) ingests OHLCV prices and computes log-returns
+(A1–A2);Layer 2(Detection) applies shrinkage estimation and computes the Composite Instability Index𝐼 𝑡 (A3–A4);
+Layer 3(Decision) applies the deterministic Regime Operator(𝐼 𝑡), optimises portfolio weights, and commits the
+immutable governance record 𝑡 (A5–A6–A7);Layer 4(Explanation) provides on-demand natural-language narration of
+each governance decision via a locally deployed LLM with structural read-only access to𝑡. The thick red cross denotes
+the structural isolation boundary: the LLM has no write path to any upstream agent.
+K J Subramanyam:Preprint submitted to ElsevierPage 26 of 25

@@ -1,0 +1,6 @@
+Rolling windows created: 5
+{'train_start': 2015, 'train_end': 2019, 'test_start': 2020, 'test_end': 2020}
+{'train_start': 2016, 'train_end': 2020, 'test_start': 2021, 'test_end': 2021}
+{'train_start': 2017, 'train_end': 2021, 'test_start': 2022, 'test_end': 2022}
+{'train_start': 2018, 'train_end': 2022, 'test_start': 2023, 'test_end': 2023}
+{'train_start': 2019, 'train_end': 2023, 'test_start': 2024, 'test_end': 2024}

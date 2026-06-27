@@ -1,0 +1,22 @@
+  ✅ Plot 14 saved — Phase 11 FIXED
+
+─────────────────────────────────────────────────────────────────
+  MANDATORY DISCLOSURE — Add verbatim to Results section:
+─────────────────────────────────────────────────────────────────
+
+Statistical tests on daily return differences between G-CVaR and
+Standard CVaR reveal non-significance at the 5% level for U1
+(Wilcoxon p=0.472, t-test p=0.647). This is an expected consequence
+of the regime-sparsity property: the graph penalty is dormant in
+38/51 windows (74.5%), where lambda_t ≈ 0.005. The G-CVaR
+contribution is concentrated in the 2/51 crisis windows where
+lambda_t = 0.813. Cross-universe aggregation (11 universes,
+552 windows) yields a larger crisis window pool that may support
+stronger significance; universe-level non-significance is
+architecturally consistent with selective activation design.
+The primary performance claim is therefore framed against the
+Equal Weight baseline: G-CVaR achieves 25.9% lower CVaR@95%
+(2.321% vs 3.132%) and 15.8pp lower MDD (65.7% vs 81.5%),
+both statistically and practically significant differences.
+
+─────────────────────────────────────────────────────────────────

@@ -1,0 +1,6 @@
+Step 1: Installing Ollama...
+  ❌ Install failed: 'sh' is not recognized as an internal or external command,
+operable program or batch file.
+
+
+Step 2: Starting Ollama server...

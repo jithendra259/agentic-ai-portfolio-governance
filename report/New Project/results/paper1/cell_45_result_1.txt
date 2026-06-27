@@ -1,0 +1,4 @@
+regime
+shrunk_mv       4
+equal_weight    1
+Name: count, dtype: int64

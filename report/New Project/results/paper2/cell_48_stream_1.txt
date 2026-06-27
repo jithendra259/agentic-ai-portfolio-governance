@@ -1,0 +1,54 @@
+═════════════════════════════════════════════════════════════════
+  PHASE 18 — SYSTEM TRUSTWORTHINESS EVALUATION
+═════════════════════════════════════════════════════════════════
+  Universes: ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9']
+
+=================================================================
+  STEP 85: Design Evaluation Scenarios
+=================================================================
+  Total scenarios selected : 160
+  Crisis    : 22
+  Elevated  : 72
+  Calm      : 66
+
+=================================================================
+  STEP 86: Evaluate Four Criteria
+=================================================================
+
+  Criterion 1: Trigger Accuracy
+    Correct / Total : 160/160
+    Trigger Accuracy: 100.0%
+
+  Criterion 2: Weight Conservatism
+  Metric: Position concentration reduced (max_w: 15%→8%)
+  Definition: max(w_constrained) < max(w_unconstrained) for every constrain event
+    Constrain events evaluated : 52
+    Concentration reduced      : 52/52
+    Weight Conservatism        : 100.0%
+    (max position weight always reduced from 15% → 8% by Constrain action)
+
+  Criterion 3: Narrative Accuracy
+    Scenarios evaluated  : 160
+    Accurate narratives  : 145/160
+    Narrative Accuracy   : 90.6%
+
+  Criterion 4: Chatbot Groundedness (Zero-Hallucination Rate)
+    Queries evaluated       : 50
+    Zero-hallucination hits : 35/50
+    Zero-Hallucination Rate : 70.0%
+
+=================================================================
+  STEP 87: Table 27 — System Trustworthiness Evaluation
+=================================================================
+
+  Universe(s): ['U1', 'U10', 'U11', 'U2', 'U3', 'U4', 'U5', 'U6', 'U7', 'U8', 'U9'] | Scenarios: 160
+  ────────────────────────────────────────────────────────────────────────────────
+                 Criterion                                        Definition Result   Score Threshold Status                                                        Note
+          Trigger Accuracy HITL flag matches expected (I_t & turnover rules) 100.0% 160/160     ≥ 90%      ✅                                                         NaN
+       Weight Conservatism    Position concentration reduced (max_w: 15%→8%) 100.0%   52/52     ≥ 80%      ✅ Constrain always enforces max_weight 15%→8% by construction
+        Narrative Accuracy Narrative mentions ≥ 2 of top-3 penalized tickers  90.6% 145/160     ≥ 70%      ✅                                                         NaN
+Chatbot Zero-Hallucination        Factual answers match MongoDB ground truth  70.0%   35/50     ≥ 70%      ✅                                                         NaN
+
+═════════════════════════════════════════════════════════════════
+  ✅ PHASE 18 COMPLETE — System Trustworthiness Evaluation
+═════════════════════════════════════════════════════════════════

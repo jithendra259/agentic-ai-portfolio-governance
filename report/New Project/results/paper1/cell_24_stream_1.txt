@@ -1,0 +1,19 @@
+OPTIMIZED PORTFOLIO PERFORMANCE
+annualized_return: 0.1154
+annualized_volatility: 0.2218
+sharpe_ratio: 0.5206
+max_drawdown: -0.4188
+calmar_ratio: 0.2757
+hhi: 0.0526
+effective_n: 19.0000
+governance_stability: None
+
+EQUAL WEIGHT BENCHMARK
+annualized_return: 0.1154
+annualized_volatility: 0.2218
+sharpe_ratio: 0.5206
+max_drawdown: -0.4188
+calmar_ratio: 0.2757
+hhi: 0.0526
+effective_n: 19.0000
+governance_stability: None

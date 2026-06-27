@@ -1,0 +1,41 @@
+════════════════════════════════════════════════════════════
+  PATCH: Fixing all 5 identified issues
+════════════════════════════════════════════════════════════
+
+  backtest_results documents: 51
+  Sample doc keys: ['_id', 'universe_id', 'window_id', 'window_number', 'start_date', 'end_date', 'I_t', 'lambda_t', 'turnover', 'hitl_required', 'weights', 'solver_status', 'solve_time_s']
+  Has tickers: False
+  Has hitl_crisis: False
+
+  Patching 51 existing documents...
+  ✅ Patched 51 documents
+
+  Syncing I_t + crisis_overlap to blackboard_mpi...
+  ✅ Synced 51 blackboard documents with I_t
+
+  Setting HITL status on blackboard...
+  ✅ HITL status set for 51 windows
+
+────────────────────────────────────────────────────────────
+  VERIFICATION
+────────────────────────────────────────────────────────────
+  backtest_results keys: ['I_t', '_id', 'crisis_overlap', 'end_date', 'hitl_crisis', 'hitl_required', 'hitl_turnover', 'lambda_t', 'solve_time_s', 'solver_status', 'start_date', 'tickers', 'turnover', 'universe_id', 'weights', 'window_id', 'window_number']
+  tickers present: True → ['AAPL', 'ADBE', 'ADI', 'AMAT']
+  hitl_crisis: False
+  turnover (flat): float = 0.0
+
+  Blackboard docs with numeric I_t: 51/51
+  Pending HITL events: 3
+
+  W09 check:
+    I_t           = 1.0000
+    lambda_t      = 0.8175744760288418
+    hitl_required = True
+    hitl_crisis   = True
+    hitl_turnover = False
+    turnover      = 0.3111482172719844
+
+════════════════════════════════════════════════════════════
+  ✅ ALL PATCHES APPLIED
+  Now re-run: Cell 20 (Agent 4) → Cell 22 (HITL)
+════════════════════════════════════════════════════════════

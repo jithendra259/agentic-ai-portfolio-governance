@@ -1,0 +1,74 @@
+
+════════════════════════════════════════════════════════════
+  AGENT 2 — CONTAGION ANALYSIS GRAPH
+  Universe: U1
+════════════════════════════════════════════════════════════
+
+============================================================
+  STEP 18: Read from Blackboard — [U1]
+============================================================
+  Windows loaded   : 51
+  Windows skipped  : 0 (empty holdings)
+
+  Sample — W01:
+    Tickers: ['AAPL', 'ADBE', 'ADI', 'AMAT', 'AMD']...
+    AAPL: 10 institutions | top=('Vanguard Group Inc', 0.0972)
+    ADBE: 10 institutions | top=('Vanguard Group Inc', 0.1021)
+    ADI: 10 institutions | top=('Vanguard Group Inc', 0.1042)
+
+============================================================
+  STEPS 19–22: Build Graphs + Write Results
+============================================================
+  Processed windows  : 51
+  Eigenvector OK     : 51
+  Fallback (degree)  : 0
+
+  ── Centrality Verification (Window 1) ──
+    min  : 0.201481
+    max  : 0.257680
+    std  : 0.011781
+    ✅ Centrality varies across tickers.
+
+  Per-ticker scores (W01):
+    LRCX    : 0.257680
+    INTU    : 0.255289
+    ADI     : 0.252189
+    MSFT    : 0.246750
+    NVDA    : 0.245554
+    KLAC    : 0.245302
+    MU      : 0.245008
+    CSCO    : 0.244856
+    IBM     : 0.244605
+    CRM     : 0.244340
+    QCOM    : 0.241915
+    TXN     : 0.241420
+    AMD     : 0.241207
+    AAPL    : 0.240457
+    ADBE    : 0.238116
+    AMAT    : 0.232070
+    ORCL    : 0.201481
+
+============================================================
+  STEP 23: Tables 5 & 6 + Plots 3 & 4
+============================================================
+
+  TABLE 5: Graph Statistics per Universe
+  ─────────────────────────────────────────────────────────────────
+Universe  Avg Stock Nodes  Avg Inst Nodes  Avg Edges (bip)  Avg Density Conv. Rate Fallback Rate
+      U1             17.0            24.0            170.0       0.2073     100.0%          0.0%
+
+  TABLE 6: Top 10 Highest Centrality Stocks
+  ─────────────────────────────────────────────
+ Rank Ticker Universe  Mean c_t
+    1   LRCX       U1  0.257680
+    2   INTU       U1  0.255289
+    3    ADI       U1  0.252189
+    4   MSFT       U1  0.246750
+    5   NVDA       U1  0.245554
+    6   KLAC       U1  0.245302
+    7     MU       U1  0.245008
+    8   CSCO       U1  0.244856
+    9    IBM       U1  0.244605
+   10    CRM       U1  0.244340
+
+  Plot 3: Bipartite graph for W01 (I_t=0.0000)

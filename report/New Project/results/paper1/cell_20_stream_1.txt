@@ -1,0 +1,5 @@
+Detected regime: equal_weight
+Equal-weight activated: True
+Margin from threshold: 3.2036
+Reason: Instability I_t=4.2036 exceeds threshold theta_H=1.0. Market stress is EXTREME. Equal Weight activated — shrinkage estimates unreliable under current conditions. Capital protection prioritised over optimisation.
+Governance note: Regime Operator R(I_t): Equal Weight if I_t > 1.0 else ShrunkMV. Current margin from threshold: 3.2036. This implements Definition 2 of the Supervisory Portfolio Governance Framework.

@@ -1,0 +1,11 @@
+Fix 1: Patching lambda_t=None in xai_audits...
+  ✅ Patched 0 xai_audit docs
+  ✅ Patched 0 blackboard docs
+
+Fix 2: Running Phase 11 with corrected data reconstruction...
+  Reconstructed: 12852 paired observations
+
+  TABLE 13: Statistical Test Results
+  ───────────────────────────────────────────────────────────────────────────
+Universe  N Obs  SW p-value Normal?  t-stat  t-test p  Wilcoxon W  Wilcoxon p Primary Test      Conclusion
+      U1  12852         0.0      No  0.4582    0.6468  40839982.5      0.2776     Wilcoxon Not significant

@@ -1,0 +1,10 @@
+
+Running universe: U1_US_LargeCap
+
+Running universe: U2_European_ETFs
+
+Running universe: U3_AsiaPacific_ETFs
+
+Running universe: U4_US_Sectors
+
+Running universe: U5_MultiAsset
