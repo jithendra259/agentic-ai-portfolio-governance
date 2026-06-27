@@ -7,11 +7,7 @@ from typing import Any, Optional
 
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.routing_rules import build_router_plan
-from src.rag.rag_tools import (
-    compare_common_institutional_holders,
-    retrieve_graph_rag_context,
-    search_methodology_knowledge_base,
-)
+from src.rag.rag_tools import compare_common_institutional_holders, retrieve_graph_rag_context
 
 
 logger = logging.getLogger(__name__)
@@ -86,6 +82,10 @@ class IntentRouter:
 
         if intent_match.intent == IntentType.STOCK_SNAPSHOT:
             tickers = intent_match.parameters.get("tickers", [])
+            logger.info(
+                "Choosing fundamentals route because the classifier found an explicit stock snapshot intent; tickers=%s",
+                tickers,
+            )
             raw_snapshot = self._invoke("get_stock_database_snapshot", {"tickers": tickers})
             return self._success(
                 intent_match,
@@ -264,6 +264,8 @@ class IntentRouter:
         return json.dumps(docs, indent=2)
 
     def _search_methodology(self, user_message: str) -> str:
+        from src.rag.rag_tools import search_methodology_knowledge_base
+
         raw_func = getattr(search_methodology_knowledge_base, "func", None)
         if callable(raw_func):
             return raw_func(question=user_message)

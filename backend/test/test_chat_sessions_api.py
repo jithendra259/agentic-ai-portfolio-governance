@@ -18,10 +18,21 @@ fake_orchestrator.PRIMARY_OLLAMA_MODEL = "primary-model"
 fake_orchestrator.memory_manager = None
 fake_orchestrator.portfolio_assistant = None
 fake_orchestrator.streaming_portfolio_assistant = None
+fake_orchestrator.get_postgres_status = lambda: "connected"
+previous_orchestrator_module = sys.modules.get("src.orchestrator.chatbot_orchestrator")
 sys.modules["src.orchestrator.chatbot_orchestrator"] = fake_orchestrator
 
 from api.main import app
 from src.utils.crypto_utils import create_auth_token
+
+if previous_orchestrator_module is None:
+    sys.modules.pop("src.orchestrator.chatbot_orchestrator", None)
+else:
+    sys.modules["src.orchestrator.chatbot_orchestrator"] = previous_orchestrator_module
+
+orchestrator_package = sys.modules.get("src.orchestrator")
+if orchestrator_package is not None and getattr(orchestrator_package, "chatbot_orchestrator", None) is fake_orchestrator:
+    delattr(orchestrator_package, "chatbot_orchestrator")
 
 
 class FakeMemoryManager:
@@ -265,6 +276,71 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertTrue(fake_memory.append_calls)
         self.assertTrue(all(call["user_id"] == "user-1" for call in fake_memory.append_calls))
         self.assertEqual(fake_memory.last_messages_user_id, "user-1")
+
+    def test_governance_scatter_followup_uses_committed_run_not_fundamentals(self):
+        import api.main as main
+
+        session_id = "healthcare-governance-scatter"
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        main.memory_manager = fake_memory
+        main.session_memory_store.delete_session(session_id)
+        main.session_memory_store.update_state(
+            session_id,
+            {"active_universe": "Healthcare"},
+        )
+        main._store_governance_tool_result(
+            session_id,
+            json.dumps(
+                {
+                    "status": "success",
+                    "target_date": "2026-06-20",
+                    "valid_tickers": ["JNJ", "PFE", "UNH"],
+                    "systemic_risk": {"scores": {"JNJ": 0.31, "PFE": 0.47, "UNH": 0.22}},
+                    "optimization": {
+                        "weights": {"JNJ": 0.55, "PFE": 0.0, "UNH": 0.45},
+                        "instability_index": 0.18,
+                        "lambda_t": 0.7,
+                    },
+                }
+            ),
+        )
+
+        try:
+            client = TestClient(app)
+            clarify = client.post(
+                "/chat",
+                json={"session_id": session_id, "user_message": "plot scatter plot", "model": None},
+            )
+            axes = client.post(
+                "/chat",
+                json={
+                    "session_id": session_id,
+                    "user_message": "systemic risk score vs portfolio weight",
+                    "model": None,
+                },
+            )
+            repeat = client.post(
+                "/chat",
+                json={"session_id": session_id, "user_message": "plot the scatter plot", "model": None},
+            )
+        finally:
+            main.memory_manager = original_memory_manager
+
+        self.assertEqual(clarify.status_code, 200)
+        self.assertIn("which governance metrics", clarify.json()["response"].lower())
+        for response in (axes, repeat):
+            self.assertEqual(response.status_code, 200)
+            text = response.json()["response"]
+            self.assertIn("Systemic Risk Score vs Portfolio Weight", text)
+            self.assertNotIn("MongoDB", text)
+            self.assertNotIn("Beta", text)
+            self.assertNotIn("Forward P/E", text)
+            plot_id = text.split("__PLOTSPEC__:", 1)[1]
+            plot = main.GLOBAL_PLOT_DATA[plot_id]
+            self.assertEqual(plot["data_source"], "latest_governance_run")
+            self.assertEqual(plot["series"][0]["data"][1]["id"], "PFE")
+            self.assertEqual(plot["series"][0]["data"][1]["y"], 0.0)
 
     def test_chat_start_dispatches_background_run_and_records_status(self):
         import api.main as main

@@ -5,9 +5,9 @@ import re
 import time
 import warnings
 from functools import lru_cache
+from importlib import import_module
 from typing import Optional
 
-import cvxpy as cp
 import networkx as nx
 import numpy as np
 import pandas as pd
@@ -23,7 +23,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
-from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 
 load_dotenv()
@@ -33,10 +32,46 @@ MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "Stock_data"
 COLLECTION_NAME = "ticker"
 logger = logging.getLogger(__name__)
-memory_manager = MongoMemoryManager()
-memory_manager.setup_indexes()
 LOOKUP_CACHE_TTL_SECONDS = 300
 _LOOKUP_CACHE = {}
+_MEMORY_MANAGER = None
+
+
+class _LazyModule:
+    def __init__(self, module_name: str):
+        self.module_name = module_name
+        self._module = None
+
+    def _load(self):
+        if self._module is None:
+            self._module = import_module(self.module_name)
+        return self._module
+
+    def __getattr__(self, name: str):
+        return getattr(self._load(), name)
+
+
+cp = _LazyModule("cvxpy")
+
+
+def _get_memory_manager() -> MongoMemoryManager:
+    global _MEMORY_MANAGER
+    if _MEMORY_MANAGER is None:
+        _MEMORY_MANAGER = MongoMemoryManager()
+    return _MEMORY_MANAGER
+
+
+class _LazyMemoryManager:
+    def __getattr__(self, name: str):
+        return getattr(_get_memory_manager(), name)
+
+
+memory_manager = _LazyMemoryManager()
+
+
+def _generate_financial_plot():
+    from src.agents.generate_dynamic_plot import generate_financial_plot
+    return generate_financial_plot
 
 
 @lru_cache(maxsize=1)
@@ -427,12 +462,96 @@ def _build_network_analysis_payload(docs_by_ticker: dict[str, dict], valid_ticke
     }
 
 
+def _annual_to_daily_return(annual_return: float, periods: int = 252) -> float:
+    value = float(annual_return)
+    if value <= -1.0:
+        raise ValueError("annual return target must be greater than -1")
+    return float((1.0 + value) ** (1.0 / periods) - 1.0)
+
+
+def _portfolio_audit_metrics(
+    weights: dict[str, float],
+    graph_scores: Optional[dict[str, float]],
+    previous_weights: Optional[dict[str, float]],
+    max_weight_constraint: float,
+) -> dict:
+    current = pd.Series(weights, dtype=float).clip(lower=0.0)
+    total = float(current.sum())
+    if current.empty or total <= 0:
+        return {
+            "hhi": None,
+            "effective_number_of_holdings": None,
+            "graph_exposure": None,
+            "turnover": None,
+            "max_observed_weight": None,
+            "weight_cap_utilization": None,
+        }
+    current = current / total
+    hhi = float(np.square(current).sum())
+    graph = pd.Series(graph_scores or {}, dtype=float).reindex(current.index).fillna(0.0)
+    turnover = None
+    if previous_weights:
+        previous = pd.Series(previous_weights, dtype=float).clip(lower=0.0)
+        previous = previous.reindex(current.index).fillna(0.0)
+        previous_total = float(previous.sum())
+        if previous_total > 0:
+            previous = previous / previous_total
+            turnover = float(0.5 * (current - previous).abs().sum())
+    maximum = float(current.max())
+    return {
+        "hhi": hhi,
+        "effective_number_of_holdings": float(1.0 / hhi) if hhi > 0 else None,
+        "graph_exposure": float(current @ graph),
+        "turnover": turnover,
+        "max_observed_weight": maximum,
+        "weight_cap_utilization": (
+            float(maximum / max_weight_constraint) if max_weight_constraint > 0 else None
+        ),
+    }
+
+
+_LIGHTWEIGHT_OPTIMIZATION_FIELDS = {
+    "optimization_type",
+    "risk_tolerance",
+    "weights",
+    "expected_annualized_return",
+    "expected_cvar_95",
+    "target_annual_return_floor",
+    "target_daily_return_floor",
+    "target_return_constraint_used",
+    "fallback_applied",
+    "fallback_reason",
+    "solver_name",
+    "solver_status",
+    "objective_value",
+    "max_weight_constraint",
+    "max_observed_weight",
+    "weight_cap_utilization",
+    "hhi",
+    "effective_number_of_holdings",
+    "turnover",
+    "graph_exposure",
+    "instability_index",
+    "lambda_t",
+    "effective_window_start",
+    "effective_window_end",
+    "historical_pricing_dates",
+    "graph_scores_used",
+}
+
+
+def _lightweight_optimization_payload(payload: Optional[dict]) -> dict:
+    source = payload if isinstance(payload, dict) else {}
+    return {key: source.get(key) for key in _LIGHTWEIGHT_OPTIMIZATION_FIELDS if key in source}
+
+
 def _build_optimization_payload(
     overlapping_prices: pd.DataFrame,
     effective_dates: dict[str, str],
     target_date: str,
     risk_tolerance: str = "moderate",
     network_scores: Optional[dict[str, float]] = None,
+    previous_weights: Optional[dict[str, float]] = None,
     lambda_max: float = 1.0,
     k: float = 10.0,
     i_thresh: float = 0.85,
@@ -502,7 +621,13 @@ def _build_optimization_payload(
         "aggressive": 75,
     }
     target_annual_return = float(np.percentile(mean_annual_returns, percentile_map[profile]))
-    target_daily_return = target_annual_return / 252.0
+    try:
+        target_daily_return = _annual_to_daily_return(target_annual_return)
+    except ValueError as exc:
+        return {
+            "status": "error",
+            "message": f"Unable to use the annual return target for {target_date}: {exc}.",
+        }
 
     weights = cp.Variable(num_assets)
     alpha = cp.Variable()
@@ -523,63 +648,54 @@ def _build_optimization_payload(
         mean_daily_returns @ weights >= target_daily_return,
     ]
 
-    problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
+    solver_name = None
+    solver_status = None
 
-    solved = False
-    for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
-        try:
-            problem.solve(solver=solver, verbose=False)
-            if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-                solved = True
-                break
-        except Exception:
-            continue
+    def solve_with(active_constraints):
+        nonlocal solver_name, solver_status
+        candidate = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), active_constraints)
+        for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
+            try:
+                candidate.solve(solver=solver, verbose=False)
+            except Exception:
+                continue
+            solver_status = str(candidate.status or "")
+            if candidate.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE} and weights.value is not None:
+                solver_name = str(solver)
+                return candidate, True
+        solver_status = str(candidate.status or solver_status or "solver_error")
+        return candidate, False
 
-    # Fallback 1: Relax return constraint to minimum daily return
+    problem, solved = solve_with(constraints)
+    fallback_applied = False
+    fallback_reason = None
+    target_return_constraint_used = True
+
     if not solved or weights.value is None:
-        min_daily_return = float(mean_daily_returns.min())
-        constraints = [
+        fallback_applied = True
+        fallback_reason = "profile return floor was infeasible; solved without a return-floor constraint"
+        target_return_constraint_used = False
+        capped_fallback_constraints = [
             cp.sum(weights) == 1,
             weights >= 0,
             weights <= max_weight_limit,
             tail_excess >= losses - alpha,
-            mean_daily_returns @ weights >= min_daily_return,
         ]
-        problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
-        for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
-            try:
-                problem.solve(solver=solver, verbose=False)
-                if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-                    solved = True
-                    break
-            except Exception:
-                continue
-
-    # Fallback 2: Remove upper bound on weights
-    if not solved or weights.value is None:
-        min_daily_return = float(mean_daily_returns.min())
-        constraints = [
-            cp.sum(weights) == 1,
-            weights >= 0,
-            tail_excess >= losses - alpha,
-            mean_daily_returns @ weights >= min_daily_return,
-        ]
-        problem = cp.Problem(cp.Minimize(cvar_95 + graph_penalty), constraints)
-        for solver in [cp.CLARABEL, cp.OSQP, cp.SCS]:
-            try:
-                problem.solve(solver=solver, verbose=False)
-                if problem.status in {cp.OPTIMAL, cp.OPTIMAL_INACCURATE}:
-                    solved = True
-                    break
-            except Exception:
-                continue
+        problem, solved = solve_with(capped_fallback_constraints)
 
     if not solved or weights.value is None:
         return {
             "status": "error",
             "message": (
-                f"Historical CVaR optimization could not find a stable solution for {target_date}. "
-                f"Solver status: {problem.status}."
+                f"Historical CVaR optimization could not find a capped solution for {target_date}. "
+                f"Solver status: {solver_status or problem.status}."
+            ),
+            "max_weight_constraint": round(max_weight_limit, 6),
+            "fallback_applied": fallback_applied,
+            "fallback_reason": (
+                "profile return floor was infeasible and no capped fallback solution was available"
+                if fallback_applied
+                else "no capped solution was available"
             ),
         }
 
@@ -595,6 +711,15 @@ def _build_optimization_payload(
         }
 
     optimal_weights = optimal_weights / optimal_weights.sum()
+    if float(optimal_weights.max()) > max_weight_limit + 1e-6:
+        return {
+            "status": "error",
+            "message": (
+                f"Historical CVaR optimization cleanup exceeded the maximum-weight constraint "
+                f"for {target_date}."
+            ),
+            "max_weight_constraint": round(max_weight_limit, 6),
+        }
     weights_map = {
         ticker: round(float(weight), 6)
         for ticker, weight in sorted(zip(asset_names, optimal_weights), key=lambda item: item[1], reverse=True)
@@ -608,6 +733,26 @@ def _build_optimization_payload(
     tail_losses = portfolio_losses[portfolio_losses >= var_95]
     expected_cvar_95 = float(tail_losses.mean()) if len(tail_losses) > 0 else var_95
 
+    graph_scores_used = {
+        ticker: round(float(score), 6)
+        for ticker, score in zip(asset_names, c_vector)
+    }
+    audit_metrics = _portfolio_audit_metrics(
+        weights=weights_map,
+        graph_scores=graph_scores_used,
+        previous_weights=previous_weights,
+        max_weight_constraint=max_weight_limit,
+    )
+    logger.info(
+        "Governance optimizer target_date=%s solver=%s status=%s cap=%.6f fallback=%s reason=%s",
+        target_date,
+        solver_name,
+        solver_status,
+        max_weight_limit,
+        fallback_applied,
+        fallback_reason or "none",
+    )
+
     return {
         "status": "success",
         "optimization_type": "graph_regularized_cvar",
@@ -616,13 +761,18 @@ def _build_optimization_payload(
         "expected_annualized_return": round(expected_annualized_return, 6),
         "expected_cvar_95": round(expected_cvar_95, 6),
         "target_annual_return_floor": round(target_annual_return, 6),
+        "target_daily_return_floor": round(target_daily_return, 10),
+        "target_return_constraint_used": target_return_constraint_used,
+        "fallback_applied": fallback_applied,
+        "fallback_reason": fallback_reason,
+        "solver_name": solver_name,
+        "solver_status": solver_status,
+        "max_weight_constraint": round(max_weight_limit, 6),
         "instability_index": round(instability_index, 6),
         "lambda_t": round(lambda_t, 6),
-        "graph_scores_used": {
-            ticker: round(float(score), 6)
-            for ticker, score in zip(asset_names, c_vector)
-        },
+        "graph_scores_used": graph_scores_used,
         "objective_value": round(float(problem.value), 6) if problem.value is not None else None,
+        "effective_window_start": overlapping_prices.index.min().strftime("%Y-%m-%d"),
         "effective_window_end": overlapping_prices.index.max().strftime("%Y-%m-%d"),
         "historical_pricing_dates": {
             ticker: effective_dates[ticker]
@@ -631,6 +781,7 @@ def _build_optimization_payload(
         },
         "correlation_matrix": correlation_matrix.to_dict(),
         "covariance_matrix": covariance_matrix.to_dict(),
+        **audit_metrics,
     }
 
 
@@ -668,7 +819,7 @@ def _generate_inline_governance_plots(
 
     for request in plot_requests:
         try:
-            plot_output = generate_financial_plot.invoke(
+            plot_output = _generate_financial_plot().invoke(
                 {
                     "data": request["data"],
                     "plot_type": request["plot_type"],
@@ -2194,6 +2345,7 @@ def run_full_governance_pipeline(
     tickers: list[str],
     target_date: str,
     risk_tolerance: str = "moderate",
+    previous_weights: Optional[dict[str, float]] = None,
     config: RunnableConfig = None,
 ) -> str:
     """
@@ -2314,6 +2466,7 @@ def run_full_governance_pipeline(
             target_date=target_date,
             risk_tolerance=risk_tolerance,
             network_scores=network_payload.get("scores", {}),
+            previous_weights=previous_weights,
         )
 
         optimization_succeeded = optimization_payload.get("status") == "success"
@@ -2343,13 +2496,7 @@ def run_full_governance_pipeline(
 
         lightweight_optimization = {}
         if optimization_succeeded:
-            lightweight_optimization = {
-                "weights": optimization_payload.get("weights", {}),
-                "expected_annualized_return": optimization_payload.get("expected_annualized_return"),
-                "expected_cvar_95": optimization_payload.get("expected_cvar_95"),
-                "instability_index": optimization_payload.get("instability_index"),
-                "lambda_t": optimization_payload.get("lambda_t"),
-            }
+            lightweight_optimization = _lightweight_optimization_payload(optimization_payload)
             instability_index = float(optimization_payload.get("instability_index", 0.0))
             lambda_t = float(optimization_payload.get("lambda_t", 0.0))
             weights = optimization_payload.get("weights", {})

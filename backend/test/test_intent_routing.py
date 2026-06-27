@@ -182,6 +182,18 @@ class IntentRouterTests(unittest.TestCase):
             },
         )
 
+    def test_fundamentals_route_logs_explicit_reason(self):
+        with self.assertLogs("src.intent.intent_router", level="INFO") as captured:
+            self.router.handle("tell me about the company for AAPL")
+
+        self.assertTrue(
+            any(
+                "fundamentals route" in line.lower()
+                and "explicit stock snapshot intent" in line.lower()
+                for line in captured.output
+            )
+        )
+
     def test_routes_sector_lookup_without_hitl(self):
         result = self.router.handle("Show me tech stocks")
         self.assertEqual(result["intent"], IntentType.GET_STOCKS_BY_SECTOR.value)

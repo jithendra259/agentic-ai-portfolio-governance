@@ -34,6 +34,13 @@ export default function SmartBarChartRenderer({ spec }) {
 
   const renderer = adapted.renderer || chooseRenderer(adapted.payload);
   const ChartComponent = adapted.usePremiumRenderer ? BarChartPremium : BarChart;
+  const animationSx = adapted.animation ? {
+    '& .MuiBarElement-root': {
+      animationDuration: adapted.animation.duration || '800ms',
+      animationDelay: adapted.animation.delay || '0s',
+      animationTimingFunction: adapted.animation.easing || 'ease-out',
+    },
+  } : {};
 
   return (
     <Box ref={chartRef} sx={{ width: '100%', minWidth: 0 }}>
@@ -49,6 +56,7 @@ export default function SmartBarChartRenderer({ spec }) {
         margin={adapted.margin}
         grid={adapted.grid}
         borderRadius={adapted.borderRadius}
+        skipAnimation={adapted.skipAnimation}
         slots={slotsConfig}
         slotProps={{
           legend: {
@@ -62,6 +70,7 @@ export default function SmartBarChartRenderer({ spec }) {
           '& .MuiChartsGrid-line': GRID_STYLE,
           '& .MuiBarLabel-root': { fill: '#fff', fontSize: 12, fontWeight: 800 },
           '& .MuiChartsLegend-label': { color: '#e5e7eb !important' },
+          ...animationSx,
         }}
       />
       <BarThresholdNotes thresholds={adapted.thresholds} />

@@ -111,6 +111,81 @@ class PlotRenderingTests(unittest.TestCase):
             {"x": "2020-01-03", "y": 0.02}
         ])
 
+    def test_generate_financial_plot_preserves_row_based_grouped_bar_payload(self, mock_mongo_class):
+        from src.agents.plot_store import GLOBAL_PLOT_DATA, GLOBAL_PLOT_IDS
+
+        mock_mongo = mock_mongo_class.return_value
+        mock_mongo.store_plot.return_value = False
+
+        result = generate_financial_plot.func(
+            plot_type="bar",
+            data={
+                "plot_id": "return_volatility_grouped_bar",
+                "chart_type": "bar",
+                "bar_mode": "grouped",
+                "x_axis": "ticker",
+                "y_axis": "return_percent",
+                "unit": "percent",
+                "sort": "descending",
+                "skipAnimation": True,
+                "animation": {"duration": "600ms", "easing": "ease-out"},
+                "series": [
+                    {"key": "return_percent", "label": "Return"},
+                    {"key": "volatility_percent", "label": "Volatility"},
+                ],
+                "data": [
+                    {"ticker": "AAPL", "return_percent": 12.1, "volatility_percent": 28.8},
+                    {"ticker": "MSFT", "return_percent": 10.4, "volatility_percent": 26.9},
+                ],
+            },
+            title="Return vs Volatility",
+        )
+
+        self.assertEqual(result, "Chart ready: Return vs Volatility")
+        spec = GLOBAL_PLOT_DATA[GLOBAL_PLOT_IDS["default"][0]]
+        self.assertEqual(spec["plot_type"], "bar")
+        self.assertEqual(spec["bar_mode"], "grouped")
+        self.assertEqual(spec["x_axis"], "ticker")
+        self.assertEqual(spec["series"][1]["key"], "volatility_percent")
+        self.assertTrue(spec["skipAnimation"])
+        self.assertEqual(spec["animation"]["duration"], "600ms")
+
+    def test_dense_row_based_bar_spec_uses_svg_batch_defaults(self, mock_mongo_class):
+        from src.agents.plot_store import GLOBAL_PLOT_DATA, GLOBAL_PLOT_IDS
+
+        mock_mongo = mock_mongo_class.return_value
+        mock_mongo.store_plot.return_value = False
+
+        result = generate_financial_plot.func(
+            plot_type="bar",
+            data={
+                "plot_id": "dense_grouped_bar",
+                "chart_type": "bar",
+                "bar_mode": "grouped",
+                "x_axis": "ticker",
+                "y_axis": "return_percent",
+                "unit": "percent",
+                "series": [
+                    {"key": "return_percent", "label": "Return"},
+                    {"key": "volatility_percent", "label": "Volatility"},
+                ],
+                "data": [
+                    {
+                        "ticker": f"T{index + 1}",
+                        "return_percent": index * 0.1,
+                        "volatility_percent": 20 + index * 0.05,
+                    }
+                    for index in range(260)
+                ],
+            },
+            title="Dense Return vs Volatility",
+        )
+
+        self.assertEqual(result, "Chart ready: Dense Return vs Volatility")
+        spec = GLOBAL_PLOT_DATA[GLOBAL_PLOT_IDS["default"][0]]
+        self.assertEqual(spec["renderer"], "svg-batch")
+        self.assertTrue(spec["skipAnimation"])
+
     def test_plot_us_economic_indicators_registers_plotspec(self, mock_mongo_class):
         mock_mongo = mock_mongo_class.return_value
         from src.agents.live_data_tools import plot_us_economic_indicators
@@ -347,6 +422,46 @@ class PlotRenderingTests(unittest.TestCase):
             self.assertIn("median", item)
             self.assertIn("q3", item)
             self.assertGreaterEqual(item["sample_size"], 5)
+
+    def test_common_analysis_plot_routes_default_price_spread_area(self, mock_mongo_class):
+        from src.agents.plot_store import GLOBAL_PLOT_DATA, GLOBAL_PLOT_IDS
+        from src.agents.price_series_tool import _store_analysis_dataset
+
+        cache_key = _store_analysis_dataset(
+            {
+                "prices": {
+                    "AAPL": [
+                        {"date": "2020-01-02", "close": 100},
+                        {"date": "2020-01-03", "close": 104},
+                        {"date": "2020-01-06", "close": 108},
+                    ],
+                    "MSFT": [
+                        {"date": "2020-01-02", "close": 90},
+                        {"date": "2020-01-03", "close": 96},
+                        {"date": "2020-01-06", "close": 99},
+                    ],
+                }
+            }
+        )
+
+        result = run_data_analysis_plot.func(
+            analysis_task="price_spread_area",
+            tickers=[],
+            start_date="2020-01-01",
+            end_date="2025-01-01",
+            analysis_cache_key=cache_key,
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["analysis_task"], "price_spread_area")
+        self.assertEqual(result["tickers"], ["AAPL", "MSFT"])
+        spec = GLOBAL_PLOT_DATA[GLOBAL_PLOT_IDS["default"][0]]
+        self.assertEqual(spec["plot_type"], "line")
+        self.assertEqual(spec["chart_type"], "line_area")
+        self.assertTrue(spec["series"][0]["area"])
+        self.assertEqual(spec["series"][0]["baseline"], 0)
+        self.assertEqual(spec["metadata"]["formula"], "AAPL.close - MSFT.close")
+        self.assertEqual(spec["series"][0]["data"][0], {"x": "2020-01-02", "y": 10.0})
 
 
 if __name__ == "__main__":

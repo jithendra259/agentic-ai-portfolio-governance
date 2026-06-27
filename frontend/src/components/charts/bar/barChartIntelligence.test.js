@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { adaptBarChartPayload } from './barChartDataAdapter.js';
-import { inferBarMode } from './barChartIntelligence.js';
+import { chooseRenderer, inferBarMode } from './barChartIntelligence.js';
 import { CHART_TIER } from '../chartTierConfig.js';
 import { getBarChartDefinition } from './barChartRegistry.js';
 import { validateBarChartPayload } from './barChartValidator.js';
@@ -69,6 +69,64 @@ describe('bar chart intelligence', () => {
     });
     assert.equal(inferBarMode(payload), 'grouped');
     assert.equal(adaptBarChartPayload(payload).series.length, 2);
+  });
+
+  it('row-based grouped bar preserves metrics and animation controls', () => {
+    const adapted = adaptBarChartPayload({
+      plot_type: 'bar',
+      plot_id: 'return_volatility_grouped_bar',
+      chart_type: 'bar',
+      bar_mode: 'grouped',
+      title: 'Return vs Volatility',
+      x_axis: 'ticker',
+      y_axis: 'return_percent',
+      unit: 'percent',
+      skipAnimation: true,
+      animation: { duration: '600ms', easing: 'ease-out' },
+      series: [
+        { key: 'return_percent', label: 'Return' },
+        { key: 'volatility_percent', label: 'Volatility' },
+      ],
+      data: [{ ticker: 'AAPL', return_percent: 12.1, volatility_percent: 28.8 }],
+    });
+
+    assert.equal(adapted.valid, true);
+    assert.equal(adapted.layout, 'vertical');
+    assert.deepEqual(adapted.series.map((series) => series.dataKey), ['return_percent', 'volatility_percent']);
+    assert.equal(adapted.skipAnimation, true);
+    assert.equal(adapted.animation.duration, '600ms');
+  });
+
+  it('dense free bar charts use svg batch rendering instead of premium webgl', () => {
+    const payload = basePayload({
+      data: Array.from({ length: 600 }, (_, index) => ({
+        ticker: `T${index + 1}`,
+        allocation_percent: index + 1,
+      })),
+    });
+
+    assert.equal(chooseRenderer(payload), 'svg-batch');
+  });
+
+  it('stacked bar assigns a shared stack id to every series', () => {
+    const adapted = adaptBarChartPayload({
+      plot_type: 'bar',
+      plot_id: 'sector_exposure_stack',
+      chart_type: 'bar',
+      bar_mode: 'stacked',
+      title: 'Sector Exposure Stack',
+      x_axis: 'portfolio',
+      y_axis: 'weight_percent',
+      unit: 'percent',
+      series: [
+        { key: 'technology_weight', label: 'Technology' },
+        { key: 'healthcare_weight', label: 'Healthcare' },
+      ],
+      data: [{ portfolio: 'U1', technology_weight: 35, healthcare_weight: 20 }],
+    });
+
+    assert.equal(adapted.valid, true);
+    assert.deepEqual(adapted.series.map((series) => series.stack), ['stack', 'stack']);
   });
 
   it('allocation change supports positive and negative values', () => {

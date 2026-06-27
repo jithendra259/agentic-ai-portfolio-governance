@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import shutil
 import socket
@@ -85,9 +86,11 @@ from src.memory.context_resolver import (
 from src.memory.audit_log import GLOBAL_AUDIT_LOGGER
 from src.memory.memory_store import InProcessSessionMemoryStore
 from src.memory.missing_data_resolver import MissingDataResolver
+from src.memory.governance_plot_continuity import resolve_governance_plot_followup, store_latest_governance_run
 from src.memory.response_contract import build_response_contract, contract_summary
-from src.agents.plot_store import GLOBAL_PLOT_DATA
+from src.agents.plot_store import GLOBAL_PLOT_DATA, GLOBAL_PLOT_IDS, register_plot
 from src.decision.apg_bench_response import build_apg_bench_response
+from src.decision.chart_request_resolver import build_chart_response, resolve_deterministic_chart_request
 from src.decision.full_stock_eda_response import build_full_stock_eda_response
 from src.decision.plot_prompt_response import build_plot_prompt_response
 from src.decision.regime_response import build_regime_only_response
@@ -97,6 +100,7 @@ from src.orchestrator.chatbot_orchestrator import (
     FALLBACK_OLLAMA_MODEL,
     INSTALLED_OLLAMA_MODELS,
     PRIMARY_OLLAMA_MODEL,
+    get_postgres_status,
     memory_manager,
     portfolio_assistant,
     streaming_portfolio_assistant,
@@ -153,54 +157,61 @@ def _sync_legacy_outputs() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing MongoDB indexes to fix search latency...")
+    import asyncio
+
+    app.state.mongo_available = None
     _sync_legacy_outputs()
-    try:
-        memory = MongoMemoryManager()
-        memory.setup_indexes()
-        logger.info("MongoDB indexes are active.")
-        app.state.mongo_available = True
-        
-        # Seed default users in MongoDB users collection
+
+    def warmup_mongo_indexes_and_users() -> None:
+        logger.info("Initializing MongoDB indexes in background...")
         try:
-            from datetime import datetime, timezone
-            users_col = memory._db["users"]
-            
-            # Admin User
-            admin_email = "admin@governance.ai"
-            if not users_col.find_one({"email": admin_email}):
-                pw_hash = hash_password("password")
-                users_col.insert_one({
-                    "email": admin_email,
-                    "name": "Governance Admin",
-                    "password_hash": pw_hash,
-                    "image": "https://avatars.githubusercontent.com/u/19550456",
-                    "plan": "Advisory workspace",
-                    "created_at": datetime.now(timezone.utc)
-                })
-                logger.info("Default admin seeded in MongoDB users collection.")
-                
-            # Demo User matching Toolpad login screenshot
-            demo_email = "toolpad-demo@mui.com"
-            if not users_col.find_one({"email": demo_email}):
-                demo_hash = hash_password("@demo1")
-                users_col.insert_one({
-                    "email": demo_email,
-                    "name": "Toolpad Demo User",
-                    "password_hash": demo_hash,
-                    "image": "https://mui.com/static/images/avatar/1.jpg",
-                    "plan": "Standard Workspace",
-                    "created_at": datetime.now(timezone.utc)
-                })
-                logger.info("Demo user seeded in MongoDB users collection.")
-                
-        except Exception as seed_exc:
-            logger.error("Failed to seed default users in MongoDB: %s", seed_exc)
-            
-    except Exception as exc:
-        logger.error("Failed to build MongoDB indexes: %s", exc)
-        app.state.mongo_available = False
+            memory = MongoMemoryManager()
+            memory.setup_indexes()
+            logger.info("MongoDB indexes are active.")
+            app.state.mongo_available = True
+
+            # Seed default users in MongoDB users collection without blocking
+            # server port binding.
+            try:
+                from datetime import datetime, timezone
+                users_col = memory._db["users"]
+
+                admin_email = "admin@governance.ai"
+                if not users_col.find_one({"email": admin_email}):
+                    pw_hash = hash_password("password")
+                    users_col.insert_one({
+                        "email": admin_email,
+                        "name": "Governance Admin",
+                        "password_hash": pw_hash,
+                        "image": "https://avatars.githubusercontent.com/u/19550456",
+                        "plan": "Advisory workspace",
+                        "created_at": datetime.now(timezone.utc)
+                    })
+                    logger.info("Default admin seeded in MongoDB users collection.")
+
+                demo_email = "toolpad-demo@mui.com"
+                if not users_col.find_one({"email": demo_email}):
+                    demo_hash = hash_password("@demo1")
+                    users_col.insert_one({
+                        "email": demo_email,
+                        "name": "Toolpad Demo User",
+                        "password_hash": demo_hash,
+                        "image": "https://mui.com/static/images/avatar/1.jpg",
+                        "plan": "Standard Workspace",
+                        "created_at": datetime.now(timezone.utc)
+                    })
+                    logger.info("Demo user seeded in MongoDB users collection.")
+
+            except Exception as seed_exc:
+                logger.error("Failed to seed default users in MongoDB: %s", seed_exc)
+
+        except Exception as exc:
+            logger.error("Failed to build MongoDB indexes: %s", exc)
+            app.state.mongo_available = False
+
+    warmup_task = asyncio.create_task(asyncio.to_thread(warmup_mongo_indexes_and_users))
     yield
+    warmup_task.cancel()
 
 
 from api.analytics_router import router as analytics_router
@@ -301,6 +312,44 @@ class ChatRequest(BaseModel):
     session_id: str
     user_message: str
     model: str | None = None
+
+
+def _resolve_previous_weights(resolved_memory: dict[str, Any]) -> dict[str, float]:
+    state = resolved_memory.get("session_state", {}) if isinstance(resolved_memory, dict) else {}
+    active = state.get("active_weights", {}) if isinstance(state.get("active_weights"), dict) else {}
+    if active.get("type") == "equal_weight_proxy" and not active.get("approved_by_user"):
+        return {}
+
+    raw_weights = active.get("weights")
+    if not isinstance(raw_weights, dict) or not raw_weights:
+        return {}
+
+    clean: dict[str, float] = {}
+    for ticker, value in raw_weights.items():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return {}
+        if not math.isfinite(number) or number < 0:
+            return {}
+        clean_ticker = str(ticker or "").strip().upper()
+        if clean_ticker and number > 0:
+            clean[clean_ticker] = number
+
+    total = sum(clean.values())
+    if total <= 0:
+        return {}
+    return {ticker: value / total for ticker, value in clean.items()}
+
+
+def _assistant_config(request: ChatRequest, resolved_memory: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "configurable": {
+            "thread_id": request.session_id,
+            "override_model": request.model,
+            "previous_weights": _resolve_previous_weights(resolved_memory),
+        }
+    }
 
 
 class ChatResponse(BaseModel):
@@ -448,6 +497,52 @@ def _attach_inline_plot_tokens(session_id: str, response_text: str, resolved: di
         logger.warning("Failed to store deterministic inline plot for session %s", session_id)
         return response_text
     return f"{response_text}\n\n{PLOT_TOKEN}{inline_plot_id}"
+
+
+def _build_deterministic_chart_response(session_id: str, user_message: str) -> tuple[str, list[str]] | None:
+    resolved = resolve_deterministic_chart_request(user_message, session_id)
+    if not resolved:
+        return None
+    plot_id = str(resolved["plot_id"])
+    GLOBAL_PLOT_IDS.pop(session_id, None)
+    response_text = f"{build_chart_response(resolved)}\n\n{PLOT_TOKEN}{plot_id}"
+    return response_text, [plot_id]
+
+
+def _build_governance_continuity_response(
+    session_id: str,
+    user_message: str,
+    resolved_memory: dict[str, Any],
+) -> tuple[str, list[str]] | None:
+    resolution = resolve_governance_plot_followup(resolved_memory.get("session_state", {}), user_message)
+    if resolution is None:
+        return None
+
+    state = resolution["state"]
+    resolved_memory["session_state"] = state
+    session_memory_store.save_state(session_id, state)
+    response = str(resolution["response"])
+    if resolution.get("action") != "plot":
+        return response, []
+
+    plot_id = f"governance-risk-weight-{uuid.uuid4().hex}"
+    GLOBAL_PLOT_IDS.pop(session_id, None)
+    register_plot(plot_id, resolution["plot_spec"], session_id=session_id)
+    return f"{response}\n\n{PLOT_TOKEN}{plot_id}", [plot_id]
+
+
+def _store_governance_tool_result(session_id: str, tool_output: Any) -> None:
+    state = session_memory_store.get_state(session_id)
+    next_state = store_latest_governance_run(state, tool_output)
+    if next_state.get("latest_governance_run") != state.get("latest_governance_run"):
+        session_memory_store.save_state(session_id, next_state)
+
+
+def _capture_governance_result_from_messages(session_id: str, messages: list[Any]) -> None:
+    for message in reversed(messages or []):
+        if getattr(message, "name", "") == "run_full_governance_pipeline":
+            _store_governance_tool_result(session_id, message)
+            return
 
 
 def _plot_spec_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -601,6 +696,11 @@ def _process_agentic_chat_job(
         ("memory_missing_input", lambda: build_missing_input_response(resolved_memory), False),
         ("apg_bench", lambda: build_apg_bench_response(request.user_message), False),
         ("stock_eda_full", lambda: build_full_stock_eda_response(request.user_message), False),
+        (
+            "deterministic_chart",
+            lambda: (_build_deterministic_chart_response(request.session_id, request.user_message) or (None, []))[0],
+            False,
+        ),
         ("plot_prompt", lambda: build_plot_prompt_response(request.user_message), False),
         (
             "regime_only",
@@ -656,7 +756,7 @@ def _process_agentic_chat_job(
     )
     result = portfolio_assistant.invoke(
         {"messages": [HumanMessage(content=request.user_message)]},
-        config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
+        config=_assistant_config(request, resolved_memory),
     )
 
     messages = result.get("messages", []) if isinstance(result, dict) else []
@@ -773,8 +873,8 @@ def health_check() -> dict:
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
         "components": {
-            "mongodb": "connected" if mongo_status else "disconnected",
-            "supabase_postgres": "connected" if memory_manager.pg_pool else "not_configured",
+            "mongodb": "connected" if mongo_status else ("initializing" if mongo_status is None else "disconnected"),
+            "supabase_postgres": get_postgres_status(),
             "ollama": "ready" if ollama_status else "model_missing",
             "default_llm": "ready" if default_llm_status else "not_configured",
             "ashnaai": "ready" if has_ashna_key else "not_configured"
@@ -1037,6 +1137,25 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         )
         resolved_memory = _resolve_chat_memory(request.session_id, request.user_message, user_id=user_id)
 
+        governance_continuity = _build_governance_continuity_response(
+            request.session_id, request.user_message, resolved_memory
+        )
+        if governance_continuity is not None:
+            response_text, plot_ids = governance_continuity
+            _persist_memory_response(
+                request.session_id,
+                response_text,
+                resolved_memory,
+                metadata={
+                    "model": request.model,
+                    "transport": "rest",
+                    "router_fast_path": "governance_plot_continuity",
+                    "plot_ids": plot_ids,
+                },
+                user_id=user_id,
+            )
+            return ChatResponse(session_id=request.session_id, response=response_text)
+
         pending_execution_response = build_pending_execution_response(resolved_memory)
         if pending_execution_response is not None:
             pending_execution_response = _attach_inline_plot_tokens(
@@ -1102,6 +1221,23 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
             )
             return ChatResponse(session_id=request.session_id, response=full_stock_eda_response)
 
+        deterministic_chart = _build_deterministic_chart_response(request.session_id, request.user_message)
+        if deterministic_chart is not None:
+            chart_response, plot_ids = deterministic_chart
+            _persist_memory_response(
+                request.session_id,
+                chart_response,
+                resolved_memory,
+                metadata={
+                    "model": request.model,
+                    "transport": "rest",
+                    "router_fast_path": "deterministic_chart",
+                    "plot_ids": plot_ids,
+                },
+                user_id=user_id,
+            )
+            return ChatResponse(session_id=request.session_id, response=chart_response)
+
         plot_response = build_plot_prompt_response(request.user_message)
         if plot_response is not None:
             _persist_memory_response(
@@ -1138,10 +1274,12 @@ def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
 
         result = portfolio_assistant.invoke(
             {"messages": [HumanMessage(content=request.user_message)]},
-            config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
+            config=_assistant_config(request, resolved_memory),
         )
 
         messages = result.get("messages", [])
+        _capture_governance_result_from_messages(request.session_id, messages)
+        resolved_memory["session_state"] = session_memory_store.get_state(request.session_id)
         if not messages:
             response_text = "Unable to generate a response for this request."
         else:
@@ -1230,6 +1368,36 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 "stage": "generation",
                 "label": "Streaming response",
             })
+
+            governance_continuity = await _run_blocking_io(
+                _build_governance_continuity_response,
+                request.session_id,
+                request.user_message,
+                resolved_memory,
+            )
+            if governance_continuity is not None:
+                response_text, plot_ids = governance_continuity
+                accumulated_response = response_text
+                async for chunk in _stream_text_delta(text_id, response_text):
+                    yield chunk
+                for plot_id in plot_ids:
+                    yield _stream_event({"type": "data-plot", "plotId": plot_id})
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "governance_plot_continuity",
+                        "plot_ids": plot_ids,
+                    },
+                    user_id=user_id,
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
 
             pending_execution_response = build_pending_execution_response(resolved_memory)
             if pending_execution_response is not None:
@@ -1353,6 +1521,35 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
                 return
 
+            deterministic_chart = await _run_blocking_io(
+                _build_deterministic_chart_response,
+                request.session_id,
+                request.user_message,
+            )
+            if deterministic_chart is not None:
+                chart_response, plot_ids = deterministic_chart
+                accumulated_response = chart_response
+                async for chunk in _stream_text_delta(text_id, chart_response):
+                    yield chunk
+                for plot_id in plot_ids:
+                    yield _stream_event({"type": "data-plot", "plotId": plot_id})
+                yield _stream_event({"type": "text-end", "id": text_id})
+                await _run_blocking_io(
+                    _persist_memory_response,
+                    request.session_id,
+                    accumulated_response,
+                    resolved_memory,
+                    metadata={
+                        "model": request.model,
+                        "transport": "stream",
+                        "router_fast_path": "deterministic_chart",
+                        "plot_ids": plot_ids,
+                    },
+                    user_id=user_id,
+                )
+                yield _stream_event({"type": "finish", "messageId": msg_id, "finishReason": "stop"})
+                return
+
             plot_response = build_plot_prompt_response(request.user_message)
             if plot_response is not None:
                 accumulated_response = plot_response
@@ -1411,7 +1608,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
 
             async for event in streaming_portfolio_assistant.astream_events(
                 {"messages": [HumanMessage(content=request.user_message)]},
-                config={"configurable": {"thread_id": request.session_id, "override_model": request.model}},
+                config=_assistant_config(request, resolved_memory),
                 version="v2",
             ):
                 event_type = event.get("event", "")
@@ -1465,6 +1662,8 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 elif event_type == "on_tool_end":
                     if run_id in tool_runs:
                         output = event.get("data", {}).get("output", "")
+                        if event_name == "run_full_governance_pipeline":
+                            await _run_blocking_io(_store_governance_tool_result, request.session_id, output)
                         out_str = str(output)
                         # Truncate long outputs to avoid massive tool execution bubbles
                         if len(out_str) > 200:
@@ -1478,6 +1677,7 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 elif event_type == "on_chain_end" and event_name == "LangGraph":
                     output = event.get("data", {}).get("output", {})
                     messages = output.get("messages", []) if isinstance(output, dict) else []
+                    await _run_blocking_io(_capture_governance_result_from_messages, request.session_id, messages)
                     if messages and (not saw_tokens or suppressed_stream_tokens):
                         final_text = _message_to_text(messages[-1])
                         if final_text:
@@ -1514,7 +1714,10 @@ async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingR
                 _persist_memory_response,
                 request.session_id,
                 accumulated_response,
-                resolved_memory,
+                {
+                    **resolved_memory,
+                    "session_state": session_memory_store.get_state(request.session_id),
+                },
                 metadata={
                     "model": request.model,
                     "transport": "stream",

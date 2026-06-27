@@ -2,18 +2,9 @@ import json
 import logging
 import re
 from datetime import datetime
+from importlib import import_module
 from pathlib import Path
 from typing import Optional
-
-try:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-except Exception:  # pragma: no cover - optional in Render web service
-    matplotlib = None
-    plt = None
-    sns = None
 
 import networkx as nx
 import pandas as pd
@@ -24,6 +15,24 @@ from src.decision.advisory_labels import normalize_advisory_language
 
 
 OUTPUT_DIR = Path(__file__).resolve().parents[2] / "outputs"
+_PLOTTING_BACKEND = None
+
+
+def _get_plotting_backend():
+    global _PLOTTING_BACKEND
+    if _PLOTTING_BACKEND is not None:
+        return _PLOTTING_BACKEND
+    try:
+        matplotlib = import_module("matplotlib")
+        matplotlib.use("Agg")
+        pyplot = import_module("matplotlib.pyplot")
+        seaborn = import_module("seaborn")
+        _PLOTTING_BACKEND = (pyplot, seaborn)
+    except Exception:  # pragma: no cover - optional in Render web service
+        _PLOTTING_BACKEND = (None, None)
+    return _PLOTTING_BACKEND
+
+
 SUPPORTED_PLOTS = {
     "heatmap",
     "pie",
@@ -58,6 +67,7 @@ PALETTE = [
 
 
 def _require_plotting_backend() -> None:
+    plt, sns = _get_plotting_backend()
     if plt is None or sns is None:
         raise RuntimeError(
             "Plot rendering dependencies are not installed in this deployment. "
@@ -85,6 +95,7 @@ def _slugify(value: str) -> str:
 
 
 def _apply_dark_theme() -> None:
+    plt, sns = _get_plotting_backend()
     _require_plotting_backend()
     plt.style.use("dark_background")
     sns.set_theme(style="darkgrid", palette="crest")
@@ -103,6 +114,7 @@ def _apply_dark_theme() -> None:
 
 
 def _save_current_plot(title: str, plot_type: str) -> str:
+    plt, _ = _get_plotting_backend()
     _require_plotting_backend()
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f")
@@ -382,6 +394,38 @@ def _build_bar_spec(data: dict, title: str) -> dict:
     All feature fields are optional for backward compatibility.
     """
     # ── Detect multi-series shape ──
+    if isinstance(data.get("data"), list) and isinstance(data.get("series"), list):
+        row_point_count = len(data["data"]) * max(1, len(data["series"]))
+        spec = {
+            "plot_type": "bar",
+            "chart_type": data.get("chart_type", "bar"),
+            "plot_id": data.get("plot_id") or _slugify(title),
+            "title": title,
+            "bar_mode": data.get("bar_mode") or data.get("layout") or "vertical",
+            "x_axis": data.get("x_axis", "category"),
+            "y_axis": data.get("y_axis", "value"),
+            "unit": data.get("unit", data.get("y_format", "none")),
+            "sort": data.get("sort", "none"),
+            "series": data["series"],
+            "data": data["data"],
+            "borderRadius": data.get("borderRadius", 4),
+            "grid": data.get("grid", {"horizontal": True}),
+        }
+        if row_point_count > 500 and "renderer" not in data:
+            spec["renderer"] = "svg-batch"
+        if row_point_count > 500 and "skipAnimation" not in data:
+            spec["skipAnimation"] = True
+        for key in (
+            "layout", "categoryGapRatio", "barGapRatio", "highlightScope",
+            "renderer", "skipAnimation", "animation", "xAxis", "yAxis", "top_n", "height",
+            "show_labels", "thresholds", "warnings", "interpretation",
+            "requires_premium", "chart_tier", "component", "fallback_chart",
+            "rangeStartField", "rangeEndField",
+        ):
+            if key in data:
+                spec[key] = data[key]
+        return spec
+
     if "categories" in data and "series" in data and isinstance(data["series"], list):
         categories = data["categories"]
         series = []
@@ -422,6 +466,10 @@ def _build_bar_spec(data: dict, title: str) -> dict:
             "plot_type", "title", "config", "layout", "borderRadius", "grid",
             "skipAnimation", "highlightScope", "categoryGapRatio", "barGapRatio",
             "x_label", "y_label", "y_format", "xAxis", "yAxis", "series_config",
+            "animation", "chart_type", "bar_mode", "unit", "sort", "top_n",
+            "show_labels", "thresholds", "warnings", "interpretation", "plot_id",
+            "requires_premium", "chart_tier", "component", "fallback_chart",
+            "rangeStartField", "rangeEndField",
         }
         if not isinstance(raw, dict) or not raw:
             raise ValueError("Bar chart data must contain a scores or risk_scores mapping.")
@@ -443,6 +491,7 @@ def _build_bar_spec(data: dict, title: str) -> dict:
 
     if not series:
         raise ValueError("No valid series found for bar chart.")
+    point_count = sum(len(entry.get("data", [])) for entry in series)
 
     # ── Build the PlotSpec with all backend-decided features ──
     spec = {
@@ -472,9 +521,14 @@ def _build_bar_spec(data: dict, title: str) -> dict:
     if "barGapRatio" in data:
         spec["barGapRatio"] = data["barGapRatio"]
 
+    if point_count > 500 and "renderer" not in data:
+        spec["renderer"] = "svg-batch"
+
     # ── Skip animation ──
     if data.get("skipAnimation") is not None:
         spec["skipAnimation"] = bool(data["skipAnimation"])
+    elif point_count > 500:
+        spec["skipAnimation"] = True
 
     # ── Global highlight scope ──
     if "highlightScope" in data:
@@ -1423,6 +1477,7 @@ def generate_financial_plot(
 
         # --- PNG fallback for heatmap / network ---
         _apply_dark_theme()
+        plt, sns = _get_plotting_backend()
         fig, ax = plt.subplots(figsize=(10, 6))
 
         if normalized == "heatmap":
@@ -1473,5 +1528,7 @@ def generate_financial_plot(
         return f"Chart ready: ![{plot_title}]({plot_path})"
 
     except Exception as e:
-        plt.close("all")
+        plt, _ = _get_plotting_backend()
+        if plt is not None:
+            plt.close("all")
         return f"Unable to generate plot due to a formatting or rendering error: {type(e).__name__}: {str(e)}"

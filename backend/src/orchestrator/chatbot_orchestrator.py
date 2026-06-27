@@ -3,14 +3,11 @@ import logging
 import os
 import re
 import subprocess
+import threading
 from difflib import SequenceMatcher
 from typing import Annotated, Any, Optional, Tuple, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
-from langchain_ollama import ChatOllama
-from langgraph.graph import StateGraph, END
-from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolNode, tools_condition
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from pymongo import MongoClient
@@ -46,15 +43,16 @@ from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 from src.providers.ashna_provider import normalize_ashna_base_url
-from src.rag.rag_tools import (
-    compare_common_institutional_holders,
-    retrieve_graph_rag_context,
-    search_methodology_knowledge_base,
-)
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 
 
 logger = logging.getLogger(__name__)
+GOVERNANCE_CACHE_VERSION = "optimizer-audit-v2"
+
+
+def add_messages(current: list[BaseMessage] | None, update: list[BaseMessage] | None) -> list[BaseMessage]:
+    """Small local reducer to avoid importing langgraph.graph.message at startup."""
+    return [*(current or []), *(update or [])]
 CONFIGURED_PRIMARY_OLLAMA_MODEL = (
     os.getenv("PORTFOLIO_OLLAMA_MODEL") or 
     ("ashnaai" if os.getenv("ASHNA_API_KEY") else "qwen3-coder-next:cloud")
@@ -105,7 +103,11 @@ def _resolve_ollama_model(preferred_models: list[str], installed_models: list[st
     return (preferred_models[0] if preferred_models else "").strip()
 
 
-INSTALLED_OLLAMA_MODELS = _list_installed_ollama_models()
+def _should_probe_ollama_on_startup() -> bool:
+    return (os.getenv("PORTFOLIO_PROBE_OLLAMA_ON_STARTUP") or "").strip().lower() in {"1", "true", "yes"}
+
+
+INSTALLED_OLLAMA_MODELS = _list_installed_ollama_models() if _should_probe_ollama_on_startup() else []
 PRIMARY_OLLAMA_MODEL = _resolve_ollama_model(
     [
         CONFIGURED_PRIMARY_OLLAMA_MODEL,
@@ -187,7 +189,48 @@ def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
     return memory_manager, checkpointer
 
 
-memory_manager, checkpointer = _init_mongo_memory()
+_memory_lock = threading.Lock()
+_memory_manager_instance: MongoMemoryManager | None = None
+_checkpointer_instance: object | None = None
+
+
+def get_memory_manager() -> MongoMemoryManager:
+    global _memory_manager_instance, _checkpointer_instance
+    if _memory_manager_instance is None:
+        with _memory_lock:
+            if _memory_manager_instance is None:
+                _memory_manager_instance, _checkpointer_instance = _init_mongo_memory()
+    return _memory_manager_instance
+
+
+def get_checkpointer() -> object:
+    global _checkpointer_instance
+    if _checkpointer_instance is None:
+        get_memory_manager()
+    return _checkpointer_instance or MemorySaver()
+
+
+def is_memory_initialized() -> bool:
+    return _memory_manager_instance is not None
+
+
+def get_postgres_status() -> str:
+    if _memory_manager_instance is None:
+        return "initializing"
+    return "connected" if _memory_manager_instance.pg_pool else "not_configured"
+
+
+class LazyMemoryManager:
+    """Proxy that keeps import/startup fast and initializes DB memory on first use."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(get_memory_manager(), name)
+
+    def __bool__(self) -> bool:
+        return True
+
+
+memory_manager = LazyMemoryManager()
 intent_classifier = IntentClassifier(verbose=True)
 intent_router = IntentRouter(classifier=intent_classifier)
 
@@ -239,6 +282,41 @@ def save_financial_metric(metric_name: str, exact_value: float | str, context: s
     )
 
 
+@tool("search_methodology_knowledge_base")
+def search_methodology_knowledge_base(question: str) -> str:
+    """Search local methodology/PDF knowledge for framework and EDA questions."""
+    from src.rag.rag_tools import search_methodology_knowledge_base as real_tool
+
+    raw_func = getattr(real_tool, "func", None)
+    if callable(raw_func):
+        return raw_func(question=question)
+    return real_tool.invoke({"question": question})
+
+
+@tool("retrieve_graph_rag_context")
+def retrieve_graph_rag_context(tickers: list[str] | None = None, universe: str = "") -> str:
+    """Retrieve institutional ownership and graph context for stocks or a universe."""
+    from src.rag.rag_tools import retrieve_graph_rag_context as real_tool
+
+    payload = {"tickers": tickers or [], "universe": universe}
+    raw_func = getattr(real_tool, "func", None)
+    if callable(raw_func):
+        return raw_func(**payload)
+    return real_tool.invoke(payload)
+
+
+@tool("compare_common_institutional_holders")
+def compare_common_institutional_holders(universes: list[str] | None = None) -> str:
+    """Compare common institutional holders across multiple universes."""
+    from src.rag.rag_tools import compare_common_institutional_holders as real_tool
+
+    payload = {"universes": universes or []}
+    raw_func = getattr(real_tool, "func", None)
+    if callable(raw_func):
+        return raw_func(**payload)
+    return real_tool.invoke(payload)
+
+
 def _latest_human_text(messages: list[BaseMessage] | None) -> str:
     for message in reversed(messages or []):
         if isinstance(message, HumanMessage):
@@ -280,6 +358,7 @@ def governance_pipeline_with_cache(
     tickers: list[str],
     target_date: str,
     risk_tolerance: str = "moderate",
+    previous_weights: Optional[dict[str, float]] = None,
     config: RunnableConfig = None,
 ) -> str:
     """
@@ -287,14 +366,29 @@ def governance_pipeline_with_cache(
     Reuses plans for seven days via MongoDB TTL index.
     """
     normalized_risk_tolerance = (risk_tolerance or "moderate").strip().lower()
+    configurable = (config or {}).get("configurable", {})
+    configured_weights = configurable.get("previous_weights")
+    configured_weights = dict(configured_weights) if isinstance(configured_weights, dict) else {}
+    resolved_previous_weights = previous_weights or configured_weights or None
+    weight_source = "explicit" if previous_weights else ("session" if configured_weights else "unavailable")
+    cache_risk_tolerance = f"{normalized_risk_tolerance}|{GOVERNANCE_CACHE_VERSION}"
+    logger.info(
+        "Governance prior-weight source=%s cache_version=%s",
+        weight_source,
+        GOVERNANCE_CACHE_VERSION,
+    )
     query_hash = memory_manager.compute_query_hash(
         tickers=tickers,
         target_date=target_date,
-        risk_tolerance=normalized_risk_tolerance,
+        risk_tolerance=cache_risk_tolerance,
     )
-    cached = memory_manager.retrieve_cached_plan(query_hash)
+    cached = None if resolved_previous_weights else memory_manager.retrieve_cached_plan(query_hash)
     if cached:
-        logger.info("Cache Hit (-46%% cost) | query_hash=%s", query_hash)
+        logger.info(
+            "Cache Hit (-46%% cost) | query_hash=%s | cache_version=%s",
+            query_hash,
+            GOVERNANCE_CACHE_VERSION,
+        )
         return cached
 
     result = run_full_governance_pipeline.invoke(
@@ -302,15 +396,18 @@ def governance_pipeline_with_cache(
             "tickers": tickers,
             "target_date": target_date,
             "risk_tolerance": normalized_risk_tolerance,
+            "previous_weights": resolved_previous_weights,
         },
         config=config,
     )
     if isinstance(result, str):
-        memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
+        if not resolved_previous_weights:
+            memory_manager.cache_governance_plan(query_hash=query_hash, payload=result, ttl_days=7)
         return result
 
     serialized = json.dumps(result)
-    memory_manager.cache_governance_plan(query_hash=query_hash, payload=serialized, ttl_days=7)
+    if not resolved_previous_weights:
+        memory_manager.cache_governance_plan(query_hash=query_hash, payload=serialized, ttl_days=7)
     return serialized
 
 # Define the State: This is the Chatbot's Memory!
@@ -413,6 +510,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         kwargs["base_url"] = ollama_base_url.rstrip("/")
     if num_predict is not None:
         kwargs["num_predict"] = num_predict
+    from langchain_ollama import ChatOllama
     return ChatOllama(**kwargs)
 
 
@@ -420,12 +518,29 @@ def _build_llm_with_tools(model_name: str):
     return _get_chat_llm(model_name).bind_tools(tools)
 
 
-llm_with_tools = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL)
-fallback_llm_with_tools = (
-    _build_llm_with_tools(FALLBACK_OLLAMA_MODEL)
-    if FALLBACK_OLLAMA_MODEL and FALLBACK_OLLAMA_MODEL != PRIMARY_OLLAMA_MODEL
-    else None
-)
+_llm_lock = threading.Lock()
+_llm_with_tools_instance = None
+_fallback_llm_with_tools_instance = None
+
+
+def get_llm_with_tools():
+    global _llm_with_tools_instance
+    if _llm_with_tools_instance is None:
+        with _llm_lock:
+            if _llm_with_tools_instance is None:
+                _llm_with_tools_instance = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL)
+    return _llm_with_tools_instance
+
+
+def get_fallback_llm_with_tools():
+    global _fallback_llm_with_tools_instance
+    if not FALLBACK_OLLAMA_MODEL or FALLBACK_OLLAMA_MODEL == PRIMARY_OLLAMA_MODEL:
+        return None
+    if _fallback_llm_with_tools_instance is None:
+        with _llm_lock:
+            if _fallback_llm_with_tools_instance is None:
+                _fallback_llm_with_tools_instance = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL)
+    return _fallback_llm_with_tools_instance
 
 
 def _is_ollama_memory_error(exc: Exception) -> bool:
@@ -482,9 +597,10 @@ def _available_models_text() -> str:
 
 
 def _memory_error_message() -> AIMessage:
+    fallback_available = bool(FALLBACK_OLLAMA_MODEL and FALLBACK_OLLAMA_MODEL != PRIMARY_OLLAMA_MODEL)
     fallback_text = (
         f" I also attempted the configured fallback model `{FALLBACK_OLLAMA_MODEL}`."
-        if fallback_llm_with_tools is not None
+        if fallback_available
         else ""
     )
     return AIMessage(
@@ -557,7 +673,7 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
         active_llm = _build_llm_with_tools(override_model)
         active_primary = override_model
     else:
-        active_llm = llm_with_tools
+        active_llm = get_llm_with_tools()
         active_primary = PRIMARY_OLLAMA_MODEL
 
     is_ashna = _is_ashna_model(active_primary)
@@ -568,10 +684,11 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     except Exception as exc:
         if is_ashna:
             logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
-            if fallback_llm_with_tools is not None and FALLBACK_OLLAMA_MODEL != active_primary:
+            fallback_llm = get_fallback_llm_with_tools()
+            if fallback_llm is not None and FALLBACK_OLLAMA_MODEL != active_primary:
                 try:
                     fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                    return fallback_llm_with_tools.invoke(fallback_messages)
+                    return fallback_llm.invoke(fallback_messages)
                 except Exception as fallback_exc:
                     logger.warning("Fallback model %s also failed after Ashna error: %s", FALLBACK_OLLAMA_MODEL, fallback_exc)
                     return _ashna_provider_error_message(exc, fallback_exc)
@@ -579,11 +696,12 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
 
         if _is_ollama_model_not_found_error(exc) or _is_ollama_unavailable_error(exc):
             logger.warning("Primary Ollama model %s is not available. Error: %s", active_primary, exc)
-            if fallback_llm_with_tools is None:
+            fallback_llm = get_fallback_llm_with_tools()
+            if fallback_llm is None:
                 return _model_not_found_message(active_primary)
             try:
                 fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                return fallback_llm_with_tools.invoke(fallback_messages)
+                return fallback_llm.invoke(fallback_messages)
             except Exception as fallback_exc:
                 if _is_retryable_ollama_error(fallback_exc):
                     return _memory_error_message()
@@ -611,12 +729,13 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
             
             # STAGE 3: Fallback Model
             logger.warning("Emergency recovery failed. Failing over to %s", FALLBACK_OLLAMA_MODEL)
-            if fallback_llm_with_tools is None:
+            fallback_llm = get_fallback_llm_with_tools()
+            if fallback_llm is None:
                 return _memory_error_message()
             
             try:
                 fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                return fallback_llm_with_tools.invoke(fallback_messages)
+                return fallback_llm.invoke(fallback_messages)
             except Exception as final_exc:
                 if _is_retryable_ollama_error(final_exc):
                     return _memory_error_message()
@@ -670,11 +789,13 @@ The chat UI also supports common analysis-rendered plot_type values such as "box
 COMMON DATA-TO-PLOT TOOL:
 - For any request that needs data fetching, cleaning, missingness checks, correlation/covariance, returns, coverage, or transformation before plotting, prefer run_data_analysis_plot.
 - Do not ask the user for intermediate matrices, cleaned tables, or missingness grids. run_data_analysis_plot resolves data scope and computes approved pandas transforms safely.
-- Supported analysis_task values include: "missing_data_heatmap", "ohlc_correlation_heatmap", "returns_correlation_heatmap", "returns_box_plot", and "price_line".
+- Supported analysis_task values include: "missing_data_heatmap", "ohlc_correlation_heatmap", "returns_correlation_heatmap", "returns_box_plot", "price_line", and "price_spread_area".
 - The AI may create a structured analysis plan by choosing analysis_task plus tickers/sector/universe/date range/cache key. Do not generate or execute arbitrary Python code in the chat.
 - If the user asks to clean data, find missing data, align series, or prepare data for a chart, map that request into the closest approved analysis_task and use run_data_analysis_plot.
 - If the user asks for a box plot, box-and-whisker plot, distribution by ticker, or daily return dispersion by ticker, use run_data_analysis_plot with analysis_task="returns_box_plot" when the metric is returns or daily returns.
 - Do not replace a requested box plot with a bar chart. Do not ask for scope when the ticker list, date range, and metric are already present in the message.
+- If the user asks for a spread area plot, ticker-vs-ticker spread, or "price minus another price" area chart, use run_data_analysis_plot with analysis_task="price_spread_area".
+- If the user says "take default", "take any metric", "use any metric", or similar after discussing spread/area/line plots, do not ask again. Default to tickers=["AAPL", "MSFT"], metric=close_spread, start_date="2020-01-01", end_date="2025-01-01", and call run_data_analysis_plot with analysis_task="price_spread_area".
 
 CUSTOM MATHEMATICAL PLOT RULES:
 - Use generate_custom_math_plot when the user asks for a custom, formula-based, synthetic, payoff, risk curve, or mathematical plot such as y=x**2, sin(x), log(x), option payoff, utility curve, growth curve, or any chart that can be sampled from formulas.
@@ -691,6 +812,7 @@ LINE CHART (plot_type="line"):
 - For computed statistics over time (rolling volatility, cumulative returns, drawdowns), use get_price_series_for_analysis to compute the data, then generate_financial_plot with plot_type="line".
 - If the user asks to plot daily returns or log returns, first call get_price_series_for_analysis to compute the returns and get the cache key, then call generate_financial_plot with plot_type="line" and pass {"analysis_cache_key": <cache_key>, "metric": "returns", "y_label": "Log Return"} in the data payload.
 - Features available: area fill, stacking, smooth curves (monotoneX), dual Y-axes, recession bands, marks, highlight interactions.
+- For spread area charts, use run_data_analysis_plot with analysis_task="price_spread_area" rather than summarizing returns or asking for another metric.
 
 BAR CHART (plot_type="bar"):
 - Comparing discrete categories: sector weights, ticker risk scores, allocation percentages.
@@ -702,6 +824,15 @@ BAR CHART (plot_type="bar"):
 - Features available: stacking, horizontal layout, rounded corners (borderRadius), bar labels, colorMap, highlight interactions.
 - Multi-series bar: pass data as {"categories": [...], "series": [{"name": ..., "data": [...], "stack": "group"}]}.
 - Single-series bar: pass data as {"scores": {"AAPL": 0.85, "MSFT": 0.72, ...}}.
+- Before calling generate_financial_plot for a bar chart, infer the structure:
+  * single-series: one metric per category, use {"scores": {...}} or row payload with one series.
+  * grouped: multiple metrics per category, use row payload {"data": [{"ticker": "AAPL", ...}], "series": [{"key": "return_percent"}, {"key": "volatility_percent"}], "bar_mode": "grouped"}.
+  * stacked: part-to-whole components, give each series the same "stack" id or set "bar_mode": "stacked".
+  * horizontal: rankings, long labels, or more than 8 categories, set "layout": "horizontal" or "bar_mode": "horizontal".
+  * vertical: short category comparisons, monthly/annual buckets, or fewer than 8 short labels.
+- For row-based bar payloads, include x_axis/y_axis/unit/sort/bar_mode so the frontend can render intelligently. Example:
+  {"data": [{"ticker": "AAPL", "return_percent": 12.1, "volatility_percent": 28.8}], "series": [{"key": "return_percent", "label": "Return"}, {"key": "volatility_percent", "label": "Volatility"}], "x_axis": "ticker", "y_axis": "return_percent", "unit": "percent", "bar_mode": "grouped"}.
+- If the user asks what bar charts are supported, answer with the four core structures: single-series, grouped, stacked, and horizontal/vertical layout variants. Do not claim waterfall/Gantt/native histogram as ordinary bar charts; use histogram only when the request is a frequency distribution.
 
 PIE CHART (plot_type="pie"):
 - Portfolio composition: allocation weights showing parts of a whole.
@@ -1429,6 +1560,58 @@ def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
     if lambda_t is not None:
         lines.append(f"- Graph penalty (lambda_t): {lambda_t:.4f}")
 
+    risk_tolerance = optimization.get("risk_tolerance")
+    solver_name = optimization.get("solver_name")
+    solver_status = optimization.get("solver_status")
+    window_start = optimization.get("effective_window_start")
+    window_end = optimization.get("effective_window_end")
+    max_weight_constraint = optimization.get("max_weight_constraint")
+    max_observed_weight = optimization.get("max_observed_weight")
+    hhi = optimization.get("hhi")
+    effective_holdings = optimization.get("effective_number_of_holdings")
+    graph_exposure = optimization.get("graph_exposure")
+    turnover = optimization.get("turnover")
+
+    if any(
+        value is not None
+        for value in (
+            risk_tolerance,
+            solver_name,
+            window_start,
+            max_weight_constraint,
+            hhi,
+            graph_exposure,
+        )
+    ):
+        lines.append("")
+        lines.append("### Optimization Audit")
+    if risk_tolerance:
+        lines.append(f"- Risk profile: {str(risk_tolerance).capitalize()}")
+    if solver_name or solver_status:
+        solver_label = str(solver_name or "unknown")
+        status_label = str(solver_status or "unknown")
+        lines.append(f"- Solver: {solver_label} ({status_label})")
+    if window_start or window_end:
+        lines.append(f"- Effective historical window: {window_start or 'unknown'} to {window_end or 'unknown'}")
+    if max_weight_constraint is not None:
+        lines.append(f"- Maximum-weight constraint: {float(max_weight_constraint):.2%}")
+    if max_observed_weight is not None:
+        lines.append(f"- Largest optimized weight: {float(max_observed_weight):.2%}")
+    if hhi is not None:
+        lines.append(f"- HHI concentration: {float(hhi):.4f}")
+    if effective_holdings is not None:
+        lines.append(f"- Effective holdings: {float(effective_holdings):.2f}")
+    if graph_exposure is not None:
+        lines.append(f"- Graph exposure: {float(graph_exposure):.4f}")
+    if "turnover" in optimization:
+        lines.append(f"- Turnover: {float(turnover):.2%}" if turnover is not None else "- Turnover: unavailable")
+
+    if optimization.get("fallback_applied"):
+        fallback_reason = str(optimization.get("fallback_reason") or "return-floor constraint was relaxed")
+        lines.append(f"- Optimization warning: {fallback_reason}.")
+    elif optimization.get("target_return_constraint_used") is False:
+        lines.append("- Optimization warning: the profile return-floor constraint was not used.")
+
     return "\n".join(lines)
 
 
@@ -1612,70 +1795,96 @@ def capture_tool_state_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-# 5. Build the LangGraph State Machine
-builder = StateGraph(AgentState)
+def _build_graph():
+    """Build the LangGraph state machine lazily on the first chat request."""
+    from langgraph.graph import END, StateGraph
+    from langgraph.prebuilt import ToolNode
 
-# Add the nodes
-builder.add_node("classify_and_route", classify_and_route_node)
-builder.add_node("memory_manager", memory_manager_node)
-builder.add_node("chatbot", chatbot_node)
-builder.add_node("tool_interceptor", tool_interceptor_node)
-builder.add_node("tools", ToolNode(tools)) # This node automatically runs the Python tools
-builder.add_node("capture_tool_state", capture_tool_state_node)
-builder.add_node("finalize_governance", finalize_governance_node)
+    builder = StateGraph(AgentState)
 
-# Define the routing logic
-builder.set_entry_point("classify_and_route")
-builder.add_conditional_edges(
-    "classify_and_route",
-    _route_after_classification,
-    {
-        "chatbot": "memory_manager",
-        "end": END,
-    },
-)
+    builder.add_node("classify_and_route", classify_and_route_node)
+    builder.add_node("memory_manager", memory_manager_node)
+    builder.add_node("chatbot", chatbot_node)
+    builder.add_node("tool_interceptor", tool_interceptor_node)
+    builder.add_node("tools", ToolNode(tools))
+    builder.add_node("capture_tool_state", capture_tool_state_node)
+    builder.add_node("finalize_governance", finalize_governance_node)
 
-builder.add_edge("memory_manager", "chatbot")
+    builder.set_entry_point("classify_and_route")
+    builder.add_conditional_edges(
+        "classify_and_route",
+        _route_after_classification,
+        {
+            "chatbot": "memory_manager",
+            "end": END,
+        },
+    )
 
-# If the LLM decides it needs a MongoDB-backed historical tool, route to 'tools'
-# Otherwise, route to END to output the chat response to the user
-builder.add_conditional_edges(
-    "chatbot",
-    _route_after_chatbot,
-    {
-        "tool_interceptor": "tool_interceptor",
-        "end": END,
-    },
-)
+    builder.add_edge("memory_manager", "chatbot")
+    builder.add_conditional_edges(
+        "chatbot",
+        _route_after_chatbot,
+        {
+            "tool_interceptor": "tool_interceptor",
+            "end": END,
+        },
+    )
 
-builder.add_conditional_edges(
-    "tool_interceptor",
-    _route_after_interceptor,
-    {
-        "tools": "tools",
-        "chatbot": "chatbot",
-        "end": END,
-    },
-)
+    builder.add_conditional_edges(
+        "tool_interceptor",
+        _route_after_interceptor,
+        {
+            "tools": "tools",
+            "chatbot": "chatbot",
+            "end": END,
+        },
+    )
 
-builder.add_edge("tools", "capture_tool_state")
+    builder.add_edge("tools", "capture_tool_state")
+    builder.add_conditional_edges(
+        "capture_tool_state",
+        _route_after_tool,
+        {
+            "finalize_governance": "finalize_governance",
+            "chatbot": "memory_manager",
+        },
+    )
+    builder.add_edge("finalize_governance", END)
+    return builder
 
-builder.add_conditional_edges(
-    "capture_tool_state",
-    _route_after_tool,
-    {
-        "finalize_governance": "finalize_governance",
-        "chatbot": "memory_manager",
-    },
-)
-builder.add_edge("finalize_governance", END)
+class LazyCompiledAssistant:
+    """Compile LangGraph only when chat is actually invoked."""
 
-# 6. Add Conversational Memory (L1 with Supabase/MongoDB saver, fallback to MemorySaver)
-portfolio_assistant = builder.compile(checkpointer=checkpointer)
+    def __init__(self, *, streaming: bool = False) -> None:
+        self.streaming = streaming
+        self._compiled = None
+        self._lock = threading.Lock()
+
+    def _get(self):
+        if self._compiled is None:
+            with self._lock:
+                if self._compiled is None:
+                    checkpointer_to_use = MemorySaver() if self.streaming else get_checkpointer()
+                    self._compiled = _build_graph().compile(checkpointer=checkpointer_to_use)
+        return self._compiled
+
+    def invoke(self, *args, **kwargs):
+        return self._get().invoke(*args, **kwargs)
+
+    def stream(self, *args, **kwargs):
+        return self._get().stream(*args, **kwargs)
+
+    def astream_events(self, *args, **kwargs):
+        return self._get().astream_events(*args, **kwargs)
+
+
+# 6. Add Conversational Memory lazily. This keeps Uvicorn startup fast; chat
+# initializes the durable checkpointer on first use.
+portfolio_assistant = LazyCompiledAssistant()
 
 # The installed sync PostgresSaver does not implement async checkpoint reads.
 # Streaming routes use a process-local async-safe checkpointer while the API
 # persists user-visible conversation history separately in Supabase.
-streaming_portfolio_assistant = builder.compile(checkpointer=MemorySaver())
+streaming_portfolio_assistant = LazyCompiledAssistant(streaming=True)
 
-print("Conversational Agentic Supervisor Initialized with Memory!")
+logger.info("Conversational Agentic Supervisor configured with lazy memory.")

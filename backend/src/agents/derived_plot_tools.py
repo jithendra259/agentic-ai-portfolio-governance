@@ -18,8 +18,11 @@ SUPPORTED_ANALYSIS_TASKS = {
     "ohlc_correlation_heatmap",
     "returns_correlation_heatmap",
     "price_line",
+    "price_spread_area",
     "returns_box_plot",
 }
+
+DEFAULT_SPREAD_TICKERS = ["AAPL", "MSFT"]
 
 
 def _dataset_from_cache_or_query(
@@ -335,6 +338,98 @@ def _price_line_spec(
     return spec, {"analysis_cache_key": cache_key, "rendered_points": total_points, "tickers": tickers}
 
 
+def _price_spread_area_spec(
+    tickers: list[str],
+    start_date: str,
+    end_date: str,
+    analysis_cache_key: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    resolved = _normalize_tickers(tickers)[:2]
+    if len(resolved) < 2:
+        resolved = DEFAULT_SPREAD_TICKERS
+
+    dataset = load_cached_analysis_dataset(analysis_cache_key) if analysis_cache_key else None
+    cache_key = analysis_cache_key
+    if not dataset:
+        result = get_price_series_for_analysis.invoke(
+            {"tickers": resolved, "start_date": start_date, "end_date": end_date}
+        )
+        if not isinstance(result, dict) or result.get("error"):
+            raise ValueError((result or {}).get("error") or "Unable to fetch price series.")
+        cache_key = result.get("analysis_cache_key")
+        dataset = load_cached_analysis_dataset(cache_key)
+    if not dataset:
+        raise ValueError("Unable to load cached price dataset.")
+
+    prices = dataset.get("prices") or {}
+    series = []
+    for ticker in resolved:
+        rows = prices.get(ticker, [])
+        points = [
+            (row.get("date"), row.get("close"))
+            for row in rows
+            if row.get("date") and row.get("close") is not None
+        ]
+        if points:
+            series.append(
+                pd.Series(
+                    [float(value) for _, value in points],
+                    index=pd.to_datetime([date for date, _ in points]),
+                    name=ticker,
+                )
+            )
+    if len(series) < 2:
+        raise ValueError("At least two close-price series are required for a spread area plot.")
+
+    frame = pd.concat(series, axis=1).sort_index().dropna()
+    if frame.empty:
+        raise ValueError("No overlapping close prices were found for the selected spread tickers.")
+
+    left, right = resolved[0], resolved[1]
+    spread = frame[left] - frame[right]
+    points = [
+        {"x": index.strftime("%Y-%m-%d"), "y": round(float(value), 6)}
+        for index, value in spread.items()
+    ]
+    spec = {
+        "plot_type": "line",
+        "chart_type": "line_area",
+        "title": f"{left} minus {right} Close Spread Area - {start_date} to {end_date}",
+        "x_label": "Date",
+        "x_type": "time",
+        "y_label": f"{left} - {right} close spread",
+        "y_format": "currency",
+        "series": [
+            {
+                "name": f"{left}-{right} spread",
+                "label": f"{left} - {right}",
+                "data": points,
+                "area": True,
+                "baseline": 0,
+                "showMark": False,
+            }
+        ],
+        "grid": {"horizontal": True},
+        "curve": "monotoneX",
+        "skipAnimation": len(points) > 500,
+        "density": {"rendered_points": len(points)},
+        "metadata": {
+            "analysis_task": "price_spread_area",
+            "analysis_cache_key": cache_key,
+            "tickers": [left, right],
+            "metric": "close_spread",
+            "formula": f"{left}.close - {right}.close",
+            "observations": int(len(points)),
+        },
+    }
+    return spec, {
+        "analysis_cache_key": cache_key,
+        "rendered_points": len(points),
+        "tickers": [left, right],
+        "metric": "close_spread",
+    }
+
+
 def _percentile(sorted_values: list[float], q: float) -> float:
     if not sorted_values:
         raise ValueError("Cannot compute percentile of an empty series.")
@@ -566,6 +661,7 @@ def run_data_analysis_plot(
     - ohlc_correlation_heatmap
     - returns_correlation_heatmap
     - price_line
+    - price_spread_area
     - returns_box_plot
     """
     task = str(analysis_task or "").strip().lower()
@@ -600,7 +696,9 @@ def run_data_analysis_plot(
             return result
 
         resolved_tickers = _normalize_tickers(tickers or ([ticker] if ticker else []))
-        if not resolved_tickers:
+        if task == "price_spread_area" and len(resolved_tickers) < 2:
+            resolved_tickers = DEFAULT_SPREAD_TICKERS
+        elif not resolved_tickers:
             resolved_tickers = _resolve_tickers_for_missing_heatmap(None, sector, universe, analysis_cache_key)
         if not resolved_tickers:
             raise ValueError("No tickers could be resolved for this analysis.")
@@ -609,6 +707,8 @@ def run_data_analysis_plot(
             spec, summary = _returns_correlation_heatmap_spec(resolved_tickers, start_date, end_date, analysis_cache_key)
         elif task == "price_line":
             spec, summary = _price_line_spec(resolved_tickers, start_date, end_date, analysis_cache_key)
+        elif task == "price_spread_area":
+            spec, summary = _price_spread_area_spec(resolved_tickers, start_date, end_date, analysis_cache_key)
         elif task == "returns_box_plot":
             spec, summary = _returns_box_plot_spec(resolved_tickers, start_date, end_date, analysis_cache_key)
         else:

@@ -350,17 +350,31 @@ class IntentClassifier:
                 requires_hitl=False,
             )
 
-        # 4. FAST CATCH: Known sector aliases and sector explanation phrasing
+        # 4. FAST CATCH: common/shared holder comparisons across universes.
+        if self._looks_like_common_holder_query(normalized_query):
+            return IntentMatch(
+                intent=IntentType.INSTITUTIONAL_NETWORK,
+                confidence=0.96,
+                risk_tier=RiskTier.LOW,
+                parameters={
+                    "tickers": self._parse_tickers(query),
+                    "universes": self._parse_universes(query),
+                },
+                explanation="Fast-catch: common/shared holder comparison query detected.",
+                requires_hitl=False,
+            )
+
+        # 5. FAST CATCH: Known sector aliases and sector explanation phrasing
         sector_match = self._match_known_sector_query(normalized_query)
         if sector_match is not None:
             return sector_match
 
-        # 5. REGEX PATTERN MATCHING (The existing logic)
+        # 6. REGEX PATTERN MATCHING (The existing logic)
         match = self._pattern_match(query)
         if match is not None:
             return match
 
-        # 6. FLEXIBLE SEMANTIC FALLBACK
+        # 7. FLEXIBLE SEMANTIC FALLBACK
         # If any domain terms are present, let it pass to the LLM instead of blocking
         return self._semantic_fallback(normalized_query)
 
@@ -382,6 +396,21 @@ class IntentClassifier:
         for pattern in safety_clause_patterns:
             cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
         return re.sub(r"\s+", " ", cleaned).strip()
+
+    def _looks_like_common_holder_query(self, normalized_query: str) -> bool:
+        common_terms = (
+            "common holder",
+            "common holders",
+            "shared holder",
+            "shared holders",
+            "common institution",
+            "common institutions",
+            "common institute",
+            "common institutes",
+            "shared institution",
+            "shared institutions",
+        )
+        return any(term in normalized_query for term in common_terms)
 
     def _pattern_match(self, query: str) -> Optional[IntentMatch]:
         best_match: Optional[IntentMatch] = None

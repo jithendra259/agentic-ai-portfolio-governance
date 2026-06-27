@@ -53,6 +53,11 @@ export default function ScatterChartRenderer({ spec }) {
     });
   }, [spec, xIsTime]);
 
+  const pointCount = useMemo(
+    () => series.reduce((total, item) => total + (Array.isArray(item?.data) ? item.data.length : 0), 0),
+    [series],
+  );
+
   const xAxisConfig = useMemo(() => {
     if (spec.xAxis && Array.isArray(spec.xAxis)) {
       return spec.xAxis.map((ax) => ({
@@ -90,16 +95,26 @@ export default function ScatterChartRenderer({ spec }) {
 
   const zAxisConfig = useMemo(() => (spec.zAxis && Array.isArray(spec.zAxis) ? spec.zAxis.map((ax) => ({ ...ax })) : undefined), [spec]);
   
-  const chartProps = {};
-  if (spec.skipAnimation) chartProps.skipAnimation = true;
-  if (spec.hideLegend) chartProps.hideLegend = true;
-  if (spec.colors && Array.isArray(spec.colors)) chartProps.colors = spec.colors;
-  if (spec.renderer) chartProps.renderer = spec.renderer;
-  chartProps.hitAreaRadius = spec.hitAreaRadius !== undefined ? spec.hitAreaRadius : 20;
+  const chartProps = useMemo(() => {
+    const next = {
+      hitAreaRadius: spec.hitAreaRadius !== undefined ? spec.hitAreaRadius : 20,
+      skipAnimation: Boolean(spec.skipAnimation || pointCount > 500),
+    };
+    if (spec.hideLegend) next.hideLegend = true;
+    if (spec.colors && Array.isArray(spec.colors)) next.colors = spec.colors;
+    if (spec.renderer) next.renderer = spec.renderer;
+    else if (pointCount > 500 && spec.component !== 'ScatterChartPremium') next.renderer = 'svg-batch';
+    return next;
+  }, [spec, pointCount]);
   
   const gridConfig = spec.grid || { horizontal: true, vertical: true };
   const [chartRef, chartWidth] = useResponsiveChartWidth(360, 280);
   const chartHeight = spec.height || 420;
+  const margin = useMemo(() => spec.margin || { top: 46, right: 28, left: 72, bottom: 68 }, [spec.margin]);
+  const slotProps = useMemo(
+    () => ({ legend: { position: { vertical: 'top', horizontal: 'middle' }, sx: { color: '#e5e7eb', fontSize: 12 } } }),
+    [],
+  );
   
   const ChartComponent = spec.component === 'ScatterChartPremium' || spec.chart_type === 'webgl_scatter' || spec.renderer === 'webgl'
     ? ScatterChartPremium
@@ -118,7 +133,7 @@ export default function ScatterChartRenderer({ spec }) {
         yAxis={yAxisConfig}
         {...(zAxisConfig ? { zAxis: zAxisConfig } : {})}
         height={chartHeight}
-        margin={spec.margin || { top: 46, right: 28, left: 72, bottom: 68 }}
+        margin={margin}
         grid={gridConfig}
         sx={{
           '& .MuiChartsAxis-tickLabel': AXIS_STYLE,
@@ -127,7 +142,7 @@ export default function ScatterChartRenderer({ spec }) {
           '& .MuiChartsLegend-root': { color: '#e5e7eb', fontSize: 12 },
           '& .MuiScatter-root .MuiScatter-mark': { fillOpacity: spec.chart_type === 'bubble_scatter' ? 0.68 : 0.9, strokeWidth: 1.2 },
         }}
-        slotProps={{ legend: { position: { vertical: 'top', horizontal: 'middle' }, sx: { color: '#e5e7eb', fontSize: 12 } } }}
+        slotProps={slotProps}
         {...chartProps}
       >
         {spec.regression_line && <ScatterRegressionLine regression={spec.regression_line} />}

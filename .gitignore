@@ -39,4 +39,30 @@ __pycache__/
 .Python
 *.so
 *.egg-info/
+
+# LaTeX build outputs
+*.aux
+*.lof
+*.lot
+*.out
+*.toc
+*.synctex.gz
+
+# Local report/notebook generated artifacts
+tmp/
+tables_universe_analysis/
+notebook/data/
+notebook/figures_universe_analysis/
+notebook/plot_qa_contact_sheets/
+notebook/tables_universe_analysis/
+report/New Project/.latex-build/
+report/New Project/main.pdf
+report/New Project/*.bak
+report/New Project/pdf_check/
+report/New Project/prism-uploads/
+report/New Project/rendered/
+report/New Project/rendered2/
+report/New Project/scratch/
+report/New Project/tmp*/
+report/New Project/uploads/
 ```

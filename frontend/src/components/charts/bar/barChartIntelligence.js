@@ -26,7 +26,7 @@ export function chooseRenderer(payload) {
   const pointCount = getPointCount(payload);
   const requested = payload?.renderer;
   if (requested) return requested;
-  if (pointCount >= 5000) return 'webgl';
+  if (pointCount >= 5000 && payload?.premium_enabled && payload?.component === 'BarChartPremium') return 'webgl';
   if (pointCount >= 500) return 'svg-batch';
   return 'svg-single';
 }

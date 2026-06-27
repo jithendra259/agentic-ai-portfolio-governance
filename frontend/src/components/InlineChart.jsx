@@ -48,6 +48,35 @@ function getPointCount(spec) {
   return (spec?.series || []).reduce((total, entry) => total + (Array.isArray(entry?.data) ? entry.data.length : 0), 0);
 }
 
+class ChartErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error('Chart render failed:', error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Box sx={{ p: 2, border: '1px solid #374151', borderRadius: 1, bgcolor: '#0b1120' }}>
+          <Typography variant="body2" sx={{ color: '#fca5a5' }}>
+            Visualization unavailable: chart renderer could not display this PlotSpec.
+          </Typography>
+        </Box>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 function InlineChart({ plotId }) {
   const [containerRef, isNearViewport] = useNearViewport();
   const [spec, setSpec] = React.useState(null);
@@ -231,7 +260,9 @@ function InlineChart({ plotId }) {
           Rendered {pointCount.toLocaleString()} sampled points for smooth chat scrolling.
         </Typography>
       )}
-      <ChartComponent spec={spec} />
+      <ChartErrorBoundary key={plotId}>
+        <ChartComponent spec={spec} />
+      </ChartErrorBoundary>
     </Paper>
   );
 }

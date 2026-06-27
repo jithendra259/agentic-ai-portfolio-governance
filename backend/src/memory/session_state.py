@@ -53,6 +53,8 @@ def default_session_state(session_id: str) -> dict[str, Any]:
         "active_analysis_id": None,
         "last_successful_analysis": None,
         "last_successful_plot": None,
+        "latest_governance_run": None,
+        "pending_plot_request": None,
         "approved_proxies": [],
         "last_intent": None,
         "last_sub_intent": None,

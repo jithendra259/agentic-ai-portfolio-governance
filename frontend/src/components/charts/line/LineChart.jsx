@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Box } from '@mui/material';
-import { LineChartPro as LineChart } from '@mui/x-charts-pro/LineChartPro';
+import { LineChart } from '@mui/x-charts/LineChart';
 import { useResponsiveChartWidth } from '../common/useResponsiveChartWidth';
 import RecessionBands from './RecessionBands';
 import {
@@ -14,13 +14,14 @@ import {
 import { dateScaleType, formatChartDate } from '../../../utils/plotDataParser.js';
 
 export default function LineChartRenderer({ spec }) {
-  const { dataset, series, yAxisConfig, margins } = useMemo(() => {
+  const { dataset, series, yAxisConfig, margins, pointCount } = useMemo(() => {
     if (!spec?.series?.length) {
       return {
         dataset: [],
         series: [],
         yAxisConfig: [],
         margins: { top: 24, right: 24, left: 60, bottom: 40 },
+        pointCount: 0,
       };
     }
     const specText = `${spec?.title || ''} ${spec?.plot_id || ''} ${spec?.chart_type || ''}`.toLowerCase();
@@ -30,8 +31,9 @@ export default function LineChartRenderer({ spec }) {
     const series = prepareSeries(spec, inferredArea);
     const yAxisConfig = prepareYAxis(spec);
     const margins = prepareMargins(spec);
+    const pointCount = spec.series.reduce((total, item) => total + (Array.isArray(item?.data) ? item.data.length : 0), 0);
 
-    return { dataset, series, yAxisConfig, margins };
+    return { dataset, series, yAxisConfig, margins, pointCount };
   }, [spec]);
 
   if (!dataset.length) return null;
@@ -56,26 +58,31 @@ export default function LineChartRenderer({ spec }) {
   }), [spec.animation, hasAreaSeries]);
 
   const [chartRef, chartWidth] = useResponsiveChartWidth();
+  const chartHeight = Number.isFinite(Number(spec.height)) ? Number(spec.height) : 320;
+  const skipAnimation = Boolean(spec.skipAnimation || pointCount > 500);
+  const xAxisConfig = useMemo(() => [{
+    id: 'x-axis',
+    dataKey: 'date',
+    scaleType: dateScaleType(spec),
+    tickLabelStyle: AXIS_STYLE,
+    label: spec.x_label || 'Date',
+    valueFormatter: (date) => formatChartDate(date, spec),
+    ...(spec.zoom ? { zoom: spec.zoom } : {}),
+  }], [spec]);
+  const chartMargin = useMemo(() => margins, [margins]);
 
   return (
-    <Box ref={chartRef} sx={{ width: '100%', height: 320, minWidth: 0, ...animationSx }}>
+    <Box ref={chartRef} sx={{ width: '100%', height: chartHeight, minWidth: 0, ...animationSx }}>
       <LineChart
         width={chartWidth}
+        height={chartHeight}
         dataset={dataset}
         series={series}
-        xAxis={[{ 
-          id: 'x-axis', 
-          dataKey: 'date', 
-          scaleType: dateScaleType(spec), 
-          tickLabelStyle: AXIS_STYLE, 
-          label: spec.x_label || 'Date',
-          valueFormatter: (date) => formatChartDate(date, spec),
-          ...(spec.zoom ? { zoom: spec.zoom } : {}),
-        }]}
+        xAxis={xAxisConfig}
         yAxis={yAxisConfig}
-        margin={margins}
+        margin={chartMargin}
         grid={gridConfig}
-        {...(spec.skipAnimation ? { skipAnimation: true } : {})}
+        skipAnimation={skipAnimation}
       >
         {spec.recessions && <RecessionBands periods={spec.recessions} />}
       </LineChart>
