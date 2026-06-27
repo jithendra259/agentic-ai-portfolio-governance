@@ -25,10 +25,10 @@ from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 
+load_dotenv(root_dir / ".env", encoding="utf-8-sig")
 load_dotenv()
 
 
-MONGO_URI = os.getenv("MONGO_URI")
 DB_NAME = "Stock_data"
 COLLECTION_NAME = "ticker"
 logger = logging.getLogger(__name__)
@@ -74,13 +74,22 @@ def _generate_financial_plot():
     return generate_financial_plot
 
 
+def _get_mongo_uri() -> str:
+    mongo_uri = (os.getenv("MONGO_URI") or "").strip()
+    if not mongo_uri:
+        load_dotenv(root_dir / ".env", override=False, encoding="utf-8-sig")
+        mongo_uri = (os.getenv("MONGO_URI") or "").strip()
+    return mongo_uri
+
+
 @lru_cache(maxsize=1)
 def _get_client():
-    if not MONGO_URI:
+    mongo_uri = _get_mongo_uri()
+    if not mongo_uri:
         raise ValueError("MONGO_URI is not set in the environment.")
 
     return MongoClient(
-        MONGO_URI,
+        mongo_uri,
         tls=True,
         tlsAllowInvalidCertificates=True,
         serverSelectionTimeoutMS=10000,

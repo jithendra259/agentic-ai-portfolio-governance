@@ -8,10 +8,23 @@ from pymongo.errors import NetworkTimeout
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.agents.live_data_tools import get_historical_prices, get_stock_database_snapshot
+from src.agents.live_data_tools import _get_client, get_historical_prices, get_stock_database_snapshot
 
 
 class LiveDataToolsYFinanceFallbackTests(unittest.TestCase):
+    def tearDown(self):
+        _get_client.cache_clear()
+
+    def test_mongo_client_resolves_uri_lazily_from_environment(self):
+        _get_client.cache_clear()
+
+        with patch.dict(os.environ, {"MONGO_URI": "mongodb://example.local:27017"}, clear=False):
+            with patch("src.agents.live_data_tools.MongoClient") as mongo_client:
+                _get_client()
+
+        mongo_client.assert_called_once()
+        self.assertEqual(mongo_client.call_args.args[0], "mongodb://example.local:27017")
+
     def test_stock_snapshot_falls_back_to_yfinance_when_mongo_lookup_fails(self):
         fallback_doc = {
             "ticker": "MSFT",

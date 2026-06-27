@@ -16,7 +16,7 @@ print("=== MAIN.PY LOADED ===")
 print("PATH:", sys.executable)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env", encoding="utf-8-sig")
 load_dotenv()
 
 if str(PROJECT_ROOT) not in sys.path:
