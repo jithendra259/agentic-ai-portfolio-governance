@@ -139,6 +139,9 @@ def get_current_user_id(request: Request) -> str | None:
 def require_current_user_id(request: Request, action: str = "use chat") -> str:
     user_id = get_current_user_id(request)
     if not user_id:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail=f"Your login token could not be verified to {action}")
         raise HTTPException(status_code=401, detail=f"Authentication is required to {action}")
     return user_id
 
