@@ -4,10 +4,27 @@ from typing import Any
 from src.agents.derived_plot_tools import run_data_analysis_plot
 
 
-TICKER_RE = re.compile(r"\b[A-Z]{1,5}\b")
+TICKER_RE = re.compile(r"(?<![A-Z0-9.])([A-Z0-9]{1,10}(?:[.-][A-Z0-9]{1,6})?)(?![A-Z0-9.])")
 DATE_RE = re.compile(r"\b(?:19|20)\d{2}(?:-\d{2})?(?:-\d{2})?\b")
 DEFAULT_START_DATE = "2020-01-01"
 DEFAULT_END_DATE = "2025-01-01"
+KNOWN_SECTORS = {
+    "technology": "Technology",
+    "information technology": "Technology",
+    "financials": "Financials",
+    "financial services": "Financial Services",
+    "healthcare": "Healthcare",
+    "health care": "Healthcare",
+    "energy": "Energy",
+    "utilities": "Utilities",
+    "industrials": "Industrials",
+    "industrial": "Industrials",
+    "real estate": "Real Estate",
+    "consumer discretionary": "Consumer Discretionary",
+    "consumer staples": "Consumer Staples",
+    "communication services": "Communication Services",
+    "materials": "Materials",
+}
 
 STOP_TICKERS = {
     "AI",
@@ -49,12 +66,25 @@ def _extract_dates(message: str) -> tuple[str, str]:
 def _extract_tickers(message: str) -> list[str]:
     seen = set()
     tickers = []
-    for ticker in TICKER_RE.findall(message or ""):
+    for raw_ticker in TICKER_RE.findall(message or ""):
+        if raw_ticker != raw_ticker.upper() or raw_ticker.isdigit():
+            continue
+        ticker = raw_ticker.upper()
+        if len(ticker) == 1 and "." not in ticker and "-" not in ticker:
+            continue
         if ticker in STOP_TICKERS or ticker in seen:
             continue
         seen.add(ticker)
         tickers.append(ticker)
     return tickers
+
+
+def _extract_sector(message: str) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(message or "").lower())
+    for alias, canonical in sorted(KNOWN_SECTORS.items(), key=lambda item: len(item[0]), reverse=True):
+        if re.search(rf"\b{re.escape(alias)}\b", normalized):
+            return canonical
+    return None
 
 
 def _looks_like_chart_request(text: str) -> bool:
@@ -123,21 +153,23 @@ def resolve_deterministic_chart_request(message: str, session_id: str) -> dict[s
         return None
 
     tickers = _extract_tickers(raw_message)
+    sector = _extract_sector(raw_message)
     start_date, end_date = _extract_dates(raw_message)
 
-    if analysis_task == "price_spread_area" and len(tickers) < 2:
+    if analysis_task == "price_spread_area" and len(tickers) < 2 and not sector:
         tickers = ["AAPL", "MSFT"]
-    elif analysis_task == "returns_box_plot" and not tickers:
+    elif analysis_task == "returns_box_plot" and not tickers and not sector:
         tickers = ["AAPL", "MSFT", "NVDA"]
-    elif analysis_task == "returns_correlation_heatmap" and len(tickers) < 2:
+    elif analysis_task == "returns_correlation_heatmap" and len(tickers) < 2 and not sector:
         tickers = ["AAPL", "MSFT", "NVDA"]
-    elif analysis_task == "ohlc_correlation_heatmap" and not tickers:
+    elif analysis_task == "ohlc_correlation_heatmap" and not tickers and not sector:
         tickers = ["AAPL"]
 
     result = run_data_analysis_plot.func(
         analysis_task=analysis_task,
         tickers=tickers,
         ticker=tickers[0] if tickers else None,
+        sector=sector,
         start_date=start_date,
         end_date=end_date,
         config={"configurable": {"thread_id": session_id}},
@@ -149,6 +181,7 @@ def resolve_deterministic_chart_request(message: str, session_id: str) -> dict[s
         "analysis_task": analysis_task,
         "plot_id": result["plot_id"],
         "tickers": result.get("tickers") or tickers,
+        "sector": sector,
         "start_date": start_date,
         "end_date": end_date,
         "summary": result,
@@ -158,6 +191,7 @@ def resolve_deterministic_chart_request(message: str, session_id: str) -> dict[s
 def build_chart_response(resolved: dict[str, Any]) -> str:
     task = resolved.get("analysis_task", "chart")
     tickers = ", ".join(resolved.get("tickers") or [])
+    sector = resolved.get("sector")
     start_date = resolved.get("start_date")
     end_date = resolved.get("end_date")
     labels = {
@@ -169,6 +203,6 @@ def build_chart_response(resolved: dict[str, Any]) -> str:
         "price_spread_area": "close-price spread area chart",
     }
     chart_name = labels.get(task, task.replace("_", " "))
-    scope = f" for {tickers}" if tickers else ""
+    scope = f" for {sector}" if sector else f" for {tickers}" if tickers else ""
     window = f" from {start_date} to {end_date}" if start_date and end_date else ""
     return f"Done — I generated the {chart_name}{scope}{window}."

@@ -9,6 +9,7 @@ import pandas as pd
 from langchain_core.tools import tool
 
 from src.agents.live_data_tools import (
+    _cached_yfinance_history_frame,
     _extract_price_frame,
     _find_price_documents_with_retry,
     _normalize_tickers,
@@ -126,10 +127,9 @@ def get_price_series_for_analysis(
     for ticker in cleaned:
         doc = found.get(ticker)
         if not doc:
-            missing.append(ticker)
-            continue
-
-        df = _extract_price_frame(doc, keep_ohlcv=True)
+            df = _cached_yfinance_history_frame(ticker, start_str, end_str)
+        else:
+            df = _extract_price_frame(doc, keep_ohlcv=True)
         if df.empty:
             missing.append(ticker)
             continue

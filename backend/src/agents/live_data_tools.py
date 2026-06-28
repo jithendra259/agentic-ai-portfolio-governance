@@ -6,7 +6,7 @@ import time
 import warnings
 from functools import lru_cache
 from importlib import import_module
-from typing import Optional
+from typing import Any, Optional
 
 import networkx as nx
 import numpy as np
@@ -340,16 +340,23 @@ def _prepare_portfolio_inputs(
     price_history = {}
     effective_dates = {}
     price_series = {}
+    data_sources = {}
 
     for ticker in cleaned_tickers:
         doc = docs_by_ticker.get(ticker)
+        source = "MongoDB"
         if not doc:
-            _warn_drop_ticker(ticker, "ticker not found in MongoDB", dropped_tickers)
-            continue
+            df = _cached_yfinance_history_frame(
+                ticker,
+                (target_dt - pd.Timedelta(days=540)).strftime("%Y-%m-%d"),
+                (target_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+            )
+            source = "yfinance"
+        else:
+            df = price_frames.get(ticker, pd.DataFrame())
 
-        df = price_frames.get(ticker, pd.DataFrame())
         if df.empty:
-            _warn_drop_ticker(ticker, "no historical price series stored", dropped_tickers)
+            _warn_drop_ticker(ticker, "no MongoDB or yfinance historical price series", dropped_tickers)
             continue
 
         eligible = df[df["Date"] <= target_dt].copy()
@@ -367,6 +374,7 @@ def _prepare_portfolio_inputs(
             continue
 
         valid_tickers.append(ticker)
+        data_sources[ticker] = source
         effective_row = eligible.iloc[-1]
         effective_date = effective_row["Date"].strftime("%Y-%m-%d")
         effective_dates[ticker] = effective_date
@@ -398,6 +406,7 @@ def _prepare_portfolio_inputs(
         "price_history": price_history,
         "effective_dates": effective_dates,
         "overlapping_prices": overlapping_prices,
+        "data_sources": data_sources,
     }
 
 
@@ -867,6 +876,7 @@ def _build_lightweight_governance_payload(
     systemic_risk: Optional[dict] = None,
     optimization: Optional[dict] = None,
     generated_plots: Optional[list[str]] = None,
+    data_sources: Optional[dict[str, str]] = None,
 ) -> dict:
     return {
         "status": status,
@@ -874,6 +884,7 @@ def _build_lightweight_governance_payload(
         "target_date": str(target_date or ""),
         "valid_tickers": valid_tickers or [],
         "dropped_tickers": dropped_tickers or [],
+        "data_sources": data_sources or {},
         "systemic_risk": systemic_risk or {"method": "Unavailable", "scores": {}},
         "optimization": optimization or {},
         "generated_plots": generated_plots or [],
@@ -1172,6 +1183,655 @@ def _get_yfinance_info(ticker_obj) -> dict:
     return info if isinstance(info, dict) else {}
 
 
+def _json_safe_value(value):
+    if pd.isna(value) if not isinstance(value, (list, dict, tuple, set)) else False:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _frame_to_json_records(frame, max_rows: int = 5000) -> list[dict]:
+    if frame is None:
+        return []
+    if isinstance(frame, pd.Series):
+        frame = frame.to_frame(name=frame.name or "value")
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return []
+
+    normalized = frame.reset_index().copy()
+    normalized.columns = [str(column) for column in normalized.columns]
+    if len(normalized) > max_rows:
+        normalized = normalized.tail(max_rows)
+    normalized = normalized.replace({np.nan: None})
+    records = normalized.to_dict(orient="records")
+    return [
+        {str(key): _json_safe_value(value) for key, value in row.items()}
+        for row in records
+    ]
+
+
+def _series_to_json_records(series, max_rows: int = 5000) -> list[dict]:
+    if series is None or not isinstance(series, pd.Series) or series.empty:
+        return []
+    frame = series.tail(max_rows).rename(series.name or "value").reset_index()
+    frame.columns = [str(column) for column in frame.columns]
+    return [
+        {str(key): _json_safe_value(value) for key, value in row.items()}
+        for row in frame.replace({np.nan: None}).to_dict(orient="records")
+    ]
+
+
+def _safe_yfinance_frame(ticker_obj, attr_name: str) -> list[dict]:
+    try:
+        value = getattr(ticker_obj, attr_name)
+    except Exception as exc:
+        logger.warning("yfinance %s fetch failed: %s", attr_name, exc)
+        return []
+    return _frame_to_json_records(value)
+
+
+def _safe_yfinance_series(ticker_obj, attr_name: str) -> list[dict]:
+    try:
+        value = getattr(ticker_obj, attr_name)
+    except Exception as exc:
+        logger.warning("yfinance %s fetch failed: %s", attr_name, exc)
+        return []
+    return _series_to_json_records(value)
+
+
+def _normalize_yfinance_data_type(data_type: str | None) -> str:
+    normalized = str(data_type or "history").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "price": "history",
+        "prices": "history",
+        "ohlcv": "history",
+        "close": "history",
+        "profile": "info",
+        "company": "info",
+        "fundamentals": "financials",
+        "income_statement": "financials",
+        "balance": "balance_sheet",
+        "cash_flow": "cashflow",
+        "recommendation": "recommendations",
+        "institutional_holders": "holders",
+        "holder": "holders",
+        "everything": "all",
+        "any": "all",
+        "auto": "all",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _fetch_yfinance_market_payload(
+    symbol: str,
+    data_type: str,
+    period: str = "1y",
+    interval: str = "1d",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    option_expiration: str | None = None,
+) -> dict | None:
+    yf = _get_yfinance_module()
+    if yf is None:
+        return None
+
+    normalized_symbol = str(symbol or "").strip().upper()
+    if not normalized_symbol:
+        return None
+
+    normalized_type = _normalize_yfinance_data_type(data_type)
+    try:
+        ticker_obj = yf.Ticker(normalized_symbol)
+    except Exception as exc:
+        logger.warning("yfinance ticker initialization failed for %s: %s", normalized_symbol, exc)
+        return None
+
+    payload: dict[str, object] = {
+        "symbol": normalized_symbol,
+        "data_type": normalized_type,
+        "period": period,
+        "interval": interval,
+        "start_date": start_date,
+        "end_date": end_date,
+        "source": "yfinance",
+    }
+
+    def add_history() -> None:
+        try:
+            history_kwargs = {"interval": interval or "1d", "auto_adjust": False}
+            if start_date or end_date:
+                if start_date:
+                    history_kwargs["start"] = start_date
+                if end_date:
+                    history_kwargs["end"] = end_date
+            else:
+                history_kwargs["period"] = period or "1y"
+            payload["history"] = _frame_to_json_records(ticker_obj.history(**history_kwargs))
+        except Exception as exc:
+            logger.warning("yfinance history fetch failed for %s: %s", normalized_symbol, exc)
+            payload["history"] = []
+
+    def add_info() -> None:
+        info = _get_yfinance_info(ticker_obj)
+        payload["info"] = {str(key): _json_safe_value(value) for key, value in info.items()}
+
+    if normalized_type in {"history", "all"}:
+        add_history()
+    if normalized_type in {"info", "all"}:
+        add_info()
+    if normalized_type in {"financials", "all"}:
+        payload["financials"] = _safe_yfinance_frame(ticker_obj, "financials")
+    if normalized_type in {"balance_sheet", "all"}:
+        payload["balance_sheet"] = _safe_yfinance_frame(ticker_obj, "balance_sheet")
+    if normalized_type in {"cashflow", "all"}:
+        payload["cashflow"] = _safe_yfinance_frame(ticker_obj, "cashflow")
+    if normalized_type in {"dividends", "all"}:
+        payload["dividends"] = _safe_yfinance_series(ticker_obj, "dividends")
+    if normalized_type in {"splits", "all"}:
+        payload["splits"] = _safe_yfinance_series(ticker_obj, "splits")
+    if normalized_type in {"holders", "all"}:
+        payload["major_holders"] = _safe_yfinance_frame(ticker_obj, "major_holders")
+        payload["institutional_holders"] = _safe_yfinance_frame(ticker_obj, "institutional_holders")
+        payload["mutualfund_holders"] = _safe_yfinance_frame(ticker_obj, "mutualfund_holders")
+    if normalized_type in {"recommendations", "all"}:
+        payload["recommendations"] = _safe_yfinance_frame(ticker_obj, "recommendations")
+    if normalized_type in {"options", "all"}:
+        try:
+            expirations = list(getattr(ticker_obj, "options", []) or [])
+            payload["options_expirations"] = expirations
+            selected_expiration = option_expiration or (expirations[0] if normalized_type == "options" and expirations else None)
+            if selected_expiration:
+                chain = ticker_obj.option_chain(selected_expiration)
+                payload["options"] = {
+                    "expiration": selected_expiration,
+                    "calls": _frame_to_json_records(getattr(chain, "calls", None)),
+                    "puts": _frame_to_json_records(getattr(chain, "puts", None)),
+                }
+        except Exception as exc:
+            logger.warning("yfinance options fetch failed for %s: %s", normalized_symbol, exc)
+            payload["options_expirations"] = []
+
+    if len(payload) <= 7:
+        return None
+    return payload
+
+
+def _market_payload_summary(payload: dict, from_cache: bool = False) -> str:
+    symbol = payload.get("symbol", "UNKNOWN")
+    data_type = payload.get("data_type", "market_data")
+    lines = [
+        f"Market data for {symbol}",
+        f"- Source: {payload.get('source', 'yfinance')}{' cache' if from_cache else ''}",
+        f"- Data type: {data_type}",
+    ]
+    for key in [
+        "history",
+        "financials",
+        "balance_sheet",
+        "cashflow",
+        "dividends",
+        "splits",
+        "recommendations",
+        "major_holders",
+        "institutional_holders",
+        "mutualfund_holders",
+    ]:
+        value = payload.get(key)
+        if isinstance(value, list):
+            lines.append(f"- {key}: {len(value)} rows")
+    info = payload.get("info")
+    if isinstance(info, dict) and info:
+        name = info.get("longName") or info.get("shortName") or symbol
+        sector = info.get("sector") or "Unknown sector"
+        industry = info.get("industry") or "Unknown industry"
+        lines.append(f"- Company: {name}")
+        lines.append(f"- Classification: {sector} / {industry}")
+    expirations = payload.get("options_expirations")
+    if isinstance(expirations, list):
+        lines.append(f"- options_expirations: {len(expirations)} dates")
+    options = payload.get("options")
+    if isinstance(options, dict):
+        calls = options.get("calls") if isinstance(options.get("calls"), list) else []
+        puts = options.get("puts") if isinstance(options.get("puts"), list) else []
+        lines.append(f"- options chain {options.get('expiration')}: {len(calls)} calls, {len(puts)} puts")
+    lines.append("The full payload is cached for follow-up analysis.")
+    return "\n".join(lines)
+
+
+MARKET_DATA_REQUIREMENT_KEYWORDS = {
+    "history": [
+        "history",
+        "historical",
+        "ohlcv",
+        "open",
+        "high",
+        "low",
+        "close",
+        "closing",
+        "volume",
+        "price trend",
+        "chart",
+    ],
+    "info": [
+        "quote",
+        "current price",
+        "market cap",
+        "valuation",
+        "pe",
+        "p/e",
+        "beta",
+        "company",
+        "profile",
+        "sector",
+        "industry",
+        "business",
+        "summary",
+        "employees",
+    ],
+    "financials": [
+        "financials",
+        "income",
+        "income statement",
+        "revenue",
+        "sales",
+        "profit",
+        "net income",
+        "ebitda",
+        "operating income",
+    ],
+    "balance_sheet": [
+        "balance",
+        "balance sheet",
+        "assets",
+        "liabilities",
+        "equity",
+        "debt",
+        "cash",
+    ],
+    "cashflow": [
+        "cash flow",
+        "cashflow",
+        "operating cash",
+        "free cash",
+        "capex",
+        "capital expenditure",
+    ],
+    "dividends": ["dividend", "dividends", "yield"],
+    "splits": ["split", "splits"],
+    "holders": ["holder", "holders", "institution", "institutional", "mutual fund", "ownership"],
+    "recommendations": ["recommendation", "recommendations", "analyst", "rating", "buy", "sell", "hold"],
+    "options": ["option", "options", "calls", "puts", "strike", "expiry", "expiration"],
+}
+
+
+MARKET_METRIC_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "current_price": {
+        "label": "Current price",
+        "data_type": "info",
+        "aliases": ["current price", "latest price", "quote", "stock price"],
+        "info_keys": ["currentPrice", "regularMarketPrice", "previousClose"],
+    },
+    "market_cap": {
+        "label": "Market cap",
+        "data_type": "info",
+        "aliases": ["market cap", "market capitalization", "valuation"],
+        "info_keys": ["marketCap"],
+    },
+    "trailing_pe": {
+        "label": "Trailing P/E",
+        "data_type": "info",
+        "aliases": ["trailing pe", "trailing p/e", "pe ratio", "p/e ratio"],
+        "info_keys": ["trailingPE"],
+    },
+    "forward_pe": {
+        "label": "Forward P/E",
+        "data_type": "info",
+        "aliases": ["forward pe", "forward p/e"],
+        "info_keys": ["forwardPE"],
+    },
+    "beta": {
+        "label": "Beta",
+        "data_type": "info",
+        "aliases": ["beta"],
+        "info_keys": ["beta"],
+    },
+    "dividend_yield": {
+        "label": "Dividend yield",
+        "data_type": "info",
+        "aliases": ["dividend yield", "yield"],
+        "info_keys": ["dividendYield", "trailingAnnualDividendYield"],
+    },
+    "total_revenue": {
+        "label": "Total revenue",
+        "data_type": "financials",
+        "aliases": ["revenue", "total revenue", "sales"],
+        "statement_rows": ["total revenue", "revenue"],
+    },
+    "net_income": {
+        "label": "Net income",
+        "data_type": "financials",
+        "aliases": ["net income", "profit", "earnings"],
+        "statement_rows": ["net income", "net income common stockholders"],
+    },
+    "gross_profit": {
+        "label": "Gross profit",
+        "data_type": "financials",
+        "aliases": ["gross profit"],
+        "statement_rows": ["gross profit"],
+    },
+    "operating_income": {
+        "label": "Operating income",
+        "data_type": "financials",
+        "aliases": ["operating income", "operating profit"],
+        "statement_rows": ["operating income"],
+    },
+    "ebitda": {
+        "label": "EBITDA",
+        "data_type": "financials",
+        "aliases": ["ebitda"],
+        "statement_rows": ["ebitda", "normalized ebitda"],
+    },
+    "total_assets": {
+        "label": "Total assets",
+        "data_type": "balance_sheet",
+        "aliases": ["total assets", "assets"],
+        "statement_rows": ["total assets"],
+    },
+    "total_liabilities": {
+        "label": "Total liabilities",
+        "data_type": "balance_sheet",
+        "aliases": ["total liabilities", "liabilities"],
+        "statement_rows": ["total liabilities net minority interest", "total liabilities"],
+    },
+    "total_debt": {
+        "label": "Total debt",
+        "data_type": "balance_sheet",
+        "aliases": ["total debt", "debt"],
+        "statement_rows": ["total debt"],
+    },
+    "cash": {
+        "label": "Cash and equivalents",
+        "data_type": "balance_sheet",
+        "aliases": ["cash", "cash equivalents"],
+        "statement_rows": ["cash and cash equivalents", "cash cash equivalents and short term investments"],
+    },
+    "operating_cash_flow": {
+        "label": "Operating cash flow",
+        "data_type": "cashflow",
+        "aliases": ["operating cash flow", "cash from operations"],
+        "statement_rows": ["operating cash flow", "total cash from operating activities"],
+    },
+    "free_cash_flow": {
+        "label": "Free cash flow",
+        "data_type": "cashflow",
+        "aliases": ["free cash flow", "fcf"],
+        "statement_rows": ["free cash flow"],
+    },
+    "capital_expenditure": {
+        "label": "Capital expenditure",
+        "data_type": "cashflow",
+        "aliases": ["capital expenditure", "capex"],
+        "statement_rows": ["capital expenditure", "capital expenditures"],
+    },
+    "latest_close": {
+        "label": "Latest close",
+        "data_type": "history",
+        "aliases": ["latest close", "closing price", "close price", "close"],
+    },
+}
+
+
+def _normalize_market_text(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+
+
+def _infer_market_data_requirements(request: str = "", metrics: list[str] | None = None) -> tuple[list[str], list[str]]:
+    text = _normalize_market_text(" ".join([request or "", " ".join(metrics or [])]))
+    requested_types: set[str] = set()
+    requested_metrics: list[str] = []
+
+    if any(phrase in text for phrase in ["all data", "all available", "everything", "any kind of data", "complete data"]):
+        requested_types.update(
+            ["history", "info", "financials", "balance_sheet", "cashflow", "dividends", "splits", "holders", "recommendations", "options"]
+        )
+
+    for metric_key, definition in MARKET_METRIC_DEFINITIONS.items():
+        aliases = definition.get("aliases", [])
+        if any(_normalize_market_text(alias) in text for alias in aliases):
+            requested_metrics.append(metric_key)
+            requested_types.add(str(definition["data_type"]))
+
+    for data_type, keywords in MARKET_DATA_REQUIREMENT_KEYWORDS.items():
+        if any(_normalize_market_text(keyword) in text for keyword in keywords):
+            requested_types.add(data_type)
+
+    if not requested_types:
+        requested_types.add("info")
+    return sorted(requested_types), requested_metrics
+
+
+def _fetch_cached_yfinance_market_payload(
+    symbol: str,
+    data_type: str,
+    period: str = "1y",
+    interval: str = "1d",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    option_expiration: str | None = None,
+) -> tuple[dict | None, bool]:
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_type = _normalize_yfinance_data_type(data_type)
+    params = {"option_expiration": option_expiration or ""}
+    cache_key = memory_manager.compute_market_data_cache_key(
+        symbol=normalized_symbol,
+        data_type=normalized_type,
+        period=period,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        params=params,
+    )
+    cached = memory_manager.retrieve_market_data_cache(cache_key)
+    if cached and isinstance(cached.get("payload"), dict):
+        return cached["payload"], True
+
+    payload = _fetch_yfinance_market_payload(
+        symbol=normalized_symbol,
+        data_type=normalized_type,
+        period=period,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        option_expiration=option_expiration,
+    )
+    if payload:
+        memory_manager.store_market_data_cache(
+            cache_key=cache_key,
+            symbol=normalized_symbol,
+            data_type=normalized_type,
+            payload=payload,
+            period=period,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+            source="yfinance",
+            ttl_hours=1 if normalized_type == "options" else 24,
+        )
+    return payload, False
+
+
+def _coerce_numeric(value: object) -> float | None:
+    if value in (None, "", "N/A"):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_market_value(value: object) -> str:
+    numeric = _coerce_numeric(value)
+    if numeric is None:
+        return str(value) if value not in (None, "") else "N/A"
+    absolute = abs(numeric)
+    if absolute >= 1_000_000_000_000:
+        return f"{numeric / 1_000_000_000_000:.2f}T"
+    if absolute >= 1_000_000_000:
+        return f"{numeric / 1_000_000_000:.2f}B"
+    if absolute >= 1_000_000:
+        return f"{numeric / 1_000_000:.2f}M"
+    if absolute >= 1_000:
+        return f"{numeric:,.2f}"
+    return f"{numeric:.4g}"
+
+
+def _statement_record_label(row: dict) -> str:
+    for key in ["index", "Breakdown", "breakdown", "lineItem", "Line Item", "metric"]:
+        if key in row:
+            return _normalize_market_text(row.get(key))
+    for value in row.values():
+        if isinstance(value, str):
+            return _normalize_market_text(value)
+    return ""
+
+
+def _extract_statement_metric(rows: list[dict], row_names: list[str]) -> tuple[object, str | None]:
+    normalized_targets = {_normalize_market_text(name) for name in row_names}
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        label = _statement_record_label(row)
+        if label not in normalized_targets:
+            continue
+        for key, value in row.items():
+            if _normalize_market_text(key) in {"index", "breakdown", "lineitem", "line item", "metric"}:
+                continue
+            numeric = _coerce_numeric(value)
+            if numeric is not None:
+                return numeric, str(key)
+    return None, None
+
+
+def _extract_market_metric(payloads: dict[str, dict], metric_key: str) -> tuple[object, str | None]:
+    definition = MARKET_METRIC_DEFINITIONS.get(metric_key, {})
+    data_type = str(definition.get("data_type") or "")
+    payload = payloads.get(data_type) or {}
+    if data_type == "info":
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        for info_key in definition.get("info_keys", []):
+            if info_key in info and info.get(info_key) not in (None, ""):
+                return info.get(info_key), info_key
+        return None, None
+    if data_type in {"financials", "balance_sheet", "cashflow"}:
+        rows = payload.get(data_type) if isinstance(payload.get(data_type), list) else []
+        return _extract_statement_metric(rows, list(definition.get("statement_rows", [])))
+    if data_type == "history":
+        rows = payload.get("history") if isinstance(payload.get("history"), list) else []
+        for row in reversed(rows):
+            if isinstance(row, dict) and _coerce_numeric(row.get("Close")) is not None:
+                return row.get("Close"), str(row.get("Date") or "latest")
+    return None, None
+
+
+@tool
+def get_market_data_bundle(
+    symbols: list[str],
+    request: str = "",
+    metrics: list[str] | None = None,
+    period: str = "1y",
+    interval: str = "1d",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    option_expiration: str | None = None,
+) -> str:
+    """
+    Infer required yfinance data classes for a multi-ticker request, fetch/cache them, and return comparable values when possible.
+
+    Use this for broad or follow-up requests such as company data, fundamentals,
+    revenue/net-income comparison, valuation values, dividends, holders,
+    recommendations, options, or "all available data".
+    """
+    normalized_symbols = sorted({str(symbol or "").strip().upper() for symbol in symbols or [] if str(symbol or "").strip()})
+    if not normalized_symbols:
+        return "Unable to fetch market data bundle: no ticker symbols were provided."
+
+    data_types, inferred_metrics = _infer_market_data_requirements(request=request, metrics=metrics)
+    requested_metrics = list(dict.fromkeys([*(metrics or []), *inferred_metrics]))
+    resolved_metric_keys = [
+        metric for metric in requested_metrics if metric in MARKET_METRIC_DEFINITIONS
+    ]
+    if not resolved_metric_keys:
+        for item in requested_metrics:
+            normalized = _normalize_market_text(item)
+            match = next(
+                (
+                    key
+                    for key, definition in MARKET_METRIC_DEFINITIONS.items()
+                    if normalized == key or any(normalized == _normalize_market_text(alias) for alias in definition.get("aliases", []))
+                ),
+                None,
+            )
+            if match and match not in resolved_metric_keys:
+                resolved_metric_keys.append(match)
+
+    payloads_by_symbol: dict[str, dict[str, dict]] = {}
+    cache_hits: list[str] = []
+    fetch_failures: list[str] = []
+    for symbol in normalized_symbols:
+        payloads_by_symbol[symbol] = {}
+        for data_type in data_types:
+            payload, from_cache = _fetch_cached_yfinance_market_payload(
+                symbol=symbol,
+                data_type=data_type,
+                period=period,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                option_expiration=option_expiration,
+            )
+            if payload:
+                payloads_by_symbol[symbol][data_type] = payload
+                if from_cache:
+                    cache_hits.append(f"{symbol}:{data_type}")
+            else:
+                fetch_failures.append(f"{symbol}:{data_type}")
+
+    lines = [
+        "Market Data Bundle",
+        f"- Symbols: {', '.join(normalized_symbols)}",
+        f"- Data fetched: {', '.join(data_types)}",
+        "- Source: yfinance with backend cache",
+    ]
+    if cache_hits:
+        lines.append(f"- Cache hits: {', '.join(cache_hits[:12])}{' ...' if len(cache_hits) > 12 else ''}")
+    if fetch_failures:
+        lines.append(f"- Unavailable payloads: {', '.join(fetch_failures[:12])}{' ...' if len(fetch_failures) > 12 else ''}")
+
+    if resolved_metric_keys:
+        header = ["Metric", *normalized_symbols]
+        lines.append("")
+        lines.append("| " + " | ".join(header) + " |")
+        lines.append("| " + " | ".join(["---"] * len(header)) + " |")
+        for metric_key in resolved_metric_keys:
+            definition = MARKET_METRIC_DEFINITIONS[metric_key]
+            row = [str(definition["label"])]
+            for symbol in normalized_symbols:
+                value, period_label = _extract_market_metric(payloads_by_symbol.get(symbol, {}), metric_key)
+                formatted = _format_market_value(value)
+                if period_label and formatted != "N/A":
+                    formatted = f"{formatted} ({period_label})"
+                row.append(formatted)
+            lines.append("| " + " | ".join(row) + " |")
+    else:
+        lines.append("")
+        lines.append("Comparable numeric metrics were not explicitly requested, so the required payloads were fetched and cached for the next analysis step.")
+
+    return "\n".join(lines)
+
+
 def _normalize_percent_like_value(value):
     try:
         if value in (None, "", "N/A"):
@@ -1202,6 +1862,154 @@ def _history_frame_to_records(history: pd.DataFrame) -> list[dict]:
         {"Date": row["Date"].strftime("%Y-%m-%d"), "Close": round(float(row["Close"]), 6)}
         for _, row in frame.iterrows()
     ]
+
+
+@tool
+def get_yfinance_market_data(
+    symbol: str,
+    data_type: str = "history",
+    period: str = "1y",
+    interval: str = "1d",
+    start_date: str | None = None,
+    end_date: str | None = None,
+    option_expiration: str | None = None,
+) -> str:
+    """
+    Fetch any available Yahoo Finance/yfinance data for a ticker, cache it in Supabase/Mongo, and return a compact summary.
+
+    data_type supports: history, info, financials, balance_sheet, cashflow, dividends,
+    splits, holders, recommendations, options, all.
+    """
+    normalized_symbol = str(symbol or "").strip().upper()
+    normalized_type = _normalize_yfinance_data_type(data_type)
+    if not normalized_symbol:
+        return "Unable to fetch market data: no ticker symbol was provided."
+
+    params = {"option_expiration": option_expiration or ""}
+    cache_key = memory_manager.compute_market_data_cache_key(
+        symbol=normalized_symbol,
+        data_type=normalized_type,
+        period=period,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        params=params,
+    )
+    cached = memory_manager.retrieve_market_data_cache(cache_key)
+    if cached and isinstance(cached.get("payload"), dict):
+        return _market_payload_summary(cached["payload"], from_cache=True)
+
+    payload = _fetch_yfinance_market_payload(
+        symbol=normalized_symbol,
+        data_type=normalized_type,
+        period=period,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        option_expiration=option_expiration,
+    )
+    if not payload:
+        return (
+            f"Unable to fetch {normalized_type} data for {normalized_symbol} from yfinance. "
+            "The ticker may be unavailable, delisted, or the requested data type may not be exposed by Yahoo Finance."
+        )
+
+    ttl_hours = 1 if normalized_type == "options" else 24
+    stored = memory_manager.store_market_data_cache(
+        cache_key=cache_key,
+        symbol=normalized_symbol,
+        data_type=normalized_type,
+        payload=payload,
+        period=period,
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        source="yfinance",
+        ttl_hours=ttl_hours,
+    )
+    summary = _market_payload_summary(payload, from_cache=False)
+    if stored:
+        summary += "\n- Cache: stored for faster follow-up requests"
+    else:
+        summary += "\n- Cache: skipped because no backend cache store is currently available"
+    return summary
+
+
+def _cached_yfinance_history_frame(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    interval: str = "1d",
+) -> pd.DataFrame:
+    normalized_ticker = str(ticker or "").strip().upper()
+    if not normalized_ticker:
+        return pd.DataFrame()
+
+    cache_key = memory_manager.compute_market_data_cache_key(
+        symbol=normalized_ticker,
+        data_type="history",
+        period="custom",
+        interval=interval,
+        start_date=start_date,
+        end_date=end_date,
+        params={},
+    )
+    cached = memory_manager.retrieve_market_data_cache(cache_key)
+    payload = cached.get("payload") if isinstance(cached, dict) else None
+    if not isinstance(payload, dict):
+        payload = _fetch_yfinance_market_payload(
+            symbol=normalized_ticker,
+            data_type="history",
+            period="custom",
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if isinstance(payload, dict):
+            memory_manager.store_market_data_cache(
+                cache_key=cache_key,
+                symbol=normalized_ticker,
+                data_type="history",
+                payload=payload,
+                period="custom",
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
+                source="yfinance",
+                ttl_hours=24,
+            )
+
+    rows = (payload or {}).get("history")
+    if not isinstance(rows, list) or not rows:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame()
+
+    date_col = next((col for col in frame.columns if str(col).lower() in {"date", "datetime"}), frame.columns[0])
+    rename_map = {}
+    for column in frame.columns:
+        lower = str(column).lower()
+        if lower == "open":
+            rename_map[column] = "Open"
+        elif lower == "high":
+            rename_map[column] = "High"
+        elif lower == "low":
+            rename_map[column] = "Low"
+        elif lower == "close":
+            rename_map[column] = "Close"
+        elif lower == "volume":
+            rename_map[column] = "Volume"
+    frame = frame.rename(columns=rename_map)
+    frame["Date"] = pd.to_datetime(frame[date_col], errors="coerce").dt.tz_localize(None)
+    for column in ["Open", "High", "Low", "Close", "Volume"]:
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "Close" not in frame.columns:
+        return pd.DataFrame()
+    frame = frame.dropna(subset=["Date", "Close"]).sort_values("Date")
+    return frame[[column for column in ["Date", "Open", "High", "Low", "Close", "Volume"] if column in frame.columns]]
 
 
 def _fetch_yfinance_snapshot_doc(ticker: str) -> Optional[dict]:
@@ -1563,26 +2371,27 @@ def plot_historical_prices(
             start_date=start_dt.strftime("%Y-%m-%d"),
             end_date=end_dt.strftime("%Y-%m-%d"),
         )
-        if not docs:
-            return (
-                "Unable to generate the historical price plot: none of the requested tickers were found "
-                "in MongoDB."
-            )
 
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         included = {}
         point_counts = {}
         excluded = []
+        yfinance_used = []
 
         for ticker in cleaned_tickers:
             doc = docs_by_ticker.get(ticker)
             if not doc:
-                excluded.append(f"- {ticker}: ticker not found in MongoDB")
-                continue
-
-            df = _extract_price_frame(doc)
+                df = _cached_yfinance_history_frame(
+                    ticker,
+                    start_dt.strftime("%Y-%m-%d"),
+                    end_dt.strftime("%Y-%m-%d"),
+                )
+                if not df.empty:
+                    yfinance_used.append(ticker)
+            else:
+                df = _extract_price_frame(doc)
             if df.empty:
-                excluded.append(f"- {ticker}: no stored historical price series")
+                excluded.append(f"- {ticker}: no MongoDB or yfinance historical price series")
                 continue
 
             filtered = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)].copy()
@@ -1709,6 +2518,10 @@ def plot_historical_prices(
         if excluded:
             response.extend(["", "Excluded tickers:"])
             response.extend(excluded)
+
+        if yfinance_used:
+            response.extend(["", "Source note:"])
+            response.append(f"- yfinance used and cached for: {', '.join(yfinance_used)}")
 
         if len(included) > 12:
             response.extend(
@@ -2203,16 +3016,25 @@ def run_historical_cvar_optimization(
             start_date=(target_dt - pd.Timedelta(days=540)).strftime("%Y-%m-%d"),
             end_date=target_dt.strftime("%Y-%m-%d"),
         )
-        if not docs:
-            return f"Unable to run historical CVaR optimization: none of the requested tickers were found in MongoDB for {target_date}."
 
+        found = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         price_series = {}
         effective_dates = {}
         missing = []
+        fallback_used = []
 
-        for doc in docs:
-            ticker = doc.get("ticker", "").upper()
-            df = _extract_price_frame(doc)
+        for ticker in cleaned_tickers:
+            doc = found.get(ticker)
+            if doc:
+                df = _extract_price_frame(doc)
+            else:
+                df = _cached_yfinance_history_frame(
+                    ticker,
+                    (target_dt - pd.Timedelta(days=540)).strftime("%Y-%m-%d"),
+                    (target_dt + pd.Timedelta(days=1)).strftime("%Y-%m-%d"),
+                )
+                if not df.empty:
+                    fallback_used.append(ticker)
 
             if df.empty:
                 missing.append(f"{ticker} (no historical price series)")
@@ -2343,6 +3165,10 @@ def run_historical_cvar_optimization(
             response.extend(["", "Excluded or unavailable tickers:"])
             response.extend(f"- {item}" for item in missing)
 
+        if fallback_used:
+            response.extend(["", "Source note:"])
+            response.append(f"- yfinance used and cached for: {', '.join(fallback_used)}")
+
         return "\n".join(response)
 
     except Exception as e:
@@ -2411,23 +3237,6 @@ def run_full_governance_pipeline(
                 "graph_relationships.institutional_holders": 1,
             },
         )
-        if not docs:
-            return json.dumps(
-                _build_lightweight_governance_payload(
-                    status="error_no_requested_tickers_found_in_local_mongodb",
-                    message=(
-                        "Unable to run full governance pipeline: none of the requested tickers "
-                        f"were found in local MongoDB for {target_date}."
-                    ),
-                    target_date=target_date,
-                    valid_tickers=[],
-                    dropped_tickers=[
-                        {"ticker": ticker, "reason": "ticker not found in MongoDB"}
-                        for ticker in cleaned_tickers
-                    ],
-                )
-            )
-
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         price_frames = _build_price_frames(docs_by_ticker)
         prepared = _prepare_portfolio_inputs(
@@ -2440,6 +3249,7 @@ def run_full_governance_pipeline(
 
         valid_tickers = prepared["valid_tickers"]
         dropped_tickers = prepared["dropped_tickers"]
+        data_sources = prepared.get("data_sources", {})
         network_payload = _build_network_analysis_payload(docs_by_ticker, valid_tickers)
         lightweight_systemic_risk = {
             "method": network_payload.get("method", "Unavailable"),
@@ -2463,6 +3273,7 @@ def run_full_governance_pipeline(
                     target_date=target_date,
                     valid_tickers=valid_tickers,
                     dropped_tickers=dropped_tickers,
+                    data_sources=data_sources,
                     systemic_risk=lightweight_systemic_risk,
                     optimization={},
                     generated_plots=generated_plots,
@@ -2501,7 +3312,9 @@ def run_full_governance_pipeline(
             message = optimization_payload.get("message", "Governance pipeline completed with errors.")
 
         if dropped_tickers:
-            message += " Some requested tickers were dropped due to missing or insufficient local history."
+            message += " Some requested tickers were dropped due to missing or insufficient price history."
+        if any(source == "yfinance" for source in data_sources.values()):
+            message += " yfinance was used and cached for tickers not available in MongoDB."
 
         lightweight_optimization = {}
         if optimization_succeeded:
@@ -2525,6 +3338,7 @@ def run_full_governance_pipeline(
                 target_date=target_date,
                 valid_tickers=valid_tickers,
                 dropped_tickers=dropped_tickers,
+                data_sources=data_sources,
                 systemic_risk=lightweight_systemic_risk,
                 optimization=lightweight_optimization,
                 generated_plots=generated_plots,

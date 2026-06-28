@@ -160,18 +160,14 @@ class ContextResolver:
         if plot_request:
             plot_id = plot_request["requested_plot_id"]
             if plot_id in PLOTS_REQUIRING_CURRENT_WEIGHTS and not _has_current_weights(state):
-                missing_inputs.append("current_weights")
-                validation = {
-                    "can_execute": False,
-                    "reason": "Current weights are missing. Equal-weight proxy requires user approval before rendering.",
+                state["active_weights"] = {
+                    "type": "equal_weight_proxy",
+                    "weights": _equal_weight_percentages(tickers),
+                    "source": "automatic_default_missing_current_weights",
+                    "approved_by_user": False,
                 }
-                pending_action = build_equal_weight_pending_action(
-                    reason="current weights missing",
-                    target_plot_id=plot_id,
-                    tickers=tickers,
-                    universe=universe,
-                    chart_type=plot_request.get("requested_chart_type"),
-                )
+                plot_request["data_source"] = "equal_weight_proxy"
+                pending_action = None
             if plot_id in PLOTS_REQUIRING_ADVISORY_WEIGHTS and not state.get("active_advisory_weights", {}).get("available"):
                 missing_inputs.append("advisory_weights")
                 validation = {

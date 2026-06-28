@@ -219,6 +219,30 @@ class MongoMemoryManager:
                         );
                     """)
                     cur.execute("""
+                        CREATE TABLE IF NOT EXISTS conversation_state (
+                            session_id VARCHAR(128) NOT NULL,
+                            user_id VARCHAR(128) NOT NULL DEFAULT '',
+                            state JSONB NOT NULL,
+                            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            PRIMARY KEY (session_id, user_id)
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS market_data_cache (
+                            cache_key VARCHAR(96) PRIMARY KEY,
+                            symbol VARCHAR(32) NOT NULL,
+                            data_type VARCHAR(64) NOT NULL,
+                            period VARCHAR(32),
+                            interval VARCHAR(32),
+                            start_date DATE,
+                            end_date DATE,
+                            payload JSONB NOT NULL,
+                            source VARCHAR(64) NOT NULL DEFAULT 'yfinance',
+                            fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                            expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+                        );
+                    """)
+                    cur.execute("""
                         ALTER TABLE chat_messages
                         ADD COLUMN IF NOT EXISTS user_id VARCHAR(128);
                     """)
@@ -252,6 +276,18 @@ class MongoMemoryManager:
                         CREATE INDEX IF NOT EXISTS idx_chat_messages_user_session
                         ON chat_messages (user_id, session_id, created_at DESC, id DESC);
                     """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_conversation_state_user_updated
+                        ON conversation_state (user_id, updated_at DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_market_data_cache_lookup
+                        ON market_data_cache (symbol, data_type, period, interval, start_date, end_date, expires_at DESC);
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_market_data_cache_expiry
+                        ON market_data_cache (expires_at);
+                    """)
             logger.info("Postgres cache tables checked/created.")
         except Exception as exc:
             logger.error("Failed to set up postgres tables: %s", exc)
@@ -278,6 +314,22 @@ class MongoMemoryManager:
                 visualizations.create_index([("plot_id", ASCENDING)], unique=True, background=True)
                 visualizations.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True)
 
+            market_data = self._collection("market_data_cache")
+            if market_data is not None:
+                market_data.create_index([("cache_key", ASCENDING)], unique=True, background=True)
+                market_data.create_index([("expires_at", ASCENDING)], expireAfterSeconds=0, background=True)
+                market_data.create_index(
+                    [
+                        ("symbol", ASCENDING),
+                        ("data_type", ASCENDING),
+                        ("period", ASCENDING),
+                        ("interval", ASCENDING),
+                        ("start_date", ASCENDING),
+                        ("end_date", ASCENDING),
+                    ],
+                    background=True,
+                )
+
             chat_messages = self._collection("chat_messages")
             if chat_messages is not None:
                 chat_messages.create_index(
@@ -293,6 +345,15 @@ class MongoMemoryManager:
                     background=True,
                 )
                 chat_messages.create_index([("created_at", DESCENDING)], background=True)
+
+            conversation_state = self._collection("conversation_state")
+            if conversation_state is not None:
+                conversation_state.create_index(
+                    [("session_id", ASCENDING), ("user_id", ASCENDING)],
+                    unique=True,
+                    background=True,
+                )
+                conversation_state.create_index([("user_id", ASCENDING), ("updated_at", DESCENDING)], background=True)
 
             regime_patterns.create_index([("regime_type", ASCENDING), ("created_at", DESCENDING)], background=True)
             regime_patterns.create_index([("target_date", DESCENDING)], background=True)
@@ -561,6 +622,275 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to retrieve plot %s: %s", plot_id, exc)
             return None
+
+    def compute_market_data_cache_key(
+        self,
+        symbol: str,
+        data_type: str,
+        period: str | None = None,
+        interval: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> str:
+        payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "data_type": str(data_type or "").strip().lower(),
+            "period": str(period or "").strip().lower(),
+            "interval": str(interval or "").strip().lower(),
+            "start_date": str(start_date or "").strip(),
+            "end_date": str(end_date or "").strip(),
+            "params": params or {},
+        }
+        payload_str = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
+
+    def retrieve_market_data_cache(self, cache_key: str) -> dict | None:
+        """Retrieve a fresh market-data payload from Supabase Postgres or MongoDB."""
+        clean_cache_key = str(cache_key or "").strip()
+        if not clean_cache_key:
+            return None
+
+        if self.pg_pool:
+            try:
+                now = datetime.now(timezone.utc)
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("DELETE FROM market_data_cache WHERE expires_at < %s;", (now,))
+                        cur.execute(
+                            """
+                            SELECT payload, source, fetched_at, expires_at
+                            FROM market_data_cache
+                            WHERE cache_key = %s AND expires_at >= %s;
+                            """,
+                            (clean_cache_key, now),
+                        )
+                        row = cur.fetchone()
+                        if not row:
+                            return None
+                        payload = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        return {
+                            "payload": payload,
+                            "source": row[1],
+                            "fetched_at": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
+                            "expires_at": row[3].isoformat() if hasattr(row[3], "isoformat") else str(row[3]),
+                        }
+            except Exception as exc:
+                logger.warning("Postgres retrieve_market_data_cache failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return None
+
+        try:
+            market_data = self._collection("market_data_cache")
+            if market_data is None:
+                return None
+            now = datetime.now(timezone.utc)
+            doc = market_data.find_one(
+                {"cache_key": clean_cache_key, "expires_at": {"$gte": now}},
+                {"_id": 0, "payload": 1, "source": 1, "fetched_at": 1, "expires_at": 1},
+            )
+            if not doc:
+                return None
+            fetched_at = doc.get("fetched_at")
+            expires_at = doc.get("expires_at")
+            return {
+                "payload": doc.get("payload"),
+                "source": doc.get("source"),
+                "fetched_at": fetched_at.isoformat() if hasattr(fetched_at, "isoformat") else str(fetched_at),
+                "expires_at": expires_at.isoformat() if hasattr(expires_at, "isoformat") else str(expires_at),
+            }
+        except PyMongoError as exc:
+            logger.warning("Failed to retrieve market data cache %s: %s", clean_cache_key, exc)
+            return None
+
+    def store_conversation_state(
+        self,
+        session_id: str,
+        state: dict[str, Any],
+        user_id: str | None = None,
+    ) -> bool:
+        """Persist compact structured conversation memory by session/thread."""
+        clean_session_id = str(session_id or "").strip()
+        clean_user_id = str(user_id or "").strip()
+        if not clean_session_id or not isinstance(state, dict):
+            return False
+
+        now = datetime.now(timezone.utc)
+        payload = json.dumps(state, default=str)
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO conversation_state (session_id, user_id, state, updated_at)
+                            VALUES (%s, %s, %s, %s)
+                            ON CONFLICT (session_id, user_id)
+                            DO UPDATE SET state = EXCLUDED.state, updated_at = EXCLUDED.updated_at;
+                            """,
+                            (clean_session_id, clean_user_id, payload, now),
+                        )
+                return True
+            except Exception as exc:
+                logger.warning("Postgres store_conversation_state failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return False
+
+        try:
+            states = self._collection("conversation_state")
+            if states is None:
+                return False
+            states.update_one(
+                {"session_id": clean_session_id, "user_id": clean_user_id},
+                {
+                    "$set": {
+                        "session_id": clean_session_id,
+                        "user_id": clean_user_id,
+                        "state": state,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+            return True
+        except PyMongoError as exc:
+            logger.warning("Failed to store conversation state for %s: %s", clean_session_id, exc)
+            return False
+
+    def retrieve_conversation_state(self, session_id: str, user_id: str | None = None) -> dict | None:
+        """Load compact structured conversation memory for a session/thread."""
+        clean_session_id = str(session_id or "").strip()
+        clean_user_id = str(user_id or "").strip()
+        if not clean_session_id:
+            return None
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT state FROM conversation_state
+                            WHERE session_id = %s AND user_id = %s;
+                            """,
+                            (clean_session_id, clean_user_id),
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            return json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                return None
+            except Exception as exc:
+                logger.warning("Postgres retrieve_conversation_state failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return None
+
+        try:
+            states = self._collection("conversation_state")
+            if states is None:
+                return None
+            doc = states.find_one(
+                {"session_id": clean_session_id, "user_id": clean_user_id},
+                {"state": 1, "_id": 0},
+            )
+            return doc.get("state") if doc else None
+        except PyMongoError as exc:
+            logger.warning("Failed to retrieve conversation state for %s: %s", clean_session_id, exc)
+            return None
+
+    def store_market_data_cache(
+        self,
+        cache_key: str,
+        symbol: str,
+        data_type: str,
+        payload: dict,
+        period: str | None = None,
+        interval: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        source: str = "yfinance",
+        ttl_hours: int = 24,
+    ) -> bool:
+        """Store fetched market data for reuse by later chat requests."""
+        clean_cache_key = str(cache_key or "").strip()
+        clean_symbol = str(symbol or "").strip().upper()
+        clean_data_type = str(data_type or "").strip().lower()
+        if not clean_cache_key or not clean_symbol or not clean_data_type or not isinstance(payload, dict):
+            return False
+
+        now = datetime.now(timezone.utc)
+        expires_at = now + timedelta(hours=max(1, int(ttl_hours or 24)))
+
+        if self.pg_pool:
+            try:
+                with self.pg_pool.connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO market_data_cache (
+                                cache_key, symbol, data_type, period, interval, start_date, end_date,
+                                payload, source, fetched_at, expires_at
+                            )
+                            VALUES (%s, %s, %s, %s, %s, NULLIF(%s, '')::date, NULLIF(%s, '')::date, %s, %s, %s, %s)
+                            ON CONFLICT (cache_key)
+                            DO UPDATE SET
+                                payload = EXCLUDED.payload,
+                                source = EXCLUDED.source,
+                                fetched_at = EXCLUDED.fetched_at,
+                                expires_at = EXCLUDED.expires_at;
+                            """,
+                            (
+                                clean_cache_key,
+                                clean_symbol,
+                                clean_data_type,
+                                str(period or "").strip() or None,
+                                str(interval or "").strip() or None,
+                                str(start_date or "").strip(),
+                                str(end_date or "").strip(),
+                                json.dumps(payload, default=str),
+                                str(source or "yfinance"),
+                                now,
+                                expires_at,
+                            ),
+                        )
+                return True
+            except Exception as exc:
+                logger.warning("Postgres store_market_data_cache failed: %s. Falling back to Mongo...", exc)
+
+        if not self.is_available:
+            return False
+
+        try:
+            market_data = self._collection("market_data_cache")
+            if market_data is None:
+                return False
+            market_data.update_one(
+                {"cache_key": clean_cache_key},
+                {
+                    "$set": {
+                        "cache_key": clean_cache_key,
+                        "symbol": clean_symbol,
+                        "data_type": clean_data_type,
+                        "period": str(period or "").strip() or None,
+                        "interval": str(interval or "").strip() or None,
+                        "start_date": str(start_date or "").strip() or None,
+                        "end_date": str(end_date or "").strip() or None,
+                        "payload": payload,
+                        "source": str(source or "yfinance"),
+                        "fetched_at": now,
+                        "expires_at": expires_at,
+                    },
+                    "$setOnInsert": {"created_at": now},
+                },
+                upsert=True,
+            )
+            return True
+        except PyMongoError as exc:
+            logger.warning("Failed to store market data cache %s: %s", clean_cache_key, exc)
+            return False
 
     def append_chat_message(
         self,

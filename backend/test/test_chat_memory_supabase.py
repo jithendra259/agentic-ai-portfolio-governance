@@ -10,8 +10,9 @@ from src.memory.mongodb_memory_layer import MongoMemoryManager
 
 
 class FakeCursor:
-    def __init__(self, rows=None):
+    def __init__(self, rows=None, row=None):
         self.rows = rows or []
+        self.row = row
         self.statements = []
 
     def __enter__(self):
@@ -25,6 +26,9 @@ class FakeCursor:
 
     def fetchall(self):
         return self.rows
+
+    def fetchone(self):
+        return self.row
 
 
 class FakeConnection:
@@ -59,9 +63,13 @@ class SupabaseChatMemoryTests(unittest.TestCase):
 
         sql = "\n".join(statement for statement, _params in cursor.statements)
         self.assertIn("CREATE TABLE IF NOT EXISTS chat_messages", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS conversation_state", sql)
+        self.assertIn("CREATE TABLE IF NOT EXISTS market_data_cache", sql)
         self.assertIn("idx_chat_messages_session_created", sql)
         self.assertIn("idx_chat_messages_session_recent", sql)
         self.assertIn("idx_chat_messages_session_role_created", sql)
+        self.assertIn("idx_conversation_state_user_updated", sql)
+        self.assertIn("idx_market_data_cache_lookup", sql)
 
     def test_append_chat_message_writes_user_message_to_supabase(self):
         cursor = FakeCursor()
@@ -154,6 +162,75 @@ class SupabaseChatMemoryTests(unittest.TestCase):
         sessions = manager.list_chat_sessions()
 
         self.assertEqual(sessions[0]["title"], "New chat")
+
+    def test_store_market_data_cache_writes_supabase_row(self):
+        cursor = FakeCursor()
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        stored = manager.store_market_data_cache(
+            cache_key="cache-1",
+            symbol="aapl",
+            data_type="history",
+            period="1y",
+            interval="1d",
+            start_date="2025-01-01",
+            end_date="2025-12-31",
+            payload={"symbol": "AAPL", "history": [{"Date": "2025-01-01", "Close": 100.0}]},
+        )
+
+        self.assertTrue(stored)
+        sql, params = cursor.statements[-1]
+        self.assertIn("INSERT INTO market_data_cache", sql)
+        self.assertEqual(params[0], "cache-1")
+        self.assertEqual(params[1], "AAPL")
+        self.assertEqual(params[2], "history")
+        self.assertIn('"symbol": "AAPL"', params[7])
+
+    def test_retrieve_market_data_cache_returns_payload(self):
+        created_at = datetime(2026, 6, 2, tzinfo=timezone.utc)
+        expires_at = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        cursor = FakeCursor(row=({"symbol": "AAPL", "history": []}, "yfinance", created_at, expires_at))
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        cached = manager.retrieve_market_data_cache("cache-1")
+
+        self.assertEqual(cached["payload"]["symbol"], "AAPL")
+        self.assertEqual(cached["source"], "yfinance")
+        sql, params = cursor.statements[-1]
+        self.assertIn("FROM market_data_cache", sql)
+        self.assertEqual(params[0], "cache-1")
+
+    def test_store_conversation_state_writes_compact_memory_to_supabase(self):
+        cursor = FakeCursor()
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        stored = manager.store_conversation_state(
+            "session-1",
+            {"conversation_state": {"current_topic": "Adaptive G-CVaR comparison"}},
+            user_id="user-1",
+        )
+
+        self.assertTrue(stored)
+        sql, params = cursor.statements[-1]
+        self.assertIn("INSERT INTO conversation_state", sql)
+        self.assertEqual(params[0], "session-1")
+        self.assertEqual(params[1], "user-1")
+        self.assertIn("Adaptive G-CVaR comparison", params[2])
+
+    def test_retrieve_conversation_state_returns_state_payload(self):
+        cursor = FakeCursor(row=({"conversation_state": {"current_strategy": "Adaptive G-CVaR"}},))
+        manager = MongoMemoryManager(mongo_uri="", postgres_url="")
+        manager.pg_pool = FakePool(cursor)
+
+        state = manager.retrieve_conversation_state("session-1", user_id="user-1")
+
+        self.assertEqual(state["conversation_state"]["current_strategy"], "Adaptive G-CVaR")
+        sql, params = cursor.statements[-1]
+        self.assertIn("FROM conversation_state", sql)
+        self.assertEqual(params, ("session-1", "user-1"))
 
 
 if __name__ == "__main__":

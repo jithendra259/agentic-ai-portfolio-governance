@@ -74,6 +74,61 @@ class ChartRequestResolverTests(unittest.TestCase):
         self.assertEqual(call_kwargs["start_date"], "2020-01-01")
         self.assertEqual(call_kwargs["end_date"], "2025-12-31")
 
+    def test_close_price_plot_for_sector_passes_sector_without_default_tickers(self):
+        with patch("src.decision.chart_request_resolver.run_data_analysis_plot") as mock_tool:
+            mock_tool.func.return_value = {
+                "status": "success",
+                "plot_id": "plot-real-estate",
+                "analysis_task": "price_line",
+                "tickers": ["ARE", "AMT", "CCI"],
+            }
+
+            resolved = resolve_deterministic_chart_request(
+                "plot the data of closing price of Real Estate",
+                "session-1",
+            )
+
+        self.assertIsNotNone(resolved)
+        call_kwargs = mock_tool.func.call_args.kwargs
+        self.assertEqual(call_kwargs["analysis_task"], "price_line")
+        self.assertEqual(call_kwargs["tickers"], [])
+        self.assertIsNone(call_kwargs["ticker"])
+        self.assertEqual(call_kwargs["sector"], "Real Estate")
+        self.assertEqual(resolved["sector"], "Real Estate")
+
+    def test_build_chart_response_prefers_sector_scope(self):
+        response = build_chart_response(
+            {
+                "analysis_task": "price_line",
+                "tickers": ["ARE", "AMT", "CCI"],
+                "sector": "Real Estate",
+                "start_date": "2020-01-01",
+                "end_date": "2025-01-01",
+            }
+        )
+
+        self.assertIn("close-price line chart for Real Estate", response)
+        self.assertNotIn("ARE, AMT, CCI", response)
+
+    def test_close_price_plot_preserves_exchange_suffix_tickers(self):
+        with patch("src.decision.chart_request_resolver.run_data_analysis_plot") as mock_tool:
+            mock_tool.func.return_value = {
+                "status": "success",
+                "plot_id": "plot-nse",
+                "analysis_task": "price_line",
+                "tickers": ["INFY.NS", "RELIANCE.NS", "TCS.NS"],
+            }
+
+            resolved = resolve_deterministic_chart_request(
+                "plot the closing price RELIANCE.NS,TCS.NS, INFY.NS",
+                "session-1",
+            )
+
+        self.assertIsNotNone(resolved)
+        call_kwargs = mock_tool.func.call_args.kwargs
+        self.assertEqual(call_kwargs["tickers"], ["RELIANCE.NS", "TCS.NS", "INFY.NS"])
+        self.assertEqual(call_kwargs["ticker"], "RELIANCE.NS")
+
     def test_build_chart_response_names_chart_type(self):
         response = build_chart_response(
             {

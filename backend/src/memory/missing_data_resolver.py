@@ -168,8 +168,6 @@ class MissingDataResolver:
         weights = state.get("active_weights", {})
         if not weights.get("weights"):
             return _missing("current_weights", "Current weights are required for concentration plots.")
-        if weights.get("type") == "equal_weight_proxy" and not weights.get("approved_by_user"):
-            return _missing("current_weights", "Equal-weight proxy requires user approval.")
 
         ticker_weights = weights["weights"]
         if plot_id == "plot_43_sector_concentration_plot":
@@ -729,8 +727,6 @@ def _resolved_current_weights(state: dict[str, Any], chart_label: str) -> dict[s
     weights = state.get("active_weights", {}) if isinstance(state.get("active_weights"), dict) else {}
     if not weights.get("weights"):
         return _missing("current_weights", f"Current weights are required for {chart_label}.")
-    if weights.get("type") == "equal_weight_proxy" and not weights.get("approved_by_user"):
-        return _missing("current_weights", f"Equal-weight proxy requires user approval before rendering {chart_label}.")
     return {"status": "success", "weights": weights["weights"], "type": weights.get("type")}
 
 

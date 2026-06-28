@@ -131,19 +131,19 @@ class SessionMemoryContextTests(unittest.TestCase):
             "failed_validation",
         })
 
-    def test_planner_blocks_missing_weights_with_user_choice(self):
+    def test_planner_auto_resolves_missing_weights_with_proxy(self):
         state = default_session_state("s1")
         resolved = self.resolve_full("For U1 tickers, show ticker concentration", state)
         plan = resolved["session_state"]["current_plan"]
         todos = {todo["name"]: todo for todo in plan["todos"]}
 
         self.assertEqual(plan["user_intent"], "ticker_concentration_plot")
-        self.assertEqual(plan["blocked_step"], "resolve_weights")
-        self.assertEqual(plan["pending_user_choice"], "approve_equal_weight_proxy")
-        self.assertFalse(plan["ready_to_execute"])
-        self.assertFalse(plan["ready_to_render"])
-        self.assertEqual(todos["resolve_weights"]["status"], "requires_user_input")
-        self.assertIn("approve_equal_weight_proxy", todos["resolve_weights"]["user_options"])
+        self.assertIsNone(plan["blocked_step"])
+        self.assertIsNone(plan["pending_user_choice"])
+        self.assertTrue(plan["ready_to_execute"])
+        self.assertTrue(plan["ready_to_render"])
+        self.assertEqual(todos["resolve_weights"]["status"], "computed_by_fallback")
+        self.assertEqual(todos["resolve_weights"]["fallback_method"], "equal_weight_proxy")
 
     def test_pending_action_does_not_override_list_u1_tickers_command(self):
         state = default_session_state("s1")
@@ -197,12 +197,13 @@ class SessionMemoryContextTests(unittest.TestCase):
         self.assertTrue(plan["ready_to_execute"])
         self.assertIsNone(plan["pending_user_choice"])
 
-    def test_pending_action_only_captures_short_confirmation_replies(self):
+    def test_proxy_followup_does_not_require_pending_action(self):
         state = default_session_state("s1")
         pending = self.resolve_full("For U1 tickers, show ticker concentration", state)
 
         yes_resolved = self.resolve_full("use proxy", pending["session_state"])
-        self.assertEqual(yes_resolved["pending_status"], "executed")
+        self.assertIsNone(yes_resolved["pending_status"])
+        self.assertIsNone(yes_resolved["pending_action"])
 
         pending_again = self.resolve_full("For U1 tickers, show ticker concentration", state)
         new_command = self.resolver.resolve("fetch the U1 tickers", pending_again["session_state"])
@@ -220,16 +221,17 @@ class SessionMemoryContextTests(unittest.TestCase):
         self.assertEqual(resolved["session_state"]["current_plan"]["user_intent"], "list_universe_tickers")
         self.assertNotEqual(resolved["session_state"]["current_plan"]["plan_id"], previous_plan_id)
 
-    def test_missing_current_weights_create_pending_equal_weight_proxy_action(self):
+    def test_missing_current_weights_auto_use_equal_weight_proxy(self):
         state = default_session_state("s1")
         resolved = self.resolve_full("For U1 tickers, show ticker concentration", state)
-        pending = resolved["pending_action"]
-        self.assertEqual(pending["type"], "use_equal_weight_proxy")
-        self.assertEqual(pending["target_plot_id"], "plot_42_ticker_concentration_plot")
-        self.assertIn("current_weights", resolved["session_state"]["missing_inputs"])
-        self.assertFalse(resolved["validation_result"]["can_execute"])
-        self.assertIsNone(build_direct_context_response(resolved))
-        self.assertIn("equal-weight proxy", build_missing_input_response(resolved))
+        weights = resolved["session_state"]["active_weights"]
+        self.assertIsNone(resolved["pending_action"])
+        self.assertEqual(weights["type"], "equal_weight_proxy")
+        self.assertEqual(weights["source"], "automatic_default_missing_current_weights")
+        self.assertEqual(resolved["session_state"]["missing_inputs"], [])
+        self.assertEqual(resolved["fallback_result"]["status"], "success")
+        self.assertIn("equal_weight_proxy", build_direct_context_response(resolved))
+        self.assertIsNone(build_missing_input_response(resolved))
 
     def test_yes_after_proxy_prompt_executes_pending_action(self):
         state = default_session_state("s1")
@@ -238,10 +240,10 @@ class SessionMemoryContextTests(unittest.TestCase):
 
         weights = yes_resolved["session_state"]["active_weights"]
         self.assertEqual(weights["type"], "equal_weight_proxy")
-        self.assertTrue(weights["approved_by_user"])
+        self.assertFalse(weights["approved_by_user"])
         self.assertEqual(len(weights["weights"]), 20)
         self.assertAlmostEqual(sum(weights["weights"].values()), 100.0)
-        self.assertIn("equal-weight proxy", build_pending_execution_response(yes_resolved))
+        self.assertIsNone(build_pending_execution_response(yes_resolved))
         self.assertEqual(yes_resolved["fallback_result"]["status"], "success")
         self.assertTrue(yes_resolved["fallback_result"]["plot_payload"]["proxy_declared"])
 
@@ -250,7 +252,7 @@ class SessionMemoryContextTests(unittest.TestCase):
         pending_resolved = self.resolve_full("For U1 tickers, show ticker concentration", state)
         use_resolved = self.resolve_full("use them and plot", pending_resolved["session_state"])
 
-        self.assertEqual(use_resolved["pending_status"], "executed")
+        self.assertIsNone(use_resolved["pending_status"])
         self.assertEqual(use_resolved["session_state"]["active_weights"]["type"], "equal_weight_proxy")
         self.assertIsNone(use_resolved["session_state"]["pending_action"])
 
@@ -266,8 +268,9 @@ class SessionMemoryContextTests(unittest.TestCase):
             "target_date": "2025-12-31",
         }
         resolved = self.resolve_full("plot ticker concentration", state)
-        self.assertIn("current_weights", resolved["session_state"]["missing_inputs"])
-        self.assertEqual(resolved["session_state"]["active_weights"]["type"], "missing")
+        self.assertEqual(resolved["session_state"]["missing_inputs"], [])
+        self.assertEqual(resolved["session_state"]["active_weights"]["type"], "equal_weight_proxy")
+        self.assertEqual(resolved["fallback_result"]["status"], "success")
 
     def test_current_vs_advisory_grouped_bar_requires_both_weight_sets(self):
         state = default_session_state("s1")
@@ -296,12 +299,13 @@ class SessionMemoryContextTests(unittest.TestCase):
         self.assertEqual(len(rows), 25)
         self.assertEqual(rows[0]["content"], "message 5")
 
-    def test_u1_risk_contribution_missing_weights_asks_for_proxy_approval(self):
+    def test_u1_risk_contribution_missing_weights_uses_auto_proxy(self):
         state = default_session_state("s1")
         resolved = self.resolve_full("For U1, plot risk contribution", state)
-        self.assertEqual(resolved["pending_action"]["type"], "use_equal_weight_proxy")
-        self.assertIn("current_weights", resolved["session_state"]["missing_inputs"])
-        self.assertFalse(resolved["validation_result"]["can_execute"])
+        self.assertIsNone(resolved["pending_action"])
+        self.assertEqual(resolved["session_state"]["missing_inputs"], [])
+        self.assertEqual(resolved["session_state"]["active_weights"]["type"], "equal_weight_proxy")
+        self.assertEqual(resolved["fallback_result"]["status"], "success")
 
     def test_after_yes_risk_contribution_is_computed_from_covariance(self):
         state = default_session_state("s1")
@@ -631,12 +635,14 @@ class SessionMemoryContextTests(unittest.TestCase):
         self.assertNotIn("current_weights", resolved["session_state"]["missing_inputs"])
         self.assertIsNone(resolved["pending_action"])
 
-    def test_bubble_risk_return_requires_weight_source_for_size(self):
+    def test_bubble_risk_return_auto_uses_weight_proxy_for_size(self):
         state = default_session_state("s1")
         resolved = self.resolve_full("For U1, show risk-return bubble scatter", state)
 
-        self.assertEqual(resolved["pending_action"]["type"], "use_equal_weight_proxy")
-        self.assertIn("current_weights", resolved["session_state"]["missing_inputs"])
+        self.assertIsNone(resolved["pending_action"])
+        self.assertEqual(resolved["session_state"]["missing_inputs"], [])
+        self.assertEqual(resolved["session_state"]["active_weights"]["type"], "equal_weight_proxy")
+        self.assertEqual(resolved["fallback_result"]["status"], "success")
 
     def test_after_yes_bubble_risk_return_uses_weight_size_axis_without_optimizer(self):
         state = default_session_state("s1")

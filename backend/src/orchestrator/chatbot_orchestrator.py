@@ -31,6 +31,8 @@ from src.agents.live_data_tools import (
     get_stocks_by_universe,
     get_universe_overview,
     get_stock_database_snapshot,
+    get_market_data_bundle,
+    get_yfinance_market_data,
     plot_historical_prices,
     run_full_governance_pipeline,
     plot_us_economic_indicators,
@@ -42,12 +44,13 @@ from src.agents.derived_plot_tools import generate_missing_data_heatmap, generat
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
+from src.memory.conversation_memory import conversation_prompt_block
 from src.providers.ashna_provider import normalize_ashna_base_url
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 
 
 logger = logging.getLogger(__name__)
-GOVERNANCE_CACHE_VERSION = "optimizer-audit-v2"
+GOVERNANCE_CACHE_VERSION = "optimizer-audit-v3-yfinance"
 
 
 def add_messages(current: list[BaseMessage] | None, update: list[BaseMessage] | None) -> list[BaseMessage]:
@@ -329,6 +332,8 @@ def assemble_system_prompt(state: "AgentState") -> str:
     original_goal = state.get("original_goal") or _latest_human_text(state.get("messages", [])) or "Portfolio governance conversation"
     scratchpad = state.get("scratchpad") or {}
     historical_summary = state.get("historical_summary") or state.get("summary") or ""
+    session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else {}
+    conversation_memory = conversation_prompt_block(session_state)
 
     if scratchpad:
         scratchpad_lines = "\n".join(
@@ -345,6 +350,7 @@ def assemble_system_prompt(state: "AgentState") -> str:
         f"{scratchpad_lines}\n\n"
         "Historical summary of older context:\n"
         f"{historical_summary or 'No distant context summarized yet.'}\n\n"
+        f"{conversation_memory}\n"
         "### SCRATCHPAD RULES ###\n"
         "- Always read from the scratchpad before calculating a metric.\n"
         "- If a needed metric already exists in the scratchpad, use that exact value and do not recalculate.\n"
@@ -384,12 +390,24 @@ def governance_pipeline_with_cache(
     )
     cached = None if resolved_previous_weights else memory_manager.retrieve_cached_plan(query_hash)
     if cached:
-        logger.info(
-            "Cache Hit (-46%% cost) | query_hash=%s | cache_version=%s",
-            query_hash,
-            GOVERNANCE_CACHE_VERSION,
-        )
-        return cached
+        cached_text = str(cached)
+        if (
+            "error_no_requested_tickers_found_in_local_mongodb" in cached_text
+            or "Data source: local MongoDB historical records only" in cached_text
+            or "none of the requested tickers were found in local MongoDB" in cached_text
+        ):
+            logger.info(
+                "Ignoring stale Mongo-only governance cache | query_hash=%s | cache_version=%s",
+                query_hash,
+                GOVERNANCE_CACHE_VERSION,
+            )
+        else:
+            logger.info(
+                "Cache Hit (-46%% cost) | query_hash=%s | cache_version=%s",
+                query_hash,
+                GOVERNANCE_CACHE_VERSION,
+            )
+            return cached
 
     result = run_full_governance_pipeline.invoke(
         {
@@ -442,6 +460,8 @@ tools = [
     get_stocks_by_universe,
     get_universe_overview,
     get_stock_database_snapshot,
+    get_market_data_bundle,
+    get_yfinance_market_data,
     plot_historical_prices,
     plot_us_economic_indicators,
     get_price_series_for_analysis,
@@ -941,14 +961,18 @@ STATISTICAL ANALYSIS RULES:
 GOVERNANCE RULES:
 - Use run_full_governance_pipeline only for governance, optimization, allocation, CVaR, structural risk, or portfolio assessment requests.
 - For governance, ensure you have tickers and one historical target date such as 2008-09-15.
-- If either the tickers or the target date is missing for a governance request, politely ask for the missing information.
-- The tool already performs the historical price lookup, institutional network analysis, historical G-CVaR optimization, and inline plot generation back-to-back using local MongoDB data only.
+- If tickers are missing, reuse selected tickers from conversation memory before asking.
+- If target date is missing, reuse the most recent target date from conversation memory or prior governance run; if none exists, use 2025-12-30 as the default analysis date and state that default.
+- The tool already performs the historical price lookup, institutional network analysis, historical G-CVaR optimization, and inline plot generation back-to-back. It uses local MongoDB when available and yfinance cached price history when requested tickers are not in MongoDB.
+- If yfinance is used, explain that institutional/holder graph risk may be neutral or unavailable unless MongoDB holder data exists for those tickers.
 - The tool returns lightweight structured JSON with valid tickers, final weights, structural risk scores, and markdown plot links.
 - Read the tool output carefully instead of inventing any values.
 
 METHODOLOGY RAG RULES:
 - If the user asks who, what, when, where, why, or how questions about a stock ticker or company, prefer the stock tools below instead of search_methodology_knowledge_base.
-- Use get_stock_database_snapshot for company identity, sector, industry, country, exchange, stored data coverage, latest stored close, and business summaries.
+- Use get_stock_database_snapshot for MongoDB-backed company identity, sector, industry, country, exchange, stored data coverage, latest stored close, and business summaries.
+- Use get_market_data_bundle for arbitrary public-ticker requests that mention multiple tickers, exact values, comparison tables, broad fundamentals, revenue/net-income/assets/cash-flow/valuation metrics, or "all available data". It infers the required yfinance payload classes, fetches only those payloads, caches them, and returns comparable values when possible.
+- Use get_yfinance_market_data only when the user asks for a single ticker payload summary such as one ticker's history, profile, financials, balance sheet, cash flow, dividends, splits, holders, recommendations, options chain, or raw "all" payload.
 - Use get_price_series_for_analysis for stock volatility, returns, price movement, trend, drawdown, highest/lowest price, spikes, and period comparisons.
 - Use retrieve_graph_rag_context for stock ownership questions such as who holds, owns, invested in, or connects a ticker.
 - Use search_methodology_knowledge_base only when the question is about the paper, EDA method, statistics, ARIMA, GARCH, ADF, stationarity, forecasting models, data types, missing values, outliers, G-CVaR, HITL, RAG, methodology, or documentation details.
@@ -965,9 +989,14 @@ GRAPH RAG RULES:
 FOLLOW-UP RULES:
 - If the user says "yes", continue only the immediately preceding proposal. Do not switch to a different portfolio, date, or task.
 - Never substitute an unrelated example date or example ticker list.
+- Always use conversation memory before answering. If the user says "it", "this", "that", "same", "previous", "above", or "them", resolve the reference from the conversation memory block, selected tickers, current strategy, current topic, and recent messages.
+- Do not ignore selected tickers, selected strategy, dataset period, latest governance run, or prior analysis context unless the user explicitly changes them.
+- Ask at most one concise clarification question, and only when execution is impossible after checking memory, defaults, and available tools.
+- Do not ask for optional preferences such as risk tolerance, chart style, date range, or metric format. Use defaults, act, and mention the defaults briefly.
+- Do not ask "shall I proceed", "do you want me to", or "please confirm" when the user has already given an action request.
 
 GENERAL RULES:
-1. Prefer MongoDB-backed historical tools. For simple stock snapshots and historical price lookups, a labeled yfinance fallback may be used when MongoDB is unavailable.
+1. Prefer MongoDB-backed historical tools for existing portfolio-governance datasets. For arbitrary public tickers or broad market-data requests, use get_market_data_bundle so the backend infers the needed data classes, fetches only the requested data, and caches it for follow-up analysis.
 2. Never execute trades. This system is read-only and advisory only.
 3. If a tool fails, say so clearly and do not invent missing values.
 4. Always explain the allocation recommendation mathematically and transparently.
@@ -977,6 +1006,7 @@ GENERAL RULES:
 8. If the user asks about a universe's sector identity or composition, use get_universe_overview.
 9. Prefer returning the direct tool result over paraphrasing when the tool already answers the request cleanly.
 10. For formulas, use LaTeX delimiters supported by the chat UI: inline math as \\(...\\) and display math as \\[...\\] or $$...$$. Do not use single-dollar delimiters because dollar amounts appear in finance answers.
+11. Prefer action over questions: infer intent, call the right tool, and only ask if the missing value has no safe default and no remembered value.
 """
 
 # 4. Define the Nodes
@@ -1022,6 +1052,9 @@ def _trim_context(messages: list, max_non_system: int = _MAX_CONTEXT_MESSAGES) -
 
 def chatbot_node(state: AgentState, config: RunnableConfig):
     """The main LLM brain that reads the chat and decides what to do."""
+    configured_session_state = (config or {}).get("configurable", {}).get("session_state") if config else None
+    if isinstance(configured_session_state, dict):
+        state = {**state, "session_state": configured_session_state}
     messages = state["messages"]
 
     working_messages = list(messages)
@@ -1479,9 +1512,9 @@ def _extract_latest_tool_output(messages: list[BaseMessage]) -> tuple[str, str]:
 
 def _humanize_status(status: str) -> str:
     status_map = {
-        "success": "Governance pipeline completed successfully using local MongoDB history only.",
+        "success": "Governance pipeline completed successfully.",
         "partial_success_some_requested_tickers_were_dropped_due_to_missing_data": (
-            "Governance pipeline completed, but some requested tickers were dropped because local historical data was missing or insufficient."
+            "Governance pipeline completed, but some requested tickers were dropped because historical data was missing or insufficient."
         ),
         "error_no_tickers_provided": "No tickers were provided for the governance analysis.",
         "error_no_valid_tickers_provided": "No valid tickers were provided for the governance analysis.",
@@ -1490,11 +1523,11 @@ def _humanize_status(status: str) -> str:
             "None of the requested tickers were found in the local MongoDB history."
         ),
         "error_fewer_than_two_valid_tickers_after_history_validation": (
-            "Fewer than two requested tickers had enough local historical data to run the optimization."
+            "Fewer than two requested tickers had enough historical data to run the optimization."
         ),
         "error_optimization_failed": "The graph-regularized CVaR optimizer could not produce a stable allocation.",
         "error_optimization_failed_some_requested_tickers_were_dropped_due_to_missing_data": (
-            "The optimizer could not produce a stable allocation, and some requested tickers were dropped because local historical data was missing or insufficient."
+            "The optimizer could not produce a stable allocation, and some requested tickers were dropped because historical data was missing or insufficient."
         ),
     }
     if status in status_map:
@@ -1506,14 +1539,23 @@ def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
     if not payload:
         return raw_text or "Unable to generate a response for this request."
 
+    data_sources = payload.get("data_sources", {}) if isinstance(payload.get("data_sources"), dict) else {}
+    if data_sources:
+        source_values = sorted({str(value) for value in data_sources.values() if value})
+        source_line = ", ".join(source_values)
+    else:
+        source_line = "MongoDB/yfinance as available"
+
     lines = [
         "## Historical Governance Report",
         f"- Status: {payload.get('status', 'unknown')}",
         f"- Target date: {payload.get('target_date', 'unknown')}",
         f"- Valid tickers used: {', '.join(payload.get('valid_tickers', [])) or 'None'}",
-        "- Data source: local MongoDB historical records only",
+        f"- Data source: {source_line}",
         "- Advisory only: no execution, no trading, no broker actions",
     ]
+    if data_sources:
+        lines.append(f"- Per-ticker sources: {', '.join(f'{ticker}={source}' for ticker, source in sorted(data_sources.items()))}")
     lines.extend(["", _humanize_status(str(payload.get("status", "")))])
 
     message = payload.get("message")

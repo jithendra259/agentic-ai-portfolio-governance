@@ -86,6 +86,7 @@ from src.memory.context_resolver import (
 from src.memory.audit_log import GLOBAL_AUDIT_LOGGER
 from src.memory.memory_store import InProcessSessionMemoryStore
 from src.memory.missing_data_resolver import MissingDataResolver
+from src.memory.conversation_memory import update_for_user_message, update_for_assistant_response
 from src.memory.governance_plot_continuity import resolve_governance_plot_followup, store_latest_governance_run
 from src.memory.response_contract import build_response_contract, contract_summary
 from src.agents.plot_store import GLOBAL_PLOT_DATA, GLOBAL_PLOT_IDS, register_plot
@@ -369,6 +370,7 @@ def _assistant_config(request: ChatRequest, resolved_memory: dict[str, Any]) -> 
             "thread_id": request.session_id,
             "override_model": request.model,
             "previous_weights": _resolve_previous_weights(resolved_memory),
+            "session_state": resolved_memory.get("session_state", {}) if isinstance(resolved_memory, dict) else {},
         }
     }
 
@@ -632,9 +634,25 @@ def _resolve_chat_memory(session_id: str, message: str, user_id: str | None = No
         session_memory_store.hydrate_messages(session_id, persisted_messages)
     last_25 = session_memory_store.get_last_messages(session_id, limit=25)
     state = session_memory_store.get_state(session_id)
+    persisted_state = None
+    try:
+        retriever = getattr(memory_manager, "retrieve_conversation_state", None)
+        persisted_state = retriever(session_id, user_id=user_id) if callable(retriever) else None
+    except Exception as exc:
+        logger.warning("Failed to load conversation state for session %s: %s", session_id, exc)
+    if isinstance(persisted_state, dict) and not state.get("last_user_message"):
+        state = persisted_state
+        session_memory_store.save_state(session_id, state)
     resolved = context_resolver.resolve(message, state, chat_history_last_25=last_25)
     resolved = missing_data_resolver.resolve(resolved)
+    resolved["session_state"] = update_for_user_message(resolved["session_state"], message)
     session_memory_store.save_state(session_id, resolved["session_state"])
+    try:
+        storer = getattr(memory_manager, "store_conversation_state", None)
+        if callable(storer):
+            storer(session_id, resolved["session_state"], user_id=user_id)
+    except Exception as exc:
+        logger.warning("Failed to persist conversation state for session %s: %s", session_id, exc)
     _audit_resolved_memory(session_id, message, resolved)
     return resolved
 
@@ -648,7 +666,14 @@ def _persist_memory_response(
 ) -> None:
     state = dict(resolved.get("session_state") or {})
     state["last_response_summary"] = response_text[:500]
+    state = update_for_assistant_response(state, response_text, metadata=metadata)
     session_memory_store.save_state(session_id, state)
+    try:
+        storer = getattr(memory_manager, "store_conversation_state", None)
+        if callable(storer):
+            storer(session_id, state, user_id=user_id)
+    except Exception as exc:
+        logger.warning("Failed to persist conversation state for session %s: %s", session_id, exc)
     contract = build_response_contract(response_text, resolved, result=response_text[:500])
     enriched_metadata = {
         **(metadata or {}),

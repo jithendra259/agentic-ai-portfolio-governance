@@ -129,6 +129,26 @@ class GovernanceCacheContractTests(unittest.TestCase):
         memory.retrieve_cached_plan.assert_called_once_with("hash-v2")
         memory.cache_governance_plan.assert_called_once()
 
+    def test_stale_mongodb_only_cache_is_ignored(self):
+        stale_payload = '{"status":"error_no_requested_tickers_found_in_local_mongodb"}'
+        with (
+            patch.object(orchestrator, "memory_manager") as memory,
+            patch.object(orchestrator, "run_full_governance_pipeline") as pipeline,
+        ):
+            memory.compute_query_hash.return_value = "hash-v3"
+            memory.retrieve_cached_plan.return_value = stale_payload
+            pipeline.invoke.return_value = '{"status":"success","data_sources":{"RELIANCE.NS":"yfinance"}}'
+
+            result = orchestrator.governance_pipeline_with_cache.func(
+                tickers=["RELIANCE.NS", "TCS.NS", "INFY.NS"],
+                target_date="2025-12-30",
+                risk_tolerance="moderate",
+            )
+
+        self.assertIn('"status":"success"', result)
+        pipeline.invoke.assert_called_once()
+        memory.cache_governance_plan.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
