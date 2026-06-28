@@ -49,6 +49,9 @@ class FakeMemoryManager:
         self.last_claim_session_ids = None
         self.last_claim_all = None
         self.append_calls = []
+        self.list_chat_messages_calls = 0
+        self.retrieve_conversation_state_calls = 0
+        self.store_conversation_state_calls = 0
         self.stored_plots = {}
         self.retrieve_plot_calls = []
 
@@ -91,9 +94,18 @@ class FakeMemoryManager:
         return stored["data"] if stored else None
 
     def list_chat_messages(self, session_id, limit=200, user_id=None, include_legacy_unowned=False):
+        self.list_chat_messages_calls += 1
         self.last_messages_user_id = user_id
         self.last_include_legacy_unowned = include_legacy_unowned
         return []
+
+    def retrieve_conversation_state(self, session_id, user_id=None):
+        self.retrieve_conversation_state_calls += 1
+        return None
+
+    def store_conversation_state(self, session_id, state, user_id=None):
+        self.store_conversation_state_calls += 1
+        return True
 
     def claim_legacy_chat_sessions(self, user_id, session_ids=None, claim_all=False, limit=100):
         self.last_claim_user_id = user_id
@@ -103,6 +115,25 @@ class FakeMemoryManager:
 
 
 class ChatSessionsApiTests(unittest.TestCase):
+    def test_resolve_chat_memory_uses_warm_in_process_cache_before_supabase(self):
+        import api.main as main
+
+        fake_memory = FakeMemoryManager()
+        original_memory_manager = main.memory_manager
+        original_store = main.session_memory_store
+        main.memory_manager = fake_memory
+        main.session_memory_store = main.InProcessSessionMemoryStore()
+        try:
+            main._resolve_chat_memory("session-cache", "plot AAPL", user_id="user-1")
+            main._resolve_chat_memory("session-cache", "now compare it", user_id="user-1")
+        finally:
+            main.memory_manager = original_memory_manager
+            main.session_memory_store = original_store
+
+        self.assertEqual(fake_memory.list_chat_messages_calls, 1)
+        self.assertEqual(fake_memory.retrieve_conversation_state_calls, 1)
+        self.assertEqual(fake_memory.store_conversation_state_calls, 2)
+
     def test_auth_login_preflight_allows_local_vite_port(self):
         client = TestClient(app)
         response = client.options(

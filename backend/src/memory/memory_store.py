@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from threading import RLock
+from time import monotonic
 from typing import Any
 
 from src.memory.session_state import clone_state, default_session_state, utc_now_iso
@@ -17,6 +18,7 @@ class InProcessSessionMemoryStore:
         self._lock = RLock()
         self._states: dict[str, dict[str, Any]] = {}
         self._messages: dict[str, list[dict[str, Any]]] = {}
+        self._hydrated_at: dict[str, float] = {}
 
     def get_state(self, session_id: str) -> dict[str, Any]:
         clean_session_id = str(session_id or "").strip()
@@ -63,6 +65,22 @@ class InProcessSessionMemoryStore:
         clean_session_id = str(session_id or "").strip()
         with self._lock:
             self._messages[clean_session_id] = [dict(row) for row in (messages or [])[-25:]]
+            self._hydrated_at[clean_session_id] = monotonic()
+
+    def mark_hydrated(self, session_id: str) -> None:
+        clean_session_id = str(session_id or "").strip()
+        if not clean_session_id:
+            return
+        with self._lock:
+            self._hydrated_at[clean_session_id] = monotonic()
+
+    def is_hydrated(self, session_id: str, ttl_seconds: int = 300) -> bool:
+        clean_session_id = str(session_id or "").strip()
+        with self._lock:
+            hydrated_at = self._hydrated_at.get(clean_session_id)
+            if hydrated_at is None:
+                return False
+            return monotonic() - hydrated_at <= max(1, int(ttl_seconds or 300))
 
     def delete_session(self, session_id: str) -> None:
         clean_session_id = str(session_id or "").strip()
@@ -71,6 +89,7 @@ class InProcessSessionMemoryStore:
         with self._lock:
             self._states.pop(clean_session_id, None)
             self._messages.pop(clean_session_id, None)
+            self._hydrated_at.pop(clean_session_id, None)
 
 
 def _deep_update(target: dict[str, Any], updates: dict[str, Any]) -> None:

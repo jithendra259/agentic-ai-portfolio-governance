@@ -119,6 +119,16 @@ OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 LEGACY_OUTPUTS_DIR = PROJECT_ROOT / "src" / "outputs"
 PLOT_TOKEN = "__PLOTSPEC__:"
 
+
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
+CHAT_MEMORY_CACHE_TTL_SECONDS = _env_int("CHAT_MEMORY_CACHE_TTL_SECONDS", 300, 30)
+
 if os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"):
     OUTPUTS_DIR = Path("/tmp/outputs")
 
@@ -629,20 +639,27 @@ def _persist_chat_message(
 
 
 def _resolve_chat_memory(session_id: str, message: str, user_id: str | None = None) -> dict[str, Any]:
-    persisted_messages = memory_manager.list_chat_messages(session_id, limit=25, user_id=user_id)
-    if persisted_messages:
-        session_memory_store.hydrate_messages(session_id, persisted_messages)
+    warm_cache = session_memory_store.is_hydrated(session_id, ttl_seconds=CHAT_MEMORY_CACHE_TTL_SECONDS)
+    state = session_memory_store.get_state(session_id)
+    if not warm_cache:
+        persisted_messages = memory_manager.list_chat_messages(session_id, limit=25, user_id=user_id)
+        if persisted_messages:
+            session_memory_store.hydrate_messages(session_id, persisted_messages)
+        else:
+            session_memory_store.mark_hydrated(session_id)
+        persisted_state = None
+        try:
+            retriever = getattr(memory_manager, "retrieve_conversation_state", None)
+            persisted_state = retriever(session_id, user_id=user_id) if callable(retriever) else None
+        except Exception as exc:
+            logger.warning("Failed to load conversation state for session %s: %s", session_id, exc)
+        if isinstance(persisted_state, dict) and not state.get("last_user_message"):
+            state = persisted_state
+            session_memory_store.save_state(session_id, state)
+    else:
+        logger.debug("Using warm in-process chat memory cache for session %s", session_id)
     last_25 = session_memory_store.get_last_messages(session_id, limit=25)
     state = session_memory_store.get_state(session_id)
-    persisted_state = None
-    try:
-        retriever = getattr(memory_manager, "retrieve_conversation_state", None)
-        persisted_state = retriever(session_id, user_id=user_id) if callable(retriever) else None
-    except Exception as exc:
-        logger.warning("Failed to load conversation state for session %s: %s", session_id, exc)
-    if isinstance(persisted_state, dict) and not state.get("last_user_message"):
-        state = persisted_state
-        session_memory_store.save_state(session_id, state)
     resolved = context_resolver.resolve(message, state, chat_history_last_25=last_25)
     resolved = missing_data_resolver.resolve(resolved)
     resolved["session_state"] = update_for_user_message(resolved["session_state"], message)

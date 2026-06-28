@@ -1688,6 +1688,110 @@ def _format_market_value(value: object) -> str:
     return f"{numeric:.4g}"
 
 
+_CURRENCY_SYMBOLS = {
+    "USD": "$",
+    "INR": "₹",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "CNY": "¥",
+    "CAD": "C$",
+    "AUD": "A$",
+    "HKD": "HK$",
+    "SGD": "S$",
+}
+
+_EXCHANGE_CURRENCY_HINTS = {
+    ".NS": "INR",
+    ".BO": "INR",
+    ".TO": "CAD",
+    ".V": "CAD",
+    ".L": "GBP",
+    ".PA": "EUR",
+    ".DE": "EUR",
+    ".F": "EUR",
+    ".HK": "HKD",
+    ".SS": "CNY",
+    ".SZ": "CNY",
+    ".T": "JPY",
+    ".AX": "AUD",
+    ".SI": "SGD",
+}
+
+_NON_MONEY_METRICS = {"trailing_pe", "forward_pe", "beta", "dividend_yield"}
+
+
+def _is_money_metric(metric_key: str) -> bool:
+    return metric_key not in _NON_MONEY_METRICS
+
+
+def _currency_hint_for_symbol(symbol: str) -> str | None:
+    normalized = str(symbol or "").strip().upper()
+    for suffix, currency in _EXCHANGE_CURRENCY_HINTS.items():
+        if normalized.endswith(suffix):
+            return currency
+    return None
+
+
+def _currency_from_payloads(symbol: str, payloads: dict[str, dict]) -> str | None:
+    for payload in payloads.values():
+        info = payload.get("info") if isinstance(payload, dict) and isinstance(payload.get("info"), dict) else {}
+        currency = info.get("financialCurrency") or info.get("currency") or info.get("tradeableCurrency")
+        if currency:
+            return str(currency).upper()
+    return _currency_hint_for_symbol(symbol)
+
+
+def _compact_number(value: float, currency: str | None = None) -> str:
+    absolute = abs(value)
+    prefix = _CURRENCY_SYMBOLS.get(str(currency or "").upper(), "")
+    suffix_currency = "" if prefix else (f"{str(currency).upper()} " if currency else "")
+    if absolute >= 1_000_000_000_000:
+        return f"{prefix}{suffix_currency}{value / 1_000_000_000_000:.2f}T"
+    if absolute >= 1_000_000_000:
+        return f"{prefix}{suffix_currency}{value / 1_000_000_000:.2f}B"
+    if absolute >= 1_000_000:
+        return f"{prefix}{suffix_currency}{value / 1_000_000:.2f}M"
+    if absolute >= 1_000:
+        return f"{prefix}{suffix_currency}{value:,.2f}"
+    return f"{prefix}{suffix_currency}{value:.4g}"
+
+
+def _format_money_value(value: object, currency: str | None) -> str:
+    numeric = _coerce_numeric(value)
+    if numeric is None:
+        return str(value) if value not in (None, "") else "N/A"
+    normalized_currency = str(currency or "").upper() or None
+    if normalized_currency == "USD":
+        return _compact_number(numeric, normalized_currency)
+    if normalized_currency == "INR":
+        absolute = abs(numeric)
+        if absolute >= 1_000_000_000_000:
+            return f"₹{numeric / 1_000_000_000_000:.2f} lakh crore"
+        if absolute >= 10_000_000:
+            return f"₹{numeric / 10_000_000:,.2f} crore"
+        return f"₹{numeric:,.2f} (INR)"
+    if normalized_currency:
+        prefix = _CURRENCY_SYMBOLS.get(normalized_currency, "")
+        if prefix:
+            return f"{prefix}{numeric:,.2f} {normalized_currency}"
+        return f"{normalized_currency} {numeric:,.2f}"
+    return f"{numeric:,.2f} (currency unknown)"
+
+
+def _format_metric_value(value: object, metric_key: str, currency: str | None) -> str:
+    if metric_key == "dividend_yield":
+        numeric = _coerce_numeric(value)
+        if numeric is None:
+            return str(value) if value not in (None, "") else "N/A"
+        if 0 <= numeric <= 1:
+            numeric *= 100
+        return f"{numeric:.2f}%"
+    if _is_money_metric(metric_key):
+        return _format_money_value(value, currency)
+    return _format_market_value(value)
+
+
 def _statement_record_label(row: dict) -> str:
     for key in ["index", "Breakdown", "breakdown", "lineItem", "Line Item", "metric"]:
         if key in row:
@@ -1777,6 +1881,9 @@ def get_market_data_bundle(
             if match and match not in resolved_metric_keys:
                 resolved_metric_keys.append(match)
 
+    if any(_is_money_metric(metric_key) for metric_key in resolved_metric_keys) and "info" not in data_types:
+        data_types = sorted({*data_types, "info"})
+
     payloads_by_symbol: dict[str, dict[str, dict]] = {}
     cache_hits: list[str] = []
     fetch_failures: list[str] = []
@@ -1805,6 +1912,16 @@ def get_market_data_bundle(
         f"- Data fetched: {', '.join(data_types)}",
         "- Source: yfinance with backend cache",
     ]
+    currencies_by_symbol = {
+        symbol: _currency_from_payloads(symbol, payloads_by_symbol.get(symbol, {}))
+        for symbol in normalized_symbols
+    }
+    known_currencies = sorted({currency for currency in currencies_by_symbol.values() if currency})
+    if any(_is_money_metric(metric_key) for metric_key in resolved_metric_keys):
+        currency_parts = [f"{symbol}={currencies_by_symbol.get(symbol) or 'unknown'}" for symbol in normalized_symbols]
+        lines.append(f"- Currency basis: {', '.join(currency_parts)}")
+        if len(known_currencies) > 1:
+            lines.append("- Warning: monetary values use mixed currencies. Compare only after FX conversion or normalization.")
     if cache_hits:
         lines.append(f"- Cache hits: {', '.join(cache_hits[:12])}{' ...' if len(cache_hits) > 12 else ''}")
     if fetch_failures:
@@ -1820,7 +1937,7 @@ def get_market_data_bundle(
             row = [str(definition["label"])]
             for symbol in normalized_symbols:
                 value, period_label = _extract_market_metric(payloads_by_symbol.get(symbol, {}), metric_key)
-                formatted = _format_market_value(value)
+                formatted = _format_metric_value(value, metric_key, currencies_by_symbol.get(symbol))
                 if period_label and formatted != "N/A":
                     formatted = f"{formatted} ({period_label})"
                 row.append(formatted)

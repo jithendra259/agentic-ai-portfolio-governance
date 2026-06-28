@@ -204,13 +204,45 @@ class LiveDataToolsYFinanceFallbackTests(unittest.TestCase):
                 )
 
         self.assertIn("Market Data Bundle", result)
-        self.assertIn("Data fetched: financials", result)
-        self.assertIn("| Total revenue | 1.20B (2025-03-31)", result)
-        self.assertIn("| Net income | 220.00M (2025-03-31)", result)
+        self.assertIn("Data fetched: financials, info", result)
+        self.assertIn("Currency basis: INFY.NS=INR, RELIANCE.NS=INR, TCS.NS=INR", result)
+        self.assertIn("| Total revenue | ₹120.00 crore (2025-03-31)", result)
+        self.assertIn("| Net income | ₹22.00 crore (2025-03-31)", result)
         self.assertEqual(
             sorted(call["data_type"] for call in fake_memory.store_calls),
-            ["financials", "financials", "financials"],
+            ["financials", "financials", "financials", "info", "info", "info"],
         )
+
+    def test_market_data_bundle_warns_for_mixed_currency_values(self):
+        def fake_payload(symbol, data_type, **_kwargs):
+            currency = "INR" if symbol.endswith(".NS") else "USD"
+            if data_type == "info":
+                return ({"symbol": symbol, "data_type": "info", "info": {"currency": currency, "marketCap": 2500000000000}}, False)
+            return (None, False)
+
+        with patch("src.agents.live_data_tools._fetch_cached_yfinance_market_payload", side_effect=fake_payload):
+            result = get_market_data_bundle.func(
+                symbols=["AAPL", "RELIANCE.NS"],
+                request="compare market cap values",
+            )
+
+        self.assertIn("Currency basis: AAPL=USD, RELIANCE.NS=INR", result)
+        self.assertIn("Warning: monetary values use mixed currencies", result)
+        self.assertIn("$2.50T", result)
+        self.assertIn("₹2.50 lakh crore", result)
+
+    def test_market_data_bundle_keeps_non_us_non_inr_values_in_native_currency(self):
+        def fake_payload(symbol, data_type, **_kwargs):
+            if data_type == "info":
+                return ({"symbol": symbol, "data_type": "info", "info": {"currency": "JPY", "marketCap": 2500000000000}}, False)
+            return (None, False)
+
+        with patch("src.agents.live_data_tools._fetch_cached_yfinance_market_payload", side_effect=fake_payload):
+            result = get_market_data_bundle.func(symbols=["7203.T"], request="compare market cap values")
+
+        self.assertIn("Currency basis: 7203.T=JPY", result)
+        self.assertIn("¥2,500,000,000,000.00 JPY", result)
+        self.assertNotIn("2.50T", result)
 
     def test_market_data_bundle_fetches_broad_payloads_for_all_available_data(self):
         fake_memory = FakeMarketMemory(cached_payload=None)
