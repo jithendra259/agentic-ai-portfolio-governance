@@ -302,22 +302,52 @@ def _extract_tickers(query: str) -> list[str]:
         "DO", "NOT", "DONT", "DON", "NO", "ANSWER", "QUESTION",
         "DAY", "WEEK", "MONTH", "YEAR", "TREND", "TRENDS", "RETURN", "RETURNS",
         "VOLUME", "SECTOR", "STOCK", "STOCKS", "FULL", "COMPLETE",
+        "A", "AN", "LINE", "CHART", "PLOT", "PRICE", "PRICES",
     }
     
-    # 1. Try to find explicit lists like ["AAPL", "MSFT"] or [AAPL, MSFT]
+    ticker_pattern = r"\b[A-Z0-9]{1,10}(?:[.\-][A-Z0-9]{1,8})?\b"
+
+    def _looks_like_date_fragment(symbol: str) -> bool:
+        return bool(re.fullmatch(r"(?:19|20)\d{2}(?:[.\-]\d{1,2}){1,2}", symbol))
+
+    # 1. Preserve explicit exchange-qualified symbols such as RELIANCE.NS,
+    # ASML.AS, 7203.T, HSBA.L, and BTC-USD before punctuation normalization.
+    explicit_symbol_matches = re.findall(ticker_pattern, query.upper())
+    prequalified_symbols = []
+    for symbol in explicit_symbol_matches:
+        if "." not in symbol and "-" not in symbol:
+            continue
+        if _looks_like_date_fragment(symbol):
+            continue
+        base = symbol.split(".", 1)[0].split("-", 1)[0]
+        if base in stopwords or symbol in stopwords:
+            continue
+        if symbol not in prequalified_symbols:
+            prequalified_symbols.append(symbol)
+    prequalified_parts = {
+        part
+        for symbol in prequalified_symbols
+        for part in re.split(r"[.\-]", symbol)
+        if part
+    }
+
+    # 2. Try to find explicit lists like ["AAPL", "MSFT"] or [AAPL, MSFT]
     list_matches = re.findall(r"\[\s*([^\]]+)\s*\]", query)
     if list_matches:
         explicit_tickers = []
         for match in list_matches:
-            words = re.findall(r"\b[A-Z]{1,5}\b", match.upper())
+            words = re.findall(ticker_pattern, match.upper())
             for w in words:
-                if w not in stopwords and not (w.startswith("U") and w[1:].isdigit()):
+                if _looks_like_date_fragment(w):
+                    continue
+                base = w.split(".", 1)[0].split("-", 1)[0]
+                if base not in stopwords and w not in stopwords and not (w.startswith("U") and w[1:].isdigit()):
                     if w not in explicit_tickers:
                         explicit_tickers.append(w)
         if explicit_tickers:
-            return explicit_tickers
+            return [*prequalified_symbols, *[ticker for ticker in explicit_tickers if ticker not in prequalified_symbols]]
 
-    # 2. Otherwise, check word-by-word with context rules
+    # 3. Otherwise, check word-by-word with context rules
     query_upper = query.upper()
     # Normalize punctuation to spaces except keep letters/numbers
     normalized_query = re.sub(r"[^A-Z0-9\s]", " ", query_upper)
@@ -335,7 +365,12 @@ def _extract_tickers(query: str) -> list[str]:
     # Find all candidate tokens (their indices in tokens)
     candidate_indices = []
     for idx, token in enumerate(tokens):
-        if re.match(r"^[A-Z]{1,5}$", token) and token not in stopwords and token not in context_keywords:
+        if (
+            re.match(r"^[A-Z]{1,5}$", token)
+            and token not in stopwords
+            and token not in context_keywords
+            and token not in prequalified_parts
+        ):
             if not (token.startswith("U") and token[1:].isdigit()):
                 candidate_indices.append(idx)
                 
@@ -389,7 +424,7 @@ def _extract_tickers(query: str) -> list[str]:
                     break
                     
     # Finally, build the list of tickers in order of appearance
-    tickers = []
+    tickers = list(prequalified_symbols)
     for idx in sorted(accepted_indices):
         token = tokens[idx]
         if token not in tickers:

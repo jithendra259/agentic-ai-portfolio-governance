@@ -5,6 +5,8 @@ import re
 import subprocess
 import threading
 from difflib import SequenceMatcher
+from functools import lru_cache
+from pathlib import Path
 from typing import Annotated, Any, Optional, Tuple, TypedDict
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
@@ -51,6 +53,7 @@ from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_s
 
 logger = logging.getLogger(__name__)
 GOVERNANCE_CACHE_VERSION = "optimizer-audit-v3-yfinance"
+CHATBOT_CONVERSATION_GUIDANCE_DIR = Path(__file__).resolve().parents[1] / "rag" / "knowledge" / "chatbot_conversation"
 
 
 def add_messages(current: list[BaseMessage] | None, update: list[BaseMessage] | None) -> list[BaseMessage]:
@@ -264,6 +267,58 @@ def replace_summary(current: str | None, update: str | None) -> str:
     return str(update)
 
 
+def _sanitize_user_visible_response(content: str, scratchpad: dict[str, Any] | None = None) -> str:
+    """Remove internal-only payloads and unresolved local attachment links."""
+    text = str(content or "").strip()
+    if not text:
+        return text
+
+    def _scratchpad_summary() -> str:
+        if not isinstance(scratchpad, dict) or not scratchpad:
+            return ""
+        lines = ["Exact metrics available:"]
+        for metric_name, details in scratchpad.items():
+            if isinstance(details, dict):
+                exact_value = details.get("exact_value")
+                context = str(details.get("context") or "").strip()
+            else:
+                exact_value = details
+                context = ""
+            line = f"- `{metric_name}`: {exact_value}"
+            if context:
+                line += f" ({context})"
+            lines.append(line)
+        return "\n".join(lines)
+
+    try:
+        payload = json.loads(text)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and payload.get("scratchpad_save"):
+        scratchpad_summary = _scratchpad_summary()
+        if scratchpad_summary:
+            return scratchpad_summary
+        metric_name = str(payload.get("metric_name") or "metric").strip()
+        exact_value = payload.get("exact_value")
+        context = str(payload.get("context") or "").strip()
+        lines = [f"Saved exact metric `{metric_name}`: {exact_value}."]
+        if context:
+            lines.append(f"Context: {context}.")
+        return "\n".join(lines)
+
+    attachment_pattern = re.compile(r"!\[[^\]]*\]\(attachment://[^)]+\)", flags=re.IGNORECASE)
+    if attachment_pattern.search(text):
+        text = attachment_pattern.sub("", text)
+        pending_note = (
+            "Chart rendering is still pending because the assistant did not receive "
+            "a registered plot artifact for that attachment."
+        )
+        if pending_note not in text:
+            text = f"{text.strip()}\n\n{pending_note}".strip()
+
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 @tool("save_financial_metric")
 def save_financial_metric(metric_name: str, exact_value: float | str, context: str = "") -> str:
     """
@@ -327,6 +382,25 @@ def _latest_human_text(messages: list[BaseMessage] | None) -> str:
     return ""
 
 
+@lru_cache(maxsize=1)
+def _load_chatbot_conversation_guidance() -> str:
+    if not CHATBOT_CONVERSATION_GUIDANCE_DIR.exists():
+        return ""
+
+    chunks: list[str] = []
+    for path in sorted(CHATBOT_CONVERSATION_GUIDANCE_DIR.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logger.warning("Unable to read chatbot conversation guidance %s: %s", path, exc)
+            continue
+        if text:
+            chunks.append(text)
+    if not chunks:
+        return ""
+    return "### CHATBOT CONVERSATION GUIDANCE ###\n" + "\n\n".join(chunks)
+
+
 def assemble_system_prompt(state: "AgentState") -> str:
     """Build the dynamic system prompt with hard state injected before messages."""
     original_goal = state.get("original_goal") or _latest_human_text(state.get("messages", [])) or "Portfolio governance conversation"
@@ -334,6 +408,7 @@ def assemble_system_prompt(state: "AgentState") -> str:
     historical_summary = state.get("historical_summary") or state.get("summary") or ""
     session_state = state.get("session_state") if isinstance(state.get("session_state"), dict) else {}
     conversation_memory = conversation_prompt_block(session_state)
+    conversation_guidance = _load_chatbot_conversation_guidance()
 
     if scratchpad:
         scratchpad_lines = "\n".join(
@@ -350,6 +425,7 @@ def assemble_system_prompt(state: "AgentState") -> str:
         f"{scratchpad_lines}\n\n"
         "Historical summary of older context:\n"
         f"{historical_summary or 'No distant context summarized yet.'}\n\n"
+        f"{conversation_guidance}\n\n"
         f"{conversation_memory}\n"
         "### SCRATCHPAD RULES ###\n"
         "- Always read from the scratchpad before calculating a metric.\n"
@@ -800,6 +876,7 @@ HISTORICAL CHART RULES:
 - If the user gives a historical range such as 2005 to 2025, pass it as start_date=2005-01-01 and end_date=2025-12-31.
 - If the request already contains enough information, act immediately instead of asking for confirmation.
 - If the user asks for a chart and has provided ticker(s), date range, and chart type or a clear statistic, do not ask "shall I proceed"; generate the chart.
+- Never output attachment:// chart links. Only reference charts that were actually registered by a tool, using a real plot:// id, /outputs/ path, or plot token from tool output.
 
 PLOT INTELLIGENCE RULES — CHART TYPE SELECTION:
 When the user requests a visualization, you MUST select the correct chart type.
@@ -967,6 +1044,7 @@ GOVERNANCE RULES:
 - If yfinance is used, explain that institutional/holder graph risk may be neutral or unavailable unless MongoDB holder data exists for those tickers.
 - The tool returns lightweight structured JSON with valid tickers, final weights, structural risk scores, and markdown plot links.
 - Read the tool output carefully instead of inventing any values.
+- If the user explicitly asks for an equal-weight portfolio, set each selected ticker to 1/n and explain risk for that equal-weight allocation. Do not present optimizer output as the equal-weight portfolio; only mention optimized weights as an advisory comparison if the user asks for optimization.
 
 METHODOLOGY RAG RULES:
 - If the user asks who, what, when, where, why, or how questions about a stock ticker or company, prefer the stock tools below instead of search_methodology_knowledge_base.
@@ -1160,8 +1238,14 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
             
             # Terminology Enforcement: Replace forbidden execution words with advisory terminology
             fixed_content = clean_content
-            fixed_content = re.sub(r"\bbuy\b", "increase advisory exposure to", fixed_content, flags=re.IGNORECASE)
-            fixed_content = re.sub(r"\bsell\b", "reduce advisory exposure to", fixed_content, flags=re.IGNORECASE)
+            fixed_content = re.sub(
+                r"\bno\s+buy/sell\s+(?:or\s+)?(?:execution\s+)?advice\b",
+                "No directional trade or execution advice",
+                fixed_content,
+                flags=re.IGNORECASE,
+            )
+            fixed_content = re.sub(r"(?<!\bno\s)\bbuy\b(?!-)", "increase advisory exposure to", fixed_content, flags=re.IGNORECASE)
+            fixed_content = re.sub(r"(?<!\bno\s)\bsell\b(?!-)", "reduce advisory exposure to", fixed_content, flags=re.IGNORECASE)
             fixed_content = re.sub(r"\btrade signal\b", "governance advisory threshold", fixed_content, flags=re.IGNORECASE)
             fixed_content = re.sub(r"\bprofit prediction\b", "expected return estimate", fixed_content, flags=re.IGNORECASE)
             clean_content = fixed_content.strip()
@@ -1182,7 +1266,7 @@ def chatbot_node(state: AgentState, config: RunnableConfig):
         except Exception as exc:
             logger.warning(f"Compliance validation shield failed: {exc}")
             
-        response.content = clean_content.strip()
+        response.content = _sanitize_user_visible_response(clean_content, scratchpad=state.get("scratchpad"))
 
     return {
         "messages": [response], 
@@ -1661,6 +1745,13 @@ def _build_governance_markdown(payload: Optional[dict], raw_text: str) -> str:
 def finalize_governance_node(state: AgentState, config: RunnableConfig):
     """Render governance JSON or return direct tool output for simpler linear tool flow."""
     messages = state["messages"]
+    if state.get("route_status") == "loop_blocked" and state.get("scratchpad"):
+        content = _sanitize_user_visible_response(
+            '{"scratchpad_save": true}',
+            scratchpad=state.get("scratchpad"),
+        )
+        return {"messages": [AIMessage(content=content)]}
+
     if not messages:
         return {"messages": [AIMessage(content="Unable to generate a response for this request.")]}
 
@@ -1684,6 +1775,7 @@ def finalize_governance_node(state: AgentState, config: RunnableConfig):
         # We want the user to see the analysis, not the generator code.
         content = re.sub(r"```python.*?```", "", content, flags=re.DOTALL).strip()
         content = re.sub(r"```.*?```", "", content, flags=re.DOTALL).strip() # catch non-labeled blocks too
+        content = _sanitize_user_visible_response(content)
         
         # If the LLM leaked code as plain text (no backticks), our marker interceptor below will catch it.
 
@@ -1744,6 +1836,15 @@ def _route_after_tool(state: AgentState) -> str:
     latest_tool_name, latest_tool_output = _extract_latest_tool_output(state.get("messages", []))
     # Tools that produce final output go to finalize_governance.
     # get_price_series_for_analysis returns an intermediate cache reference —
+    if latest_tool_name == "plot_historical_prices":
+        last_human = next((m for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)), None)
+        user_text = _message_content_to_text(last_human) if last_human else ""
+        if re.search(
+            r"\b(volatility|cagr|drawdown|sharpe|sortino|return\s+distribution|correlation|covariance)\b",
+            user_text,
+            re.IGNORECASE,
+        ):
+            return "chatbot"
     if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "plot_historical_prices"}:
         return "finalize_governance"
     return "chatbot"
@@ -1808,6 +1909,8 @@ def _route_after_interceptor(state: AgentState) -> str:
     if state.get("route_status") == "tool_allowed":
         return "tools"
     if state.get("route_status") == "loop_blocked":
+        if state.get("scratchpad"):
+            return "finalize_governance"
         return "chatbot"
     return "end"
 
@@ -1879,6 +1982,7 @@ def _build_graph():
         {
             "tools": "tools",
             "chatbot": "chatbot",
+            "finalize_governance": "finalize_governance",
             "end": END,
         },
     )
