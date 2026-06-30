@@ -65,12 +65,23 @@ def store_latest_governance_run(session_state: dict[str, Any], result: Any) -> d
         "universe": state.get("active_universe"),
         "tickers": tickers,
         "target_date": payload.get("target_date"),
+        "data_source": payload.get("data_source"),
+        "data_sources": dict(payload.get("data_sources") or {}) if isinstance(payload.get("data_sources"), dict) else {},
+        "risk_profile": optimization.get("risk_tolerance"),
         "weights": dict(optimization.get("weights") or {}),
         "systemic_risk_scores": dict(systemic.get("scores") or {}),
         "systemic_risk_method": systemic.get("method"),
+        "annualized_return": optimization.get("expected_annualized_return"),
+        "expected_cvar": optimization.get("expected_cvar_95"),
         "instability_index": instability,
         "regime": regime,
         "graph_penalty": optimization.get("lambda_t"),
+        "hhi": optimization.get("hhi"),
+        "effective_holdings": optimization.get("effective_number_of_holdings"),
+        "max_weight_constraint": optimization.get("max_weight_constraint"),
+        "max_observed_weight": optimization.get("max_observed_weight"),
+        "effective_window_start": optimization.get("effective_window_start"),
+        "effective_window_end": optimization.get("effective_window_end"),
     }
     state["active_tickers"] = tickers
     state["active_ticker_count"] = len(tickers)

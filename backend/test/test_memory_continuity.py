@@ -72,6 +72,21 @@ class MemoryContinuityTests(unittest.TestCase):
             "U1",
         )
 
+    def test_explanation_and_comparison_questions_do_not_become_price_plots(self):
+        resolver = ContextResolver()
+        state = default_session_state("session-1")
+        prompts = [
+            "Compare the volatility of RELIANCE.NS, TCS.NS, and INFY.NS.",
+            "Which stock contributed the most risk to the portfolio?",
+            "Explain the return and risk profile of each selected stock.",
+            "Build an equal-weight portfolio using RELIANCE.NS, TCS.NS, and INFY.NS and explain the risk.",
+        ]
+
+        for prompt in prompts:
+            resolved = resolver.resolve(prompt, state)
+            self.assertIsNone(resolved["resolved_context"]["plot_request"], prompt)
+            self.assertNotEqual(resolved["session_state"].get("last_plot_id"), "normalized_price_comparison")
+
 
 if __name__ == "__main__":
     unittest.main()

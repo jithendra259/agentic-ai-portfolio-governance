@@ -389,6 +389,9 @@ class IntentClassifier:
         safety_clause_patterns = [
             r"\bdo\s+not\s+use\s+[^.?!]*(?:language|wording|terms?)",
             r"\bdon't\s+use\s+[^.?!]*(?:language|wording|terms?)",
+            r"\bdo\s+not\s+(?:give|provide|offer)\s+[^.?!]*(?:buy|sell|trade|execution|investment)\s+(?:advice|recommendations?|signals?)",
+            r"\bdon't\s+(?:give|provide|offer)\s+[^.?!]*(?:buy|sell|trade|execution|investment)\s+(?:advice|recommendations?|signals?)",
+            r"\bno\s+[^.?!]*(?:buy|sell|trade|execution|investment)\s+(?:advice|recommendations?|signals?)",
             r"\bavoid\s+[^.?!]*(?:language|wording|terms?)",
             r"\bno\s+[^.?!]*(?:language|wording|terms?)",
         ]

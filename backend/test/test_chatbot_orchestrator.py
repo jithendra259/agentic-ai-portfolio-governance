@@ -54,6 +54,38 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
 
         self.assertEqual(route, "finalize_governance")
 
+    def test_route_after_plot_tool_continues_when_computed_stats_requested(self):
+        state = {
+            "messages": [
+                HumanMessage(content="Compare RELIANCE.NS and TCS.NS volatility, CAGR, and max drawdown."),
+                ToolMessage(
+                    content="Historical Price Plot\nPlot generated successfully.",
+                    name="plot_historical_prices",
+                    tool_call_id="plot-1",
+                ),
+            ]
+        }
+
+        route = self.module._route_after_tool(state)
+
+        self.assertEqual(route, "chatbot")
+
+    def test_route_after_plot_tool_finalizes_simple_price_chart(self):
+        state = {
+            "messages": [
+                HumanMessage(content="Plot RELIANCE.NS and TCS.NS prices from 2023 to 2024."),
+                ToolMessage(
+                    content="Historical Price Plot\nPlot generated successfully.",
+                    name="plot_historical_prices",
+                    tool_call_id="plot-2",
+                ),
+            ]
+        }
+
+        route = self.module._route_after_tool(state)
+
+        self.assertEqual(route, "finalize_governance")
+
     def test_finalize_governance_formats_snapshot_explanations_from_tool_path(self):
         snapshot_text = (
             "MongoDB Stock Snapshot\n\n"
@@ -101,6 +133,17 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
         self.assertIn("correlation heatmap", self.module.SYSTEM_PROMPT)
         self.assertIn("Never tell the user you cannot do this analysis", self.module.SYSTEM_PROMPT)
 
+    def test_system_prompt_forbids_unregistered_attachment_chart_links(self):
+        self.assertIn("Never output attachment://", self.module.SYSTEM_PROMPT)
+        self.assertIn("plot://", self.module.SYSTEM_PROMPT)
+
+    def test_assembled_prompt_includes_chatbot_conversation_markdown_guidance(self):
+        prompt = self.module.assemble_system_prompt({"messages": [], "session_state": {}})
+
+        self.assertIn("### CHATBOT CONVERSATION GUIDANCE ###", prompt)
+        self.assertIn("Risk-profile follow-ups", prompt)
+        self.assertIn("Do not list universes", prompt)
+
     def test_resolve_model_prefers_configured_ashna_when_ollama_has_no_models(self):
         model = self.module._resolve_ollama_model(
             ["ashnaai", "qwen3-coder-next:cloud", "qwen3:1.7b"],
@@ -114,6 +157,82 @@ class ChatbotOrchestratorFlowTests(unittest.TestCase):
 
         self.assertTrue(self.module._is_ollama_unavailable_error(error))
 
+    def test_user_visible_response_summarizes_scratchpad_only_json(self):
+        raw = (
+            '{"scratchpad_save": true, "metric_name": "annualised_volatility_BTC-USD", '
+            '"exact_value": 0.402697, "context": "BTC-USD vs GLD 2023-01-01 to 2024-12-31"}'
+        )
+
+        content = self.module._sanitize_user_visible_response(raw)
+
+        self.assertIn("Saved exact metric", content)
+        self.assertIn("annualised_volatility_BTC-USD", content)
+        self.assertIn("0.402697", content)
+        self.assertNotIn("scratchpad_save", content)
+
+    def test_user_visible_response_uses_scratchpad_metrics_when_json_leaks(self):
+        raw = '{"scratchpad_save": true, "metric_name": "annualised_volatility_BTC-USD", "exact_value": 0.402697}'
+        scratchpad = {
+            "annualised_volatility_BTC-USD": {"exact_value": 0.402697, "context": "BTC-USD vs GLD"},
+            "max_drawdown_GLD": {"exact_value": -11.3474, "context": "BTC-USD vs GLD"},
+        }
+
+        content = self.module._sanitize_user_visible_response(raw, scratchpad=scratchpad)
+
+        self.assertIn("Exact metrics available", content)
+        self.assertIn("annualised_volatility_BTC-USD", content)
+        self.assertIn("max_drawdown_GLD", content)
+        self.assertIn("-11.3474", content)
+        self.assertNotIn("scratchpad_save", content)
+
+    def test_user_visible_response_removes_unresolved_attachment_chart_links(self):
+        raw = (
+            "Here is the chart:\n\n"
+            "![MSFT Candlestick Chart 2024](attachment://chart.png)\n\n"
+            "Actual chart: ![MSFT](plot://plot-123)"
+        )
+
+        content = self.module._sanitize_user_visible_response(raw)
+
+        self.assertNotIn("attachment://", content)
+        self.assertIn("plot://plot-123", content)
+        self.assertIn("Chart rendering is still pending", content)
+
+    def test_loop_blocked_with_scratchpad_routes_to_final_response(self):
+        state = {
+            "route_status": "loop_blocked",
+            "scratchpad": {
+                "annualised_volatility_7203.T": {
+                    "exact_value": 0.3229,
+                    "context": "7203.T 2023-01-01 to 2024-12-31",
+                }
+            },
+        }
+
+        route = self.module._route_after_interceptor(state)
+
+        self.assertEqual(route, "finalize_governance")
+
+    def test_finalize_loop_blocked_uses_scratchpad_metrics(self):
+        state = {
+            "route_status": "loop_blocked",
+            "scratchpad": {
+                "annualised_volatility_7203.T": {
+                    "exact_value": 0.3229,
+                    "context": "7203.T 2023-01-01 to 2024-12-31",
+                }
+            },
+            "messages": [
+                HumanMessage(content="Analyze 7203.T Toyota"),
+            ],
+        }
+
+        response = self.module.finalize_governance_node(state, config={"configurable": {"thread_id": "test"}})
+        content = response["messages"][0].content
+
+        self.assertIn("Exact metrics available", content)
+        self.assertIn("annualised_volatility_7203.T", content)
+        self.assertNotIn("CRITICAL SYSTEM OVERRIDE", content)
 
     @patch('src.orchestrator.chatbot_orchestrator.plot_us_economic_indicators.func')
     def test_classify_and_route_routes_recession_bands_deterministically(self, mock_plot_func):

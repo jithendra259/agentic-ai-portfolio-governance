@@ -129,6 +129,20 @@ class ChartRequestResolverTests(unittest.TestCase):
         self.assertEqual(call_kwargs["tickers"], ["RELIANCE.NS", "TCS.NS", "INFY.NS"])
         self.assertEqual(call_kwargs["ticker"], "RELIANCE.NS")
 
+    def test_explanation_followups_do_not_trigger_chart_fast_path(self):
+        prompts = [
+            "Compare the volatility of RELIANCE.NS, TCS.NS, and INFY.NS.",
+            "Which stock contributed the most risk to the portfolio?",
+            "Explain the return and risk profile of each selected stock.",
+            "Build an equal-weight portfolio using RELIANCE.NS, TCS.NS, and INFY.NS and explain the risk.",
+        ]
+
+        with patch("src.decision.chart_request_resolver.run_data_analysis_plot") as mock_tool:
+            for prompt in prompts:
+                self.assertIsNone(resolve_deterministic_chart_request(prompt, "session-1"))
+
+        mock_tool.func.assert_not_called()
+
     def test_build_chart_response_names_chart_type(self):
         response = build_chart_response(
             {

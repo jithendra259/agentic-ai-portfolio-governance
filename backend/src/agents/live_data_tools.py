@@ -285,7 +285,7 @@ def _extract_price_frame(doc: dict, downsample: bool = False, keep_ohlcv: bool =
             if col in df.columns:
                 cols_to_keep.append(col)
         df = df[cols_to_keep].rename(columns={date_col: "Date", close_col: "Close"})
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_localize(None)
         df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
         for col in ["Open", "open", "High", "high", "Low", "low", "Volume", "volume"]:
             if col in df.columns:
@@ -293,7 +293,7 @@ def _extract_price_frame(doc: dict, downsample: bool = False, keep_ohlcv: bool =
         df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
     else:
         df = df[[date_col, close_col]].rename(columns={date_col: "Date", close_col: "Close"})
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_localize(None)
         df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
         df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
     
@@ -1972,7 +1972,7 @@ def _history_frame_to_records(history: pd.DataFrame) -> list[dict]:
         if index_name in frame.columns:
             frame = frame.rename(columns={index_name: "Date"})
 
-    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dt.tz_localize(None)
     frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
     frame = frame.dropna(subset=["Date", "Close"]).sort_values("Date")
     return [
@@ -2119,7 +2119,7 @@ def _cached_yfinance_history_frame(
         elif lower == "volume":
             rename_map[column] = "Volume"
     frame = frame.rename(columns=rename_map)
-    frame["Date"] = pd.to_datetime(frame[date_col], errors="coerce").dt.tz_localize(None)
+    frame["Date"] = pd.to_datetime(frame[date_col], errors="coerce", utc=True).dt.tz_localize(None)
     for column in ["Open", "High", "Low", "Close", "Volume"]:
         if column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -2210,7 +2210,7 @@ def _fetch_yfinance_price_on_or_before(ticker: str, target_dt: pd.Timestamp) -> 
         return None
 
     frame = pd.DataFrame(records)
-    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce")
+    frame["Date"] = pd.to_datetime(frame["Date"], errors="coerce", utc=True).dt.tz_localize(None)
     frame["Close"] = pd.to_numeric(frame["Close"], errors="coerce")
     frame = frame.dropna(subset=["Date", "Close"]).sort_values("Date")
     row = _get_effective_price_on_or_before(frame, target_dt)

@@ -159,23 +159,37 @@ def get_price_series_for_analysis(
         ]
         returns_out[ticker] = [round(float(value), 6) for value in full_log_returns]
 
-        sampled_price_dates = [
-            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d")
-            for _, row in sampled.iterrows()
-        ]
         full_price_dates = [
-            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"])).strftime("%Y-%m-%d")
+            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"], utc=True).tz_localize(None)).strftime("%Y-%m-%d")
             for _, row in full_filtered.iterrows()
+        ]
+        sampled_price_dates = [
+            (row["Date"] if isinstance(row["Date"], pd.Timestamp) else pd.to_datetime(row["Date"], utc=True).tz_localize(None)).strftime("%Y-%m-%d")
+            for _, row in sampled.iterrows()
         ]
         price_dates_by_ticker[ticker] = sampled_price_dates
         return_dates_by_ticker[ticker] = full_price_dates[1:]
 
         arr = np.array(full_log_returns, dtype=float)
+        running_max = np.maximum.accumulate(full_close_arr)
+        drawdowns = (full_close_arr / running_max) - 1.0
+        max_drawdown_pct = float(drawdowns.min() * 100.0) if len(drawdowns) else 0.0
+        calendar_days = max(
+            (
+                full_filtered["Date"].iloc[-1].to_pydatetime()
+                - full_filtered["Date"].iloc[0].to_pydatetime()
+            ).days,
+            1,
+        )
+        calendar_years = max(calendar_days / 365.25, 1 / 365.25)
+        cagr_pct = ((float(full_close_arr[-1]) / float(full_close_arr[0])) ** (1.0 / calendar_years) - 1.0) * 100.0
         stats_out[ticker] = {
             "mean_return": round(float(arr.mean()), 6) if len(arr) else 0.0,
             "std_return": round(float(arr.std()), 6) if len(arr) else 0.0,
             "annualised_vol": round(float(arr.std() * np.sqrt(252)), 6) if len(arr) else 0.0,
             "total_return_pct": round((float(full_close_arr[-1]) / float(full_close_arr[0]) - 1.0) * 100.0, 4),
+            "cagr_pct": round(cagr_pct, 4),
+            "max_drawdown_pct": round(max_drawdown_pct, 4),
             "trading_days": len(full_filtered),
             "observations": len(full_filtered),
             "sampled_observations": len(sampled),

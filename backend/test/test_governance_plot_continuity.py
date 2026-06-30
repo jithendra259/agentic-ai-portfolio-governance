@@ -33,8 +33,12 @@ class GovernancePlotContinuityTests(unittest.TestCase):
             },
             "optimization": {
                 "weights": {"JNJ": 0.55, "PFE": 0.0, "UNH": 0.45},
+                "expected_annualized_return": 0.1234,
+                "expected_cvar_95": 0.0275,
                 "instability_index": 0.18,
                 "lambda_t": 0.7,
+                "hhi": 0.505,
+                "effective_number_of_holdings": 1.98,
             },
         }
 
@@ -47,6 +51,10 @@ class GovernancePlotContinuityTests(unittest.TestCase):
         self.assertEqual(state["latest_governance_run"]["systemic_risk_scores"]["PFE"], 0.47)
         self.assertEqual(state["latest_governance_run"]["regime"], "calm")
         self.assertEqual(state["latest_governance_run"]["graph_penalty"], 0.7)
+        self.assertEqual(state["latest_governance_run"]["annualized_return"], 0.1234)
+        self.assertEqual(state["latest_governance_run"]["expected_cvar"], 0.0275)
+        self.assertEqual(state["latest_governance_run"]["hhi"], 0.505)
+        self.assertEqual(state["latest_governance_run"]["effective_holdings"], 1.98)
 
     def test_axis_message_sets_pending_request_and_builds_expected_scatter(self):
         state = store_latest_governance_run(self.state, self.payload)

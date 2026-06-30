@@ -505,7 +505,13 @@ def _extract_plot_request(message: str, state: dict[str, Any]) -> dict[str, Any]
             key = "historical_adjusted_close"
     elif ("normalized price" in normalized or "normalised price" in normalized or "normalized comparison" in normalized) and _has_plot_marker(normalized):
         key = "normalized_price_comparison"
-    elif normalized.startswith("compare ") and len(_filter_tickers(re.findall(r"\b[A-Z]{1,5}\b", str(message or "")))) >= 2:
+    elif normalized.startswith("compare ") and (
+        "price comparison" in normalized
+        or "normalized price" in normalized
+        or "normalised price" in normalized
+        or "line chart" in normalized
+        or "line plot" in normalized
+    ) and _has_plot_marker(normalized):
         key = "normalized_price_comparison"
     elif "portfolio value" in normalized and ("over time" in normalized or _has_plot_marker(normalized)):
         key = "portfolio_value_over_time"
