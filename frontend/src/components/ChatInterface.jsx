@@ -339,7 +339,7 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
   ...otherProps
 }, ref) => {
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+    <Box className="composer-model-control" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
       <Tooltip title="Attach">
         <IconButton ref={ref} {...otherProps} className="composer-icon-button" aria-label="Attach file">
           <Plus size={24} />
@@ -595,6 +595,7 @@ export default function ChatInterface({ setView }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [streamStatus, setStreamStatus] = useState('');
   const [sidebarState, setSidebarState] = useState('full'); // 'full' | 'mini' | 'closed'
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const selectedModelRef = useRef('');
   const messagesEndRef = useRef(null);
   const activeStreamControllerRef = useRef(null);
@@ -879,6 +880,7 @@ export default function ChatInterface({ setView }) {
     setActiveConversationId(nextSessionId);
     setMessages(nextMessages);
     setHistoryLoaded(true);
+    setMobileSidebarOpen(false);
   }, [sessionIndexStorageKey, sessionStorageKey]);
 
   const handleActiveConversationChange = useCallback((nextId) => {
@@ -889,6 +891,7 @@ export default function ChatInterface({ setView }) {
     rememberSessionId(nextId, sessionIndexStorageKey);
     setSessionId(nextId);
     setActiveConversationId(nextId);
+    setMobileSidebarOpen(false);
   }, [activeConversationId, sessionIndexStorageKey, sessionStorageKey]);
 
   const handleDeleteConversation = useCallback(async (event, targetSessionId) => {
@@ -1061,7 +1064,14 @@ export default function ChatInterface({ setView }) {
   }
 
   return (
-    <Box className={`chatgpt-shell sidebar-${sidebarState}`}>
+    <Box className={`chatgpt-shell sidebar-${sidebarState} ${mobileSidebarOpen ? 'mobile-sidebar-open' : ''}`}>
+      {mobileSidebarOpen && (
+        <Box
+          className="mobile-sidebar-backdrop"
+          role="presentation"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
       <Box className="chatgpt-sidebar">
 
         {/* ════════════════════════════════════════════════════════════════════
@@ -1077,7 +1087,13 @@ export default function ChatInterface({ setView }) {
               <IconButton
                 className="sidebar-icon"
                 aria-label="Collapse sidebar to icon rail"
-                onClick={() => setSidebarState('mini')}
+                onClick={() => {
+                  if (mobileSidebarOpen) {
+                    setMobileSidebarOpen(false);
+                  } else {
+                    setSidebarState('mini');
+                  }
+                }}
               >
                 <PanelLeft size={18} />
               </IconButton>
@@ -1095,7 +1111,14 @@ export default function ChatInterface({ setView }) {
 
           <Box className="sidebar-section">
             <Typography className="sidebar-section-title">Tools</Typography>
-            <button className="sidebar-tool" type="button" onClick={() => setView('analytics')}>
+            <button
+              className="sidebar-tool"
+              type="button"
+              onClick={() => {
+                setMobileSidebarOpen(false);
+                setView('analytics');
+              }}
+            >
               <BarChart2 size={16} />
               Analytics Dashboard
             </button>
@@ -1241,6 +1264,15 @@ export default function ChatInterface({ setView }) {
 
         <Box className="chatgpt-main">
         <Box className="chatgpt-topbar">
+          <Tooltip title="Open sidebar">
+            <IconButton
+              className="topbar-icon mobile-menu-button"
+              aria-label="Open sidebar"
+              onClick={() => setMobileSidebarOpen(true)}
+            >
+              <PanelLeft size={20} />
+            </IconButton>
+          </Tooltip>
           <Box className="topbar-title-wrap">
             <Typography className="topbar-title">{activeTitle}</Typography>
             <Typography className="topbar-status">
