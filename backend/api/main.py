@@ -963,11 +963,8 @@ def health_check() -> dict:
     available_models = list(INSTALLED_OLLAMA_MODELS)
     groq_models = [
         "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b",
         "openai/gpt-oss-20b",
-        "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768",
+        "qwen/qwen3.8-27b",
         "allam-2-7b",
     ]
     for model in reversed(groq_models):

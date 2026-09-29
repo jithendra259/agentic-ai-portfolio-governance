@@ -47,8 +47,9 @@ const SESSION_INDEX_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
 const WELCOME_MESSAGE_ID = 'msg-welcome-1';
 
 const DEFAULT_MODEL_LIST = [
-  'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
+  'qwen/qwen3.8-27b',
 ];
 
 function createSessionId() {

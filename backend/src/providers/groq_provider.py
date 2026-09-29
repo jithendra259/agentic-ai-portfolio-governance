@@ -9,14 +9,11 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 GROQ_OPENAI_BASE_URL = "https://api.groq.com/openai/v1"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 KNOWN_GROQ_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
     "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b",
     "openai/gpt-oss-20b",
-    "mixtral-8x7b-32768",
+    "qwen/qwen3.8-27b",
     "allam-2-7b",
 ]
 
