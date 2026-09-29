@@ -76,12 +76,13 @@ CONFIGURED_PRIMARY_OLLAMA_MODEL = (
 ).strip()
 CONFIGURED_FALLBACK_OLLAMA_MODEL = (
     os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or 
-    ("qwen/qwen3.8-27b" if _HAS_GROQ_KEY else "qwen3:1.7b")
+    ("llama-3.1-8b-instant" if _HAS_GROQ_KEY else "qwen3:1.7b")
 ).strip()
 CONFIGURED_DEFAULT_LLM_MODEL = (
     os.getenv("PORTFOLIO_DEFAULT_LLM_MODEL") or
     (DEFAULT_GROQ_MODEL if _HAS_GROQ_KEY else ("ashnaai" if _HAS_ASHNA_KEY else ""))
 ).strip()
+
 
 
 def _list_installed_ollama_models() -> list[str]:
@@ -133,26 +134,35 @@ def _should_probe_ollama_on_startup() -> bool:
 
 
 INSTALLED_OLLAMA_MODELS = _list_installed_ollama_models() if _should_probe_ollama_on_startup() else []
-PRIMARY_OLLAMA_MODEL = _resolve_ollama_model(
-    [
-        CONFIGURED_PRIMARY_OLLAMA_MODEL,
-        "qwen3-coder-next:cloud",
-        "qwen3:1.7b",
-        "mistral:latest",
-    ],
-    INSTALLED_OLLAMA_MODELS,
+PRIMARY_OLLAMA_MODEL = (
+    CONFIGURED_PRIMARY_OLLAMA_MODEL
+    if _HAS_GROQ_KEY
+    else _resolve_ollama_model(
+        [
+            CONFIGURED_PRIMARY_OLLAMA_MODEL,
+            "qwen3-coder-next:cloud",
+            "qwen3:1.7b",
+            "mistral:latest",
+        ],
+        INSTALLED_OLLAMA_MODELS,
+    )
 )
-FALLBACK_OLLAMA_MODEL = _resolve_ollama_model(
-    [
-        CONFIGURED_DEFAULT_LLM_MODEL,
-        CONFIGURED_FALLBACK_OLLAMA_MODEL,
-        "qwen3:1.7b",
-        "qwen3-coder-next:cloud",
-        "mistral:latest",
-        CONFIGURED_PRIMARY_OLLAMA_MODEL,
-    ],
-    [model for model in INSTALLED_OLLAMA_MODELS if model != PRIMARY_OLLAMA_MODEL],
+FALLBACK_OLLAMA_MODEL = (
+    CONFIGURED_FALLBACK_OLLAMA_MODEL
+    if _HAS_GROQ_KEY
+    else _resolve_ollama_model(
+        [
+            CONFIGURED_DEFAULT_LLM_MODEL,
+            CONFIGURED_FALLBACK_OLLAMA_MODEL,
+            "qwen3:1.7b",
+            "qwen3-coder-next:cloud",
+            "mistral:latest",
+            CONFIGURED_PRIMARY_OLLAMA_MODEL,
+        ],
+        [model for model in INSTALLED_OLLAMA_MODELS if model != PRIMARY_OLLAMA_MODEL],
+    )
 )
+
 
 
 def _init_mongo_memory() -> tuple[MongoMemoryManager, object]:
@@ -815,12 +825,30 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
         active_llm = get_llm_with_tools()
         active_primary = PRIMARY_OLLAMA_MODEL
 
+    is_groq = is_groq_model(active_primary)
     is_ashna = _is_ashna_model(active_primary)
     messages = _clean_messages_for_model(active_primary, messages)
 
     try:
         return active_llm.invoke(messages)
     except Exception as exc:
+        if is_groq:
+            logger.warning("Groq model %s failed: %s. Attempting fallback or context trim.", active_primary, exc)
+            if is_groq_model(FALLBACK_OLLAMA_MODEL) and FALLBACK_OLLAMA_MODEL != active_primary:
+                try:
+                    fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL)
+                    if fallback_llm:
+                        logger.info("Failing over to fallback Groq model: %s", FALLBACK_OLLAMA_MODEL)
+                        return fallback_llm.invoke(messages)
+                except Exception as fb_exc:
+                    logger.warning("Fallback Groq model %s also failed: %s", FALLBACK_OLLAMA_MODEL, fb_exc)
+            try:
+                emergency_messages = _trim_context(messages, max_non_system=2)
+                return active_llm.invoke(emergency_messages)
+            except Exception as trim_exc:
+                logger.error("Trimmed context retry on Groq failed: %s", trim_exc)
+                raise exc
+
         if is_ashna:
             logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
             fallback_llm = get_fallback_llm_with_tools()
