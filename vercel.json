@@ -1,4 +1,12 @@
 {
+  "build": {
+    "env": {
+      "VERCEL_SUPPORT_LARGE_FUNCTIONS": "1"
+    }
+  },
+  "env": {
+    "VERCEL_SUPPORT_LARGE_FUNCTIONS": "1"
+  },
   "experimentalServices": {
     "frontend": {
       "entrypoint": "frontend",
