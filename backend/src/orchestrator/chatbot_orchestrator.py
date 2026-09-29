@@ -576,24 +576,29 @@ tools = [
 
 
 def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Optional[int] = None):
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    ashna_api_key = os.getenv("ASHNA_API_KEY")
+
     # 1. Groq Provider Check
-    if is_groq_model(model_name) or (os.getenv("GROQ_API_KEY") and not (model_name.startswith("ashna") or model_name == "ashnaai")):
-        try:
-            return get_groq_chat_llm(
-                model_name=model_name,
-                temperature=temperature,
-                max_tokens=num_predict,
-            )
-        except Exception as exc:
-            logger.error(f"Failed to initialize Groq API client: {exc}. Falling back to standard LLM.")
+    if is_groq_model(model_name) or (groq_api_key and not (model_name.startswith("ashna") or model_name == "ashnaai")):
+        if groq_api_key:
+            try:
+                return get_groq_chat_llm(
+                    model_name=model_name,
+                    temperature=temperature,
+                    max_tokens=num_predict,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to initialize Groq API client: {exc}")
+        else:
+            logger.warning("GROQ_API_KEY is not set in environment.")
 
     # 2. Ashna Provider Check
     if model_name.startswith("ashna") or model_name == "ashnaai":
         from langchain_openai import ChatOpenAI
-        api_key = os.getenv("ASHNA_API_KEY")
         base_url = os.getenv("ASHNA_BASE_URL")
         
-        if api_key and base_url:
+        if ashna_api_key and base_url:
             base_url = normalize_ashna_base_url(base_url)
             
             actual_model = model_name
@@ -605,7 +610,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                 kwargs = {
                     "model": actual_model,
                     "temperature": temperature,
-                    "api_key": api_key,
+                    "api_key": ashna_api_key,
                     "base_url": base_url,
                     "tags": ["orchestrator_llm"],
                     "streaming": False,
@@ -616,30 +621,32 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                     kwargs["max_tokens"] = num_predict
                 return ChatOpenAI(**kwargs)
             except Exception as e:
-                logger.error(f"Failed to initialize Ashna API: {e}. Falling back to local Ollama.")
-                model_name = "qwen3-coder-next:cloud"
+                logger.error(f"Failed to initialize Ashna API: {e}.")
         else:
-            if not api_key:
-                logger.warning("ASHNA_API_KEY is not set in environment. Falling back to local default.")
-            elif not base_url:
-                logger.warning("ASHNA_BASE_URL is not set in environment. Falling back to local default.")
-            model_name = "qwen3-coder-next:cloud"
+            logger.warning("ASHNA_API_KEY or ASHNA_BASE_URL is not set in environment.")
 
-    # 3. Local / Fallback Ollama Provider
-    ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
-    kwargs = {
-        "model": model_name,
-        "temperature": temperature,
-        "num_ctx": 8192,
-        "keep_alive": "10m",
-        "tags": ["orchestrator_llm"],
-    }
-    if ollama_base_url:
-        kwargs["base_url"] = ollama_base_url.rstrip("/")
-    if num_predict is not None:
-        kwargs["num_predict"] = num_predict
-    from langchain_ollama import ChatOllama
-    return ChatOllama(**kwargs)
+    # 3. Local / Fallback Ollama Provider (for local development)
+    try:
+        from langchain_ollama import ChatOllama
+        ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
+        kwargs = {
+            "model": model_name,
+            "temperature": temperature,
+            "num_ctx": 8192,
+            "keep_alive": "10m",
+            "tags": ["orchestrator_llm"],
+        }
+        if ollama_base_url:
+            kwargs["base_url"] = ollama_base_url.rstrip("/")
+        if num_predict is not None:
+            kwargs["num_predict"] = num_predict
+        return ChatOllama(**kwargs)
+    except (ImportError, ModuleNotFoundError):
+        if groq_api_key:
+            return get_groq_chat_llm(model_name=DEFAULT_GROQ_MODEL, temperature=temperature, max_tokens=num_predict)
+        raise ValueError(
+            "GROQ_API_KEY is not set in environment variables. Please add GROQ_API_KEY in your Vercel Project Settings > Environment Variables."
+        )
 
 
 def _build_llm_with_tools(model_name: str):
