@@ -1,11 +1,7 @@
 # Data & Numerics
 numpy
-scipy
 pandas
 
-# Convex Optimization (Clarabel is the modern lightweight QP/SOCP solver for CVXPY)
-cvxpy
-clarabel
 
 # Graph Analysis
 networkx>=3.0

@@ -15,7 +15,11 @@ import datetime
 import numpy as np
 import pandas as pd
 import networkx as nx
-import cvxpy as cp
+
+try:
+    import cvxpy as cp
+except ImportError:
+    cp = None
 from typing import Any, Dict, List, Tuple, Optional
 
 logger = logging.getLogger(__name__)

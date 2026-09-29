@@ -4,12 +4,14 @@ root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
     sys.path.insert(0, str(root_dir))
 
-import time
-
-import cvxpy as cp
 import numpy as np
 import pandas as pd
 from config import CONFIG
+
+try:
+    import cvxpy as cp
+except ImportError:
+    cp = None
 
 
 class GCVaROptimizerAgent:
