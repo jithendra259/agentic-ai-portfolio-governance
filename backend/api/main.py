@@ -10,16 +10,38 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+# Robust sys.path resolution for local, Docker, and Vercel/Render serverless runtimes
+_current_file = Path(__file__).resolve()
+_search_dirs = [
+    _current_file.parent,                     # /var/task or backend/api
+    _current_file.parent.parent,              # /var or backend
+    _current_file.parent.parent.parent,       # repo root
+    _current_file.parent / "backend",         # /var/task/backend
+    _current_file.parent.parent / "backend",  # repo_root/backend
+    Path.cwd(),
+    Path.cwd() / "backend",
+    Path("/var/task"),
+    Path("/var/task/backend"),
+]
+
+PROJECT_ROOT = _current_file.parent.parent
+for d in _search_dirs:
+    try:
+        if d.exists():
+            d_str = str(d.resolve())
+            if d_str not in sys.path:
+                sys.path.insert(0, d_str)
+            if (d / "src").is_dir() and (d / "config.py").is_file():
+                PROJECT_ROOT = d
+    except Exception:
+        pass
+
 try:
     from dotenv import load_dotenv
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent
     load_dotenv(PROJECT_ROOT / ".env", encoding="utf-8-sig")
     load_dotenv()
-except ImportError:
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+except Exception:
+    pass
 
 
 def _is_port_open(host: str, port: int) -> bool:
