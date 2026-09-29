@@ -595,8 +595,12 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
 
     # 2. Ashna Provider Check
     if model_name.startswith("ashna") or model_name == "ashnaai":
-        from langchain_openai import ChatOpenAI
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError:
+            ChatOpenAI = None
         base_url = os.getenv("ASHNA_BASE_URL")
+
         
         if ashna_api_key and base_url:
             base_url = normalize_ashna_base_url(base_url)

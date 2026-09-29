@@ -112,20 +112,24 @@ def get_groq_chat_llm(
         pass
 
     # Fallback to langchain_openai with Groq's OpenAI-compatible endpoint
-    from langchain_openai import ChatOpenAI
+    try:
+        from langchain_openai import ChatOpenAI
 
-    params = {
-        "model": actual_model,
-        "temperature": temperature,
-        "api_key": resolved_api_key,
-        "base_url": resolved_base_url,
-        "streaming": streaming,
-        "timeout": 60,
-        "max_retries": 2,
-        "tags": ["groq_llm", "orchestrator_llm"],
-    }
-    if max_tokens is not None:
-        params["max_tokens"] = max_tokens
-    params.update(kwargs)
-    logger.info(f"Initialized Groq via ChatOpenAI with model={actual_model}, base_url={resolved_base_url}")
-    return ChatOpenAI(**params)
+        params = {
+            "model": actual_model,
+            "temperature": temperature,
+            "api_key": resolved_api_key,
+            "base_url": resolved_base_url,
+            "streaming": streaming,
+            "timeout": 60,
+            "max_retries": 2,
+            "tags": ["groq_llm", "orchestrator_llm"],
+        }
+        if max_tokens is not None:
+            params["max_tokens"] = max_tokens
+        params.update(kwargs)
+        logger.info(f"Initialized Groq via ChatOpenAI with model={actual_model}, base_url={resolved_base_url}")
+        return ChatOpenAI(**params)
+    except ImportError:
+        raise RuntimeError("Neither langchain-groq nor langchain-openai is installed. Please install langchain-groq.")
+

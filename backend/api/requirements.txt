@@ -2,7 +2,6 @@
 numpy
 pandas
 
-
 # Graph Analysis
 networkx>=3.0
 
@@ -15,17 +14,14 @@ PyJWT[crypto]>=2.8.0
 # Data Sources & Storage
 pymongo==4.6.0
 yfinance>=0.2.54,<0.3.0
-langgraph-checkpoint-postgres
-psycopg[binary,pool]
 
 # Configuration
 python-dotenv==1.0.0
 certifi==2024.2.2
 
-# LLM & Orchestration (Groq & OpenAI Cloud APIs)
-langchain>=0.1.0
-langchain-openai>=0.1.0
+# LLM & Orchestration (Groq Cloud API & LangGraph)
+langchain-core>=0.1.0
 langchain-groq>=0.1.0
 groq>=0.9.0
 langgraph>=0.1.0
-langchain-core>=0.1.0
+
