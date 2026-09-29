@@ -562,9 +562,17 @@ function ChatMessageRow({ message, onRegenerate }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main component
-// ---------------------------------------------------------------------------
+const DEFAULT_MODEL_LIST = [
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'ashnaai',
+  'qwen3-coder-next:cloud',
+];
+
 export default function ChatInterface({ setView }) {
   const { session } = useAuth();
   const userStorageScope = session?.user?.id || session?.user?.email || 'anonymous';
@@ -584,9 +592,9 @@ export default function ChatInterface({ setView }) {
     return nextSessionId;
   });
 
-  const [selectedModel, setSelectedModel] = useState('');
-  const [availableModels, setAvailableModels] = useState([]);
-  const [loadingModels, setLoadingModels] = useState(true);
+  const [selectedModel, setSelectedModel] = useState('openai/gpt-oss-120b');
+  const [availableModels, setAvailableModels] = useState(DEFAULT_MODEL_LIST);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState(sessionId);
   const [messages, setMessages] = useState(() => [makeWelcomeMessage(sessionId)]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
@@ -733,17 +741,20 @@ export default function ChatInterface({ setView }) {
         if (!active) return;
         const models = data?.models?.available || [];
         const primary = data?.models?.primary || '';
-        setAvailableModels(models);
-        if (primary && models.includes(primary)) {
+        const merged = Array.from(new Set([...models, ...DEFAULT_MODEL_LIST]));
+        setAvailableModels(merged);
+        if (primary && merged.includes(primary)) {
           setSelectedModel(primary);
-        } else if (models.length > 0) {
-          setSelectedModel(models[0]);
+        } else if (merged.length > 0) {
+          setSelectedModel(merged[0]);
         }
         setLoadingModels(false);
       })
       .catch((err) => {
-        console.error('Failed to fetch Ollama models from backend:', err);
+        console.warn('Backend health check returned fallback models:', err);
         if (active) {
+          setAvailableModels(DEFAULT_MODEL_LIST);
+          setSelectedModel(DEFAULT_MODEL_LIST[0]);
           setLoadingModels(false);
         }
       });

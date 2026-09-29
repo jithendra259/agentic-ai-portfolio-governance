@@ -940,19 +940,18 @@ def health_check() -> dict:
     )
     
     available_models = list(INSTALLED_OLLAMA_MODELS)
-    if has_groq_key:
-        groq_models = [
-            "openai/gpt-oss-120b",
-            "qwen/qwen3.8-27b",
-            "openai/gpt-oss-20b",
-            "llama-3.3-70b-versatile",
-            "llama-3.1-8b-instant",
-            "mixtral-8x7b-32768",
-            "allam-2-7b",
-        ]
-        for model in reversed(groq_models):
-            if model not in available_models:
-                available_models.insert(0, model)
+    groq_models = [
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-20b",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768",
+        "allam-2-7b",
+    ]
+    for model in reversed(groq_models):
+        if model not in available_models:
+            available_models.insert(0, model)
 
     if has_ashna_key:
         ashna_models = [
