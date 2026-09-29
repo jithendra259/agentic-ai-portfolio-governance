@@ -22,3 +22,5 @@ backend/test_*.py
 backend/verify_*.py
 backend/temp_*.txt
 backend/.tmp*
+*.md
+backend/*.md

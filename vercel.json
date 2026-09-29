@@ -1,9 +1,4 @@
 {
-  "functions": {
-    "backend/main.py": {
-      "excludeFiles": "{frontend/**,docs/**,notebook/**,report/**,backend/test/**,backend/test_*.py,backend/verify_*.py,backend/scripts/**,backend/data/**,backend/*.sqlite,backend/*.md,**/*.md}"
-    }
-  },
   "experimentalServices": {
     "frontend": {
       "entrypoint": "frontend",
