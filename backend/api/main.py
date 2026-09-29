@@ -926,19 +926,34 @@ def health_check() -> dict:
     
     import os
     has_ashna_key = bool(os.getenv("ASHNA_API_KEY"))
+    has_groq_key = bool(os.getenv("GROQ_API_KEY"))
     
-    # Basic check for model presence
+    # Check for model presence
     ollama_status = (
         PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS 
         or (PRIMARY_OLLAMA_MODEL.startswith("ashna") and has_ashna_key)
+        or has_groq_key
     )
     default_llm_status = bool(
-        CONFIGURED_DEFAULT_LLM_MODEL
-        and CONFIGURED_DEFAULT_LLM_MODEL.startswith("ashna")
-        and has_ashna_key
+        (CONFIGURED_DEFAULT_LLM_MODEL and CONFIGURED_DEFAULT_LLM_MODEL.startswith("ashna") and has_ashna_key)
+        or has_groq_key
     )
     
     available_models = list(INSTALLED_OLLAMA_MODELS)
+    if has_groq_key:
+        groq_models = [
+            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
+            "openai/gpt-oss-20b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+            "allam-2-7b",
+        ]
+        for model in reversed(groq_models):
+            if model not in available_models:
+                available_models.insert(0, model)
+
     if has_ashna_key:
         ashna_models = [
             "ashnaai",
@@ -960,6 +975,7 @@ def health_check() -> dict:
             "supabase_postgres": get_postgres_status(),
             "ollama": "ready" if ollama_status else "model_missing",
             "default_llm": "ready" if default_llm_status else "not_configured",
+            "groq": "ready" if has_groq_key else "not_configured",
             "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
         "models": {

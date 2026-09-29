@@ -35,10 +35,12 @@ class CFG:
     STRESS_FACTOR:     float = 2.5      # fat-tail multiplier
     N_FAT_TAIL:        int   = 500      # fat-tail paths
 
-    # ── LLM ──────────────────────────────────────────────────
-    LLM_MODEL:         str   = "mistral:latest"
+    # ── LLM & Providers ──────────────────────────────────────
+    LLM_MODEL:         str   = "openai/gpt-oss-120b"
     LLM_TEMPERATURE:   float = 0.3
     LLM_MAX_TOKENS:    int   = 400
+    GROQ_API_BASE:     str   = "https://api.groq.com/openai/v1"
+    GROQ_MODEL:        str   = "openai/gpt-oss-120b"
 
 # Instantiate once — import this object everywhere
 CONFIG = CFG()

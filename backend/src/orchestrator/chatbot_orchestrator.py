@@ -48,6 +48,13 @@ from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 from src.memory.conversation_memory import conversation_prompt_block
 from src.providers.ashna_provider import normalize_ashna_base_url
+from src.providers.groq_provider import (
+    get_groq_chat_llm,
+    is_groq_model,
+    normalize_groq_model_name,
+    normalize_groq_base_url,
+    DEFAULT_GROQ_MODEL,
+)
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 
 
@@ -59,14 +66,21 @@ CHATBOT_CONVERSATION_GUIDANCE_DIR = Path(__file__).resolve().parents[1] / "rag" 
 def add_messages(current: list[BaseMessage] | None, update: list[BaseMessage] | None) -> list[BaseMessage]:
     """Small local reducer to avoid importing langgraph.graph.message at startup."""
     return [*(current or []), *(update or [])]
+
+_HAS_GROQ_KEY = bool(os.getenv("GROQ_API_KEY"))
+_HAS_ASHNA_KEY = bool(os.getenv("ASHNA_API_KEY"))
+
 CONFIGURED_PRIMARY_OLLAMA_MODEL = (
     os.getenv("PORTFOLIO_OLLAMA_MODEL") or 
-    ("ashnaai" if os.getenv("ASHNA_API_KEY") else "qwen3-coder-next:cloud")
+    (DEFAULT_GROQ_MODEL if _HAS_GROQ_KEY else ("ashnaai" if _HAS_ASHNA_KEY else "qwen3-coder-next:cloud"))
 ).strip()
-CONFIGURED_FALLBACK_OLLAMA_MODEL = (os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "qwen3:1.7b").strip()
+CONFIGURED_FALLBACK_OLLAMA_MODEL = (
+    os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or 
+    ("qwen/qwen3.8-27b" if _HAS_GROQ_KEY else "qwen3:1.7b")
+).strip()
 CONFIGURED_DEFAULT_LLM_MODEL = (
     os.getenv("PORTFOLIO_DEFAULT_LLM_MODEL") or
-    ("ashnaai" if os.getenv("ASHNA_API_KEY") else "")
+    (DEFAULT_GROQ_MODEL if _HAS_GROQ_KEY else ("ashnaai" if _HAS_ASHNA_KEY else ""))
 ).strip()
 
 
@@ -103,7 +117,12 @@ def _list_installed_ollama_models() -> list[str]:
 def _resolve_ollama_model(preferred_models: list[str], installed_models: list[str]) -> str:
     for model_name in preferred_models:
         candidate = (model_name or "").strip()
-        if candidate and (candidate.startswith("ashna") or candidate == "ashnaai" or candidate in installed_models):
+        if candidate and (
+            candidate.startswith("ashna")
+            or candidate == "ashnaai"
+            or is_groq_model(candidate)
+            or candidate in installed_models
+        ):
             return candidate
 
     return (preferred_models[0] if preferred_models else "").strip()
@@ -557,6 +576,18 @@ tools = [
 
 
 def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Optional[int] = None):
+    # 1. Groq Provider Check
+    if is_groq_model(model_name) or (os.getenv("GROQ_API_KEY") and not (model_name.startswith("ashna") or model_name == "ashnaai")):
+        try:
+            return get_groq_chat_llm(
+                model_name=model_name,
+                temperature=temperature,
+                max_tokens=num_predict,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to initialize Groq API client: {exc}. Falling back to standard LLM.")
+
+    # 2. Ashna Provider Check
     if model_name.startswith("ashna") or model_name == "ashnaai":
         from langchain_openai import ChatOpenAI
         api_key = os.getenv("ASHNA_API_KEY")
@@ -594,6 +625,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                 logger.warning("ASHNA_BASE_URL is not set in environment. Falling back to local default.")
             model_name = "qwen3-coder-next:cloud"
 
+    # 3. Local / Fallback Ollama Provider
     ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
     kwargs = {
         "model": model_name,
