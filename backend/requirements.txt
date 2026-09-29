@@ -3,26 +3,22 @@ numpy
 scipy
 pandas
 
-# Convex Optimization (Critical for Agent 3)
+# Convex Optimization (Clarabel is the modern lightweight QP/SOCP solver for CVXPY)
 cvxpy
-# ecos (Fails to build on Python 3.13 Windows)
-scs
 clarabel
-osqp
 
-# Graph Analysis (Critical for Agent 2)
+# Graph Analysis
 networkx>=3.0
 
-# Backend API and Frontend
+# Backend API
 fastapi
 uvicorn
 requests
 PyJWT[crypto]>=2.8.0
 
-# Data Sources and Storage
+# Data Sources & Storage
 pymongo==4.6.0
 yfinance>=0.2.54,<0.3.0
-pypdf>=5.0.0
 langgraph-checkpoint-postgres
 psycopg[binary,pool]
 
@@ -30,14 +26,10 @@ psycopg[binary,pool]
 python-dotenv==1.0.0
 certifi==2024.2.2
 
-# LLM & Orchestration
+# LLM & Orchestration (Groq & OpenAI Cloud APIs)
 langchain>=0.1.0
-langchain-ollama>=0.1.0
 langchain-openai>=0.1.0
 langchain-groq>=0.1.0
 groq>=0.9.0
 langgraph>=0.1.0
 langchain-core>=0.1.0
-langchain-text-splitters>=0.2.0
-
-# Optional research / notebook dependencies are kept out of the Render web service

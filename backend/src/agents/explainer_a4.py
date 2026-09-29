@@ -1,6 +1,5 @@
 import os
 from langchain_core.prompts import PromptTemplate
-from langchain_ollama import ChatOllama
 from src.providers.ashna_provider import normalize_ashna_base_url
 from src.providers.groq_provider import get_groq_chat_llm, is_groq_model, DEFAULT_GROQ_MODEL
 
@@ -14,7 +13,7 @@ class GenerativeExplainerAgent:
 
     def __init__(self):
 
-        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or DEFAULT_GROQ_MODEL if os.getenv("GROQ_API_KEY") else "gpt-oss:120b-cloud").strip()
+        model_name = (os.getenv("PORTFOLIO_OLLAMA_MODEL") or (DEFAULT_GROQ_MODEL if os.getenv("GROQ_API_KEY") else "gpt-oss:120b-cloud")).strip()
         ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
 
         if is_groq_model(model_name) or (os.getenv("GROQ_API_KEY") and not (model_name.startswith("ashna") or model_name == "ashnaai")):
@@ -22,8 +21,13 @@ class GenerativeExplainerAgent:
                 self.llm = get_groq_chat_llm(model_name=model_name, temperature=0.5)
             except Exception as e:
                 import logging
-                logging.warning(f"Failed to initialize Groq API in explainer_a4: {e}. Using Ollama fallback.")
-                self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+                logging.warning(f"Failed to initialize Groq API in explainer_a4: {e}. Trying fallback.")
+                try:
+                    from langchain_ollama import ChatOllama
+                    self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+                except ImportError:
+                    from langchain_openai import ChatOpenAI
+                    self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
         elif model_name.startswith("ashna") or model_name == "ashnaai" or (os.getenv("ASHNA_API_KEY") and model_name == "gpt-oss:120b-cloud"):
             active_model = "ashnaai" if model_name == "gpt-oss:120b-cloud" else model_name
             api_key = os.getenv("ASHNA_API_KEY")
@@ -44,18 +48,33 @@ class GenerativeExplainerAgent:
                     )
                 except Exception as e:
                     import logging
-                    logging.warning(f"Failed to initialize Ashna API in explainer_a4: {e}. Using Ollama fallback.")
-                    self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+                    logging.warning(f"Failed to initialize Ashna API in explainer_a4: {e}. Using fallback.")
+                    try:
+                        from langchain_ollama import ChatOllama
+                        self.llm = ChatOllama(model="gpt-oss:120b-cloud", temperature=0.5)
+                    except ImportError:
+                        from langchain_openai import ChatOpenAI
+                        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
             else:
-                kwargs = {"model": "gpt-oss:120b-cloud", "temperature": 0.5}
+                try:
+                    from langchain_ollama import ChatOllama
+                    kwargs = {"model": "gpt-oss:120b-cloud", "temperature": 0.5}
+                    if ollama_base_url:
+                        kwargs["base_url"] = ollama_base_url.rstrip("/")
+                    self.llm = ChatOllama(**kwargs)
+                except ImportError:
+                    from langchain_openai import ChatOpenAI
+                    self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
+        else:
+            try:
+                from langchain_ollama import ChatOllama
+                kwargs = {"model": model_name, "temperature": 0.5}
                 if ollama_base_url:
                     kwargs["base_url"] = ollama_base_url.rstrip("/")
                 self.llm = ChatOllama(**kwargs)
-        else:
-            kwargs = {"model": model_name, "temperature": 0.5}
-            if ollama_base_url:
-                kwargs["base_url"] = ollama_base_url.rstrip("/")
-            self.llm = ChatOllama(**kwargs)
+            except ImportError:
+                from langchain_openai import ChatOpenAI
+                self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.5)
 
         self.prompt = PromptTemplate(
             input_variables=[

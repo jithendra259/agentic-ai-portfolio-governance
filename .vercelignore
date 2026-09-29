@@ -1,0 +1,24 @@
+# Local worktrees, profiles and caches
+.kilo/
+.worktrees/
+chrome_dev_profile/
+.agents/
+.git/
+.github/
+
+# Documentation and Research Notebooks
+docs/
+notebook/
+report/
+
+# Backend test, scratch, data and artifact files
+backend/scratch/
+backend/test/
+backend/out/
+backend/*.json
+backend/*.txt
+backend/*.sqlite
+backend/test_*.py
+backend/verify_*.py
+backend/temp_*.txt
+backend/.tmp*
