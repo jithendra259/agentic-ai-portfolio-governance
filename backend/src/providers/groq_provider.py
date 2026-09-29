@@ -47,6 +47,25 @@ def normalize_groq_model_name(model_name: str | None) -> str:
     if cleaned.startswith("groq/"):
         cleaned = cleaned[len("groq/"):]
 
+    # Map legacy/unavailable models to supported models to prevent 404
+    legacy_map = {
+        "llama-3.3-70b-versatile": DEFAULT_GROQ_MODEL,
+        "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+        "llama-3.3-70b": DEFAULT_GROQ_MODEL,
+        "llama-3.1-8b": "openai/gpt-oss-20b",
+        "gpt-oss:120b-cloud": "openai/gpt-oss-120b",
+        "gpt-oss-120b": "openai/gpt-oss-120b",
+        "gpt-oss:120b": "openai/gpt-oss-120b",
+        "gpt-oss:20b-cloud": "openai/gpt-oss-20b",
+        "gpt-oss-20b": "openai/gpt-oss-20b",
+        "gpt-oss:20b": "openai/gpt-oss-20b",
+        "qwen3.8-27b": "qwen/qwen3.8-27b",
+        "qwen-2.5-72b-instruct": "qwen/qwen3.8-27b",
+        "mixtral-8x7b-32768": DEFAULT_GROQ_MODEL,
+    }
+    if cleaned.lower() in legacy_map:
+        return legacy_map[cleaned.lower()]
+
     if cleaned in ("groq", "default", "groq-default"):
         return os.getenv("PORTFOLIO_GROQ_MODEL") or os.getenv("GROQ_MODEL") or DEFAULT_GROQ_MODEL
 
@@ -60,7 +79,9 @@ def is_groq_model(model_name: str | None) -> bool:
     name = model_name.strip().lower()
     if name.startswith("groq") or name.startswith("groq/"):
         return True
-    if name.startswith("openai/gpt-oss") or name.startswith("qwen/qwen3.8") or name.startswith("allam-"):
+    if name.startswith("openai/gpt-oss") or name.startswith("gpt-oss") or name.startswith("qwen/qwen3.8") or name.startswith("allam-"):
+        return True
+    if name.startswith("llama-3.3") or name.startswith("llama-3.1"):
         return True
     if name in [m.lower() for m in KNOWN_GROQ_MODELS]:
         return True
