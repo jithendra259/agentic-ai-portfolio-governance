@@ -46,6 +46,18 @@ const SESSION_STORAGE_KEY = 'portfolio-ai-chat-session-id';
 const SESSION_INDEX_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
 const WELCOME_MESSAGE_ID = 'msg-welcome-1';
 
+const DEFAULT_MODEL_LIST = [
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'mixtral-8x7b-32768',
+  'allam-2-7b',
+  'ashnaai',
+  'qwen3-coder-next:cloud',
+];
+
 function createSessionId() {
   const randomPart = window.crypto?.randomUUID?.() || Math.random().toString(36).slice(2);
   return `portfolio-chat-${randomPart}`;
@@ -334,10 +346,15 @@ async function readApiError(response, fallbackMessage) {
 const CustomAttachButtonWithModelSelector = forwardRef(({
   selectedModel,
   setSelectedModel,
-  availableModels,
-  loadingModels,
+  availableModels = DEFAULT_MODEL_LIST,
+  loadingModels = false,
   ...otherProps
 }, ref) => {
+  const models = (Array.isArray(availableModels) && availableModels.length > 0)
+    ? availableModels
+    : DEFAULT_MODEL_LIST;
+  const currentModel = (selectedModel && models.includes(selectedModel)) ? selectedModel : models[0];
+
   return (
     <Box className="composer-model-control" sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
       <Tooltip title="Attach">
@@ -347,7 +364,7 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
       </Tooltip>
       <FormControl size="small">
         <Select
-          value={selectedModel}
+          value={currentModel}
           onChange={(e) => setSelectedModel(e.target.value)}
           displayEmpty
           IconComponent={ChevronDown}
@@ -445,21 +462,11 @@ const CustomAttachButtonWithModelSelector = forwardRef(({
             },
           }}
         >
-          {loadingModels ? (
-            <MenuItem disabled value="">
-              Loading...
+          {models.map((model) => (
+            <MenuItem key={model} value={model}>
+              {model}
             </MenuItem>
-          ) : availableModels.length === 0 ? (
-            <MenuItem disabled value="">
-              No models available
-            </MenuItem>
-          ) : (
-            availableModels.map((model) => (
-              <MenuItem key={model} value={model}>
-                {model}
-              </MenuItem>
-            ))
-          )}
+          ))}
         </Select>
       </FormControl>
     </Box>
@@ -561,17 +568,6 @@ function ChatMessageRow({ message, onRegenerate }) {
     </Box>
   );
 }
-
-const DEFAULT_MODEL_LIST = [
-  'openai/gpt-oss-120b',
-  'qwen/qwen3.8-27b',
-  'openai/gpt-oss-20b',
-  'llama-3.3-70b-versatile',
-  'llama-3.1-8b-instant',
-  'mixtral-8x7b-32768',
-  'ashnaai',
-  'qwen3-coder-next:cloud',
-];
 
 export default function ChatInterface({ setView }) {
   const { session } = useAuth();
