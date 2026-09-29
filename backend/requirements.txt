@@ -1,6 +1,6 @@
 # Data & Numerics
-numpy
-pandas
+numpy>=1.26.0,<2.0.0
+pandas>=2.2.0,<2.3.0
 
 # Graph Analysis
 networkx>=3.0

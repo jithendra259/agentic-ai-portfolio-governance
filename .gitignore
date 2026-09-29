@@ -1,4 +1,3 @@
-```
 # Compiled and build artifacts
 *.pyc
 __pycache__/
@@ -6,6 +5,7 @@ __pycache__/
 *.obj
 dist/
 build/
+*.sqlite
 
 # Dependencies
 .venv/
@@ -65,4 +65,4 @@ report/New Project/rendered2/
 report/New Project/scratch/
 report/New Project/tmp*/
 report/New Project/uploads/
-```
+
