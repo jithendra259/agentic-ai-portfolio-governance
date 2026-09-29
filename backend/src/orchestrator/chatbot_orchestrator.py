@@ -612,7 +612,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         base_url = os.getenv("ASHNA_BASE_URL")
 
         
-        if ashna_api_key and base_url:
+        if ashna_api_key and base_url and ChatOpenAI is not None:
             base_url = normalize_ashna_base_url(base_url)
             
             actual_model = model_name
@@ -636,6 +636,9 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                 return ChatOpenAI(**kwargs)
             except Exception as e:
                 logger.error(f"Failed to initialize Ashna API: {e}.")
+        elif groq_api_key:
+            logger.info("Ashna API unavailable; using default Groq model %s", DEFAULT_GROQ_MODEL)
+            return get_groq_chat_llm(model_name=DEFAULT_GROQ_MODEL, temperature=temperature, max_tokens=num_predict)
         else:
             logger.warning("ASHNA_API_KEY or ASHNA_BASE_URL is not set in environment.")
 
@@ -664,7 +667,18 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
 
 
 def _build_llm_with_tools(model_name: str):
-    return _get_chat_llm(model_name).bind_tools(tools)
+    llm = _get_chat_llm(model_name)
+    try:
+        return llm.bind_tools(tools)
+    except Exception as exc:
+        logger.warning(
+            "Model %s does not support tool calling (%s). Falling back to tool-capable %s",
+            model_name,
+            exc,
+            DEFAULT_GROQ_MODEL,
+        )
+        return _get_chat_llm(DEFAULT_GROQ_MODEL).bind_tools(tools)
+
 
 
 _llm_lock = threading.Lock()
@@ -834,20 +848,30 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     except Exception as exc:
         if is_groq:
             logger.warning("Groq model %s failed: %s. Attempting fallback or context trim.", active_primary, exc)
-            if is_groq_model(FALLBACK_OLLAMA_MODEL) and FALLBACK_OLLAMA_MODEL != active_primary:
+            # 1. Try primary tool-capable model (llama-3.3-70b-versatile) if another model was selected
+            if active_primary != DEFAULT_GROQ_MODEL:
                 try:
-                    fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL)
-                    if fallback_llm:
-                        logger.info("Failing over to fallback Groq model: %s", FALLBACK_OLLAMA_MODEL)
-                        return fallback_llm.invoke(messages)
-                except Exception as fb_exc:
-                    logger.warning("Fallback Groq model %s also failed: %s", FALLBACK_OLLAMA_MODEL, fb_exc)
+                    logger.info("Attempting primary tool-capable model: %s", DEFAULT_GROQ_MODEL)
+                    return _build_llm_with_tools(DEFAULT_GROQ_MODEL).invoke(messages)
+                except Exception as fb1:
+                    logger.warning("Fallback to %s failed: %s", DEFAULT_GROQ_MODEL, fb1)
+
+            # 2. Try fast fallback model (llama-3.1-8b-instant)
+            if FALLBACK_OLLAMA_MODEL != active_primary:
+                try:
+                    logger.info("Failing over to fallback Groq model: %s", FALLBACK_OLLAMA_MODEL)
+                    return _build_llm_with_tools(FALLBACK_OLLAMA_MODEL).invoke(messages)
+                except Exception as fb2:
+                    logger.warning("Fallback to %s failed: %s", FALLBACK_OLLAMA_MODEL, fb2)
+
+            # 3. Emergency recovery: aggressive context trim with DEFAULT_GROQ_MODEL
             try:
                 emergency_messages = _trim_context(messages, max_non_system=2)
-                return active_llm.invoke(emergency_messages)
+                return _build_llm_with_tools(DEFAULT_GROQ_MODEL).invoke(emergency_messages)
             except Exception as trim_exc:
                 logger.error("Trimmed context retry on Groq failed: %s", trim_exc)
                 raise exc
+
 
         if is_ashna:
             logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
