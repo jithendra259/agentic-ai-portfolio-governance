@@ -15,8 +15,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
-
 # Resolve root path
 root_dir = Path(__file__).resolve().parent.parent.parent
 if str(root_dir) not in sys.path:
@@ -25,7 +23,11 @@ if str(root_dir) not in sys.path:
 from config import CONFIG
 from src.blackboard.memory_store import BlackboardMemoryStore
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 logger = logging.getLogger(__name__)
 
 

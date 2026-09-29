@@ -11,8 +11,6 @@ from typing import Any, Optional
 import networkx as nx
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
-
 import sys
 from pathlib import Path
 root_dir = Path(__file__).resolve().parent.parent.parent
@@ -25,8 +23,12 @@ from pymongo import MongoClient
 from pymongo.errors import AutoReconnect, NetworkTimeout, PyMongoError
 from src.memory.mongodb_memory_layer import MongoMemoryManager
 
-load_dotenv(root_dir / ".env", encoding="utf-8-sig")
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv(root_dir / ".env", encoding="utf-8-sig")
+    load_dotenv()
+except ImportError:
+    pass
 
 
 DB_NAME = "Stock_data"

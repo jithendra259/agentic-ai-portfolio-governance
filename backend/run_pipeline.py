@@ -19,8 +19,6 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 # Ensure project root is on the path
 root_dir = Path(__file__).resolve().parent
 if str(root_dir) not in sys.path:
@@ -30,7 +28,11 @@ from config import CONFIG
 from src.agents.data_sentinel_a0 import DataSentinelAgent
 from src.blackboard.memory_store import BlackboardMemoryStore
 
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",

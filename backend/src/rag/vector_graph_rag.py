@@ -9,13 +9,15 @@ from typing import Any, Optional
 import networkx as nx
 import numpy as np
 import pandas as pd
-from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from src.agents.graph_rag_a2 import GraphRAGAgent
 
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 logger = logging.getLogger(__name__)
 
 DB_NAME = "Stock_data"

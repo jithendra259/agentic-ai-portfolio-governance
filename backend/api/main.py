@@ -10,14 +10,13 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
-from dotenv import load_dotenv
-
-print("=== MAIN.PY LOADED ===")
-print("PATH:", sys.executable)
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env", encoding="utf-8-sig")
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    load_dotenv(PROJECT_ROOT / ".env", encoding="utf-8-sig")
+    load_dotenv()
+except ImportError:
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
