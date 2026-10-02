@@ -449,14 +449,17 @@ def _load_chatbot_conversation_guidance() -> str:
         return ""
 
     chunks: list[str] = []
-    for path in sorted(CHATBOT_CONVERSATION_GUIDANCE_DIR.glob("*.md")):
-        try:
-            text = path.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            logger.warning("Unable to read chatbot conversation guidance %s: %s", path, exc)
-            continue
-        if text:
-            chunks.append(text)
+    # Prioritize core safety and follow-up guidance to stay strictly within provider TPM limits (e.g. Groq 8k TPM)
+    priority_files = ["hallucination_guardrails.md", "portfolio_followups.md"]
+    for filename in priority_files:
+        path = CHATBOT_CONVERSATION_GUIDANCE_DIR / filename
+        if path.exists():
+            try:
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    chunks.append(text)
+            except OSError as exc:
+                logger.warning("Unable to read chatbot conversation guidance %s: %s", path, exc)
     if not chunks:
         return ""
     return "### CHATBOT CONVERSATION GUIDANCE ###\n" + "\n\n".join(chunks)
@@ -711,7 +714,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
                 if omniroute_api_key:
                     try:
                         omni_llm = get_omniroute_chat_llm(
-                            model_name="openai/gpt-oss-120b",
+                            model_name=os.getenv("OMNIROUTE_MODEL") or DEFAULT_OMNIROUTE_MODEL,
                             temperature=temperature,
                             max_tokens=num_predict,
                         )
@@ -949,36 +952,31 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
     except Exception as exc:
         if is_groq:
             logger.warning("Groq model %s failed: %s. Attempting fallback or context trim.", active_primary, exc)
-            # 1. Try primary tool-capable model (DEFAULT_GROQ_MODEL) if another model was selected
-            if active_primary != DEFAULT_GROQ_MODEL:
-                try:
-                    logger.info("Attempting primary tool-capable model: %s", DEFAULT_GROQ_MODEL)
-                    return _build_llm_with_tools(DEFAULT_GROQ_MODEL).invoke(messages)
-                except Exception as fb1:
-                    logger.warning("Fallback to %s failed: %s", DEFAULT_GROQ_MODEL, fb1)
-
-            # 2. Try secondary fallback model (openai/gpt-oss-20b)
-            if FALLBACK_OLLAMA_MODEL != active_primary:
-                try:
-                    logger.info("Failing over to fallback Groq model: %s", FALLBACK_OLLAMA_MODEL)
-                    return _build_llm_with_tools(FALLBACK_OLLAMA_MODEL).invoke(messages)
-                except Exception as fb2:
-                    logger.warning("Fallback to %s failed: %s", FALLBACK_OLLAMA_MODEL, fb2)
-
-            # 3. Try qwen fallback model
-            try:
-                logger.info("Failing over to Qwen Groq model: qwen/qwen3.8-27b")
-                return _build_llm_with_tools("qwen/qwen3.8-27b").invoke(messages)
-            except Exception as fb3:
-                logger.warning("Fallback to qwen/qwen3.8-27b failed: %s", fb3)
-
-            # 4. Emergency recovery: aggressive context trim with DEFAULT_GROQ_MODEL
+            # 1. First attempt: aggressive context trim with DEFAULT_GROQ_MODEL
             try:
                 emergency_messages = _trim_context(messages, max_non_system=2)
                 return _build_llm_with_tools(DEFAULT_GROQ_MODEL).invoke(emergency_messages)
             except Exception as trim_exc:
-                logger.error("Trimmed context retry on Groq failed: %s", trim_exc)
-                raise exc
+                logger.warning("Trimmed context retry on Groq failed: %s", trim_exc)
+
+            # 2. Second attempt: fail over to Ashna AI if Groq TPM quota is exhausted
+            if os.getenv("ASHNA_API_KEY") and os.getenv("ASHNA_BASE_URL"):
+                try:
+                    logger.info("Failing over from Groq to Ashna AI...")
+                    return _build_llm_with_tools("ashnaai").invoke(emergency_messages if 'emergency_messages' in locals() else messages)
+                except Exception as ashna_exc:
+                    logger.warning("Failover to Ashna AI failed: %s", ashna_exc)
+
+            # 3. Third attempt: fail over to local Ollama
+            fallback_llm = get_fallback_llm_with_tools()
+            if fallback_llm is not None:
+                try:
+                    logger.info("Failing over from Groq to local Ollama...")
+                    return fallback_llm.invoke(emergency_messages if 'emergency_messages' in locals() else messages)
+                except Exception as ollama_exc:
+                    logger.warning("Failover to Ollama failed: %s", ollama_exc)
+
+            raise exc
 
 
         if is_ashna:
