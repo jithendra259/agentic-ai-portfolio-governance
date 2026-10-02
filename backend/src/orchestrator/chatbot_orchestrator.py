@@ -43,6 +43,13 @@ from src.agents.price_series_tool import get_price_series_for_analysis
 from src.agents.generate_dynamic_plot import generate_financial_plot
 from src.agents.custom_math_plot import generate_custom_math_plot
 from src.agents.derived_plot_tools import generate_missing_data_heatmap, generate_ohlc_correlation_heatmap, run_data_analysis_plot
+from src.agents.math_eda_tools import (
+    run_stationarity_and_econometric_tests,
+    fit_garch_volatility_model,
+    calculate_full_stock_eda,
+    compute_optimal_portfolio_frontier,
+    forecast_price_arima,
+)
 from src.intent.intent_classifier import IntentClassifier, IntentType
 from src.intent.intent_router import IntentRouter
 from src.memory.mongodb_memory_layer import MongoMemoryManager
@@ -617,6 +624,11 @@ tools = [
     generate_missing_data_heatmap,
     run_data_analysis_plot,
     save_financial_metric,
+    run_stationarity_and_econometric_tests,
+    fit_garch_volatility_model,
+    calculate_full_stock_eda,
+    compute_optimal_portfolio_frontier,
+    forecast_price_arima,
 ]
 
 
@@ -1052,6 +1064,11 @@ TOOL SELECTION:
 - Governance & Allocation: Use run_full_governance_pipeline for optimization, G-CVaR, and allocation.
 - Price Charts: Use plot_historical_prices for simple historical closing price charts.
 - Custom Charts: Use generate_financial_plot (line, bar, pie, scatter, heatmap, etc.) or run_data_analysis_plot for analytics plots.
+- Full Stock EDA: Use calculate_full_stock_eda for statistical moments (skew, kurtosis), Sharpe, Sortino, VaR/CVaR, and Ledoit-Wolf correlation.
+- Stationarity & Econometrics: Use run_stationarity_and_econometric_tests for ADF, KPSS, and Ljung-Box autocorrelation tests.
+- Volatility Modeling: Use fit_garch_volatility_model for GARCH(1,1) volatility persistence and term forecasts.
+- Portfolio Optimization: Use compute_optimal_portfolio_frontier for Markowitz Max Sharpe, Min Volatility, and Risk Parity allocations.
+- ARIMA Price Forecasting: Use forecast_price_arima for short-term price paths with 95% confidence intervals.
 - Analysis & Statistics: Use get_price_series_for_analysis for returns, volatility, drawdowns, correlations.
 - Ownership & Graph: Use retrieve_graph_rag_context for institutional holdings and ownership overlap.
 - Discovery: Use list_available_universes, list_available_sectors, get_stocks_by_sector, get_stocks_by_universe, get_stock_database_snapshot.
