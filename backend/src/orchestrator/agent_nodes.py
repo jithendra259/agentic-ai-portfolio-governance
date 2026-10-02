@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.runnables import RunnableConfig
 
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
-from src.agents.specialized_domain_agents import (
+from src.orchestrator.prompts import (
     DATA_SENTINEL_PROMPT,
     ECONOMETRIC_PROMPT,
     EXPLAINABILITY_PROMPT,
@@ -27,9 +27,14 @@ from src.agents.specialized_domain_agents import (
     PORTFOLIO_OPTIMIZATION_PROMPT,
     RISK_VOLATILITY_PROMPT,
     STRESS_TESTING_PROMPT,
+    SUPERVISOR_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
     TECHNICAL_ANALYSIS_PROMPT,
-    classify_agent_for_query,
+    get_agent_prompt,
+    get_chatbot_prompt,
+    get_prompt,
 )
+from src.agents.specialized_domain_agents import classify_agent_for_query
 from src.intent.intent_classifier import IntentType
 from src.orchestrator.formatters import (
     _build_governance_markdown,
@@ -59,8 +64,10 @@ logger = logging.getLogger(__name__)
 # 1. Specialized Agent Factory
 # =====================================================================
 
-def create_specialized_agent_node(agent_name: str, prompt_text: str, agent_tools: list) -> Callable:
-    """Factory creating discrete, specialized domain agent nodes with isolated tool bindings."""
+def create_specialized_agent_node(agent_name: str, prompt_text: Optional[str] = None, agent_tools: Optional[list] = None) -> Callable:
+    """Factory creating discrete, specialized domain agent nodes with on-demand prompt access."""
+    resolved_tools = agent_tools or []
+
     def agent_node(state: dict[str, Any], config: RunnableConfig = None) -> dict[str, Any]:
         configured_session_state = (config or {}).get("configurable", {}).get("session_state") if config else None
         if isinstance(configured_session_state, dict):
@@ -69,7 +76,8 @@ def create_specialized_agent_node(agent_name: str, prompt_text: str, agent_tools
         working_messages = list(messages)
         remembered_portfolio = _extract_portfolio_from_messages(working_messages)
 
-        sys_prompt = prompt_text
+        # Access the exact specialized agent prompt on demand from the dedicated prompts module
+        sys_prompt = prompt_text or get_agent_prompt(agent_name)
         if remembered_portfolio:
             sys_prompt += f"\n\nActive Portfolio Context: {', '.join(remembered_portfolio)}."
 
@@ -88,7 +96,7 @@ def create_specialized_agent_node(agent_name: str, prompt_text: str, agent_tools
             ]
 
         working_messages = _trim_context(working_messages)
-        response = _invoke_llm_with_fallback(working_messages, config, bound_tools=agent_tools)
+        response = _invoke_llm_with_fallback(working_messages, config, bound_tools=resolved_tools)
 
         if hasattr(response, "content") and response.content:
             clean_content = re.sub(r"```python.*?```", "", response.content, flags=re.DOTALL)

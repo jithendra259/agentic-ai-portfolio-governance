@@ -67,7 +67,7 @@ from src.agents.advanced_governance_tools import (
     run_portfolio_stress_test,
 )
 from src.agents.price_series_tool import get_price_series_for_analysis
-from src.agents.specialized_domain_agents import (
+from src.orchestrator.prompts import (
     DATA_SENTINEL_PROMPT,
     ECONOMETRIC_PROMPT,
     EXPLAINABILITY_PROMPT,
@@ -76,9 +76,16 @@ from src.agents.specialized_domain_agents import (
     NETWORK_GRAPH_RAG_PROMPT,
     PORTFOLIO_OPTIMIZATION_PROMPT,
     RISK_VOLATILITY_PROMPT,
-    SPECIALIZED_AGENTS_METADATA,
     STRESS_TESTING_PROMPT,
+    SUPERVISOR_SYSTEM_PROMPT,
+    SYSTEM_PROMPT,
     TECHNICAL_ANALYSIS_PROMPT,
+    get_agent_prompt,
+    get_chatbot_prompt,
+    get_prompt,
+)
+from src.agents.specialized_domain_agents import (
+    SPECIALIZED_AGENTS_METADATA,
     classify_agent_for_query,
 )
 from src.intent.intent_classifier import IntentClassifier, IntentType

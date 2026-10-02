@@ -249,6 +249,39 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         self.assertIn("Macro Stress-Testing Report", stress)
         self.assertIn("2008 Great Financial Crisis", stress)
 
+    def test_prompts_module_and_on_demand_retrieval(self):
+        from src.orchestrator.prompts import (
+            SUPERVISOR_SYSTEM_PROMPT,
+            get_agent_prompt,
+            get_chatbot_prompt,
+            list_available_prompts,
+        )
+
+        self.assertEqual(get_chatbot_prompt(), SUPERVISOR_SYSTEM_PROMPT)
+        available = list_available_prompts()
+        self.assertIn("chatbot", available)
+
+        for agent_name in [
+            "market_data_agent",
+            "econometrics_agent",
+            "risk_volatility_agent",
+            "portfolio_optimizer_agent",
+            "network_graph_rag_agent",
+            "technical_analysis_agent",
+            "governance_audit_agent",
+            "stress_testing_agent",
+            "explainability_agent",
+            "data_sentinel_agent",
+        ]:
+            self.assertIn(agent_name, available)
+            prompt = get_agent_prompt(agent_name)
+            self.assertIsInstance(prompt, str)
+            self.assertGreater(len(prompt), 50)
+
+        # Test fallback
+        fallback = get_agent_prompt("unknown_agent")
+        self.assertEqual(fallback, SUPERVISOR_SYSTEM_PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()
