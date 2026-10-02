@@ -83,6 +83,30 @@ Your domain:
 - Verify compliance with institutional fiduciary bounds and HITL safeguards.
 - Strict policy: Maintain full mathematical traceability and compliance accountability."""
 
+STRESS_TESTING_PROMPT = """You are the Macro Stress-Testing & Crisis Simulation Specialist Agent.
+Your domain:
+- Execute historical crisis scenario stress tests (2008 GFC, 2020 COVID shock, 2022 Fed rate hike, Stagflation).
+- Simulate extreme tail-risk drawdowns, correlation spikes to unity, and volatility regime jumps.
+- Calculate asset loss attribution and breach identification against fiduciary risk budgets.
+- Run Monte Carlo 99% tail CVaR simulations and evaluate capital preservation buffers.
+- Strict policy: Stress testing is strictly advisory. All scenario outputs are simulated risk projections."""
+
+EXPLAINABILITY_PROMPT = """You are the Institutional Explainability & Fiduciary Communications Specialist Agent.
+Your domain:
+- Translate complex mathematical optimization outputs into plain-English executive memos for investment committees.
+- Explain systemic instability indices (I_t), graph penalty dynamics (lambda_t), and SEC 13F ownership contagion.
+- Interpret shadow costs / dual variables (marginal cost of turnover limits and tail CVaR constraints).
+- Provide transparent rationale for asset allocations and Human-in-the-Loop (HITL) governance checkpoints.
+- Strict policy: Advisory explanations only. Maintain objective, professional board-level fiduciary language."""
+
+DATA_SENTINEL_PROMPT = """You are the Data Sentinel & Pre-Flight Quality Assurance Specialist Agent.
+Your domain:
+- Audit raw time series completeness, missing trading bars, and calendar alignment gaps.
+- Detect abnormal single-day return outliers (>50%), potential unadjusted stock splits, and erroneous ticks.
+- Identify zero-volume or stale price runs that cause synthetic rank deficiencies in covariance matrices.
+- Certify data readiness before conic portfolio optimization and econometric modeling.
+- Strict policy: Report data defects objectively and enforce pre-flight data integrity standards."""
+
 
 # =====================================================================
 # 2. SPECIALIZED AGENT ROUTING & CLASSIFICATION
@@ -97,7 +121,30 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     if not text:
         return "chatbot"
 
-    # 1. Econometrics & Time-Series Diagnostics
+    # 1. Stress Testing & Crisis Simulation
+    if any(k in text for k in [
+        "stress test", "stress testing", "scenario analysis", "crisis replay", 
+        "2008 gfc", "great financial crisis", "covid shock", "macro shock", 
+        "tail risk simulation", "drawdown simulation", "stress scenario", "stagflation shock"
+    ]):
+        return "stress_testing_agent"
+
+    # 2. Explainability & Board Memos
+    if any(k in text for k in [
+        "executive memo", "board memo", "explain weights", "why this allocation", 
+        "shadow cost", "shadow price", "dual variable", "plain english", 
+        "explainability", "committee memo", "fiduciary summary", "fiduciary memo"
+    ]):
+        return "explainability_agent"
+
+    # 3. Data Sentinel & Quality Assurance
+    if any(k in text for k in [
+        "data integrity", "audit data", "data quality", "missing bars", "stale price", 
+        "split anomaly", "data sentinel", "pre-flight data", "data completeness", "bad ticks"
+    ]):
+        return "data_sentinel_agent"
+
+    # 4. Econometrics & Time-Series Diagnostics
     if any(k in text for k in [
         "adf", "dickey-fuller", "dickey fuller", "kpss", "stationarity", "unit root", 
         "ljung-box", "ljung box", "autocorrelation", "arima", "price forecast", 
@@ -105,7 +152,7 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     ]):
         return "econometrics_agent"
 
-    # 2. Risk & Volatility Modeling
+    # 5. Risk & Volatility Modeling
     if any(k in text for k in [
         "garch", "egarch", "volatility model", "volatility forecast", "full eda", 
         "stock eda", "eda", "var 95", "var 99", "value at risk", "cvar", 
@@ -114,7 +161,7 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     ]):
         return "risk_volatility_agent"
 
-    # 3. Portfolio Optimization & Capital Allocation
+    # 6. Portfolio Optimization & Capital Allocation
     if any(k in text for k in [
         "optimize", "efficient frontier", "frontier", "markowitz", "max sharpe", 
         "min vol", "risk parity", "cvar optimization", "suggested weights", 
@@ -122,7 +169,7 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     ]):
         return "portfolio_optimizer_agent"
 
-    # 4. Institutional Network & Graph RAG
+    # 7. Institutional Network & Graph RAG
     if any(k in text for k in [
         "institutional holder", "institutional holders", "13f", "common holders", 
         "bipartite", "graph rag", "co-holding", "coholding", "centrality", 
@@ -130,7 +177,7 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     ]):
         return "network_graph_rag_agent"
 
-    # 5. Technical Analysis & Visualization
+    # 8. Technical Analysis & Visualization
     if any(k in text for k in [
         "rsi", "macd", "bollinger", "atr", "moving average", "sma", "ema", 
         "technical analysis", "technical indicator", "technical chart", 
@@ -138,14 +185,14 @@ def classify_agent_for_query(user_text: str, state: dict | None = None) -> str:
     ]):
         return "technical_analysis_agent"
 
-    # 6. Governance, Compliance & Audit Trail
+    # 9. Governance, Compliance & Audit Trail
     if any(k in text for k in [
         "audit", "compliance", "past analysis", "past weights", "user history", 
         "analysis history", "audit trail", "hitl", "governance log", "saved metric"
     ]):
         return "governance_audit_agent"
 
-    # 7. Market Data & Universe Discovery
+    # 10. Market Data & Universe Discovery
     if any(k in text for k in [
         "sector", "universe", "snapshot", "bundle", "yfinance", "unemployment", 
         "gdp", "market data", "database snapshot", "list stocks", "stocks in", 
@@ -234,6 +281,36 @@ SPECIALIZED_AGENTS_METADATA = {
             "save_financial_metric",
         ],
     },
+    "stress_testing_agent": {
+        "name": "Macro Stress-Testing & Crisis Simulation Agent",
+        "role": "Executes macro crisis scenarios (2008 GFC, 2020 COVID, Rates), tail CVaR, and breach analyses.",
+        "tools": [
+            "run_portfolio_stress_test",
+            "fit_garch_volatility_model",
+            "get_price_series_for_analysis",
+            "save_financial_metric",
+        ],
+    },
+    "explainability_agent": {
+        "name": "Institutional Explainability & Fiduciary Communications Agent",
+        "role": "Translates optimization outputs and shadow costs into executive board memos and HITL summaries.",
+        "tools": [
+            "generate_executive_governance_memo",
+            "search_methodology_knowledge_base",
+            "get_detailed_past_weights",
+            "save_financial_metric",
+        ],
+    },
+    "data_sentinel_agent": {
+        "name": "Data Sentinel & Pre-Flight Quality Assurance Agent",
+        "role": "Audits time series continuity, missing bars, price jumps, and certifies data readiness.",
+        "tools": [
+            "audit_data_integrity",
+            "generate_missing_data_heatmap",
+            "get_price_series_for_analysis",
+            "save_financial_metric",
+        ],
+    },
 }
 
 
@@ -241,12 +318,15 @@ def run_specialized_agent(agent_name: str, user_query: str, portfolio: list[str]
     """Execute a specialized agent directly for fast standalone or subagent queries."""
     from src.orchestrator.chatbot_orchestrator import (
         chatbot_node,
+        data_sentinel_agent_node,
         econometrics_agent_node,
+        explainability_agent_node,
         governance_audit_agent_node,
         market_data_agent_node,
         network_graph_rag_agent_node,
         portfolio_optimizer_agent_node,
         risk_volatility_agent_node,
+        stress_testing_agent_node,
         technical_analysis_agent_node,
     )
     node_map = {
@@ -257,6 +337,9 @@ def run_specialized_agent(agent_name: str, user_query: str, portfolio: list[str]
         "network_graph_rag_agent": network_graph_rag_agent_node,
         "technical_analysis_agent": technical_analysis_agent_node,
         "governance_audit_agent": governance_audit_agent_node,
+        "stress_testing_agent": stress_testing_agent_node,
+        "explainability_agent": explainability_agent_node,
+        "data_sentinel_agent": data_sentinel_agent_node,
         "chatbot": chatbot_node,
     }
     node = node_map.get(agent_name, chatbot_node)
@@ -270,3 +353,4 @@ def run_specialized_agent(agent_name: str, user_query: str, portfolio: list[str]
         content = getattr(msgs[-1], "content", str(msgs[-1]))
         return str(content)
     return "No response produced."
+

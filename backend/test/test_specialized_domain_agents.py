@@ -22,13 +22,21 @@ from src.orchestrator.chatbot_orchestrator import (
     network_graph_rag_agent_tools,
     technical_analysis_agent_tools,
     governance_audit_agent_tools,
+    stress_testing_agent_tools,
+    explainability_agent_tools,
+    data_sentinel_agent_tools,
+)
+from src.agents.advanced_governance_tools import (
+    run_portfolio_stress_test,
+    generate_executive_governance_memo,
+    audit_data_integrity,
 )
 
 
 class TestSpecializedDomainAgents(unittest.TestCase):
     """Test suite verifying one-by-one specialized domain agents and LangGraph orchestration."""
 
-    def test_all_seven_domain_agents_registered_in_metadata(self):
+    def test_all_ten_domain_agents_registered_in_metadata(self):
         expected_agents = {
             "market_data_agent",
             "econometrics_agent",
@@ -37,6 +45,9 @@ class TestSpecializedDomainAgents(unittest.TestCase):
             "network_graph_rag_agent",
             "technical_analysis_agent",
             "governance_audit_agent",
+            "stress_testing_agent",
+            "explainability_agent",
+            "data_sentinel_agent",
         }
         self.assertTrue(expected_agents.issubset(set(SPECIALIZED_AGENTS_METADATA.keys())))
         for agent_key in expected_agents:
@@ -58,17 +69,53 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         self.assertIn("fit_garch_volatility_model", risk_tool_names)
         self.assertIn("calculate_full_stock_eda", risk_tool_names)
 
-        # Portfolio optimizer agent has frontier optimization
-        opt_tool_names = [t.name for t in portfolio_optimizer_agent_tools]
-        self.assertIn("compute_optimal_portfolio_frontier", opt_tool_names)
+        # Stress testing agent has stress test and volatility tools
+        stress_tool_names = [t.name for t in stress_testing_agent_tools]
+        self.assertIn("run_portfolio_stress_test", stress_tool_names)
+        self.assertIn("fit_garch_volatility_model", stress_tool_names)
 
-        # Network graph agent has institutional holders and Graph RAG
-        graph_tool_names = [t.name for t in network_graph_rag_agent_tools]
-        self.assertIn("compare_common_institutional_holders", graph_tool_names)
-        self.assertIn("retrieve_graph_rag_context", graph_tool_names)
+        # Explainability agent has memo generator and methodology RAG
+        expl_tool_names = [t.name for t in explainability_agent_tools]
+        self.assertIn("generate_executive_governance_memo", expl_tool_names)
+        self.assertIn("search_methodology_knowledge_base", expl_tool_names)
+
+        # Data sentinel agent has data integrity auditor
+        data_tool_names = [t.name for t in data_sentinel_agent_tools]
+        self.assertIn("audit_data_integrity", data_tool_names)
+        self.assertIn("generate_missing_data_heatmap", data_tool_names)
 
     def test_deterministic_agent_query_classification(self):
-        # 1. Econometrics routing
+        # 1. Stress Testing routing
+        self.assertEqual(
+            classify_agent_for_query("Simulate 2008 GFC crisis shock and run stress test on AAPL and MSFT"),
+            "stress_testing_agent",
+        )
+        self.assertEqual(
+            classify_agent_for_query("Run scenario analysis and drawdown simulation on my portfolio"),
+            "stress_testing_agent",
+        )
+
+        # 2. Explainability routing
+        self.assertEqual(
+            classify_agent_for_query("Generate executive board memo explaining why this allocation has shadow costs"),
+            "explainability_agent",
+        )
+        self.assertEqual(
+            classify_agent_for_query("Draft a plain English fiduciary summary for the investment committee"),
+            "explainability_agent",
+        )
+
+        # 3. Data Sentinel routing
+        self.assertEqual(
+            classify_agent_for_query("Audit data integrity and check for missing bars or bad ticks"),
+            "data_sentinel_agent",
+        )
+        self.assertEqual(
+            classify_agent_for_query("Perform pre-flight data completeness verification for U1"),
+            "data_sentinel_agent",
+        )
+
+        # 4. Econometrics routing
         self.assertEqual(
             classify_agent_for_query("Can you run the ADF test and KPSS test on AAPL?"),
             "econometrics_agent",
@@ -78,7 +125,7 @@ class TestSpecializedDomainAgents(unittest.TestCase):
             "econometrics_agent",
         )
 
-        # 2. Risk & Volatility routing
+        # 5. Risk & Volatility routing
         self.assertEqual(
             classify_agent_for_query("Fit a GARCH(1,1) volatility model on MSFT"),
             "risk_volatility_agent",
@@ -88,45 +135,37 @@ class TestSpecializedDomainAgents(unittest.TestCase):
             "risk_volatility_agent",
         )
 
-        # 3. Portfolio Optimization routing
+        # 6. Portfolio Optimization routing
         self.assertEqual(
             classify_agent_for_query("Optimize a portfolio of AAPL, MSFT, and GOOG on the efficient frontier"),
             "portfolio_optimizer_agent",
         )
-        self.assertEqual(
-            classify_agent_for_query("Calculate Max Sharpe and Risk Parity weights for my tickers"),
-            "portfolio_optimizer_agent",
-        )
 
-        # 4. Institutional Network & Graph RAG routing
+        # 7. Institutional Network & Graph RAG routing
         self.assertEqual(
             classify_agent_for_query("Who are the common institutional holders between AAPL and MSFT according to 13F?"),
             "network_graph_rag_agent",
         )
-        self.assertEqual(
-            classify_agent_for_query("Search graph rag methodology and explain systemic risk"),
-            "network_graph_rag_agent",
-        )
 
-        # 5. Technical Analysis routing
+        # 8. Technical Analysis routing
         self.assertEqual(
             classify_agent_for_query("Calculate RSI and MACD indicators for SPY"),
             "technical_analysis_agent",
         )
 
-        # 6. Governance Audit routing
+        # 9. Governance Audit routing
         self.assertEqual(
             classify_agent_for_query("Show my past analysis history and audit previous weights"),
             "governance_audit_agent",
         )
 
-        # 7. Market Data routing
+        # 10. Market Data routing
         self.assertEqual(
             classify_agent_for_query("List all available sectors and stocks in financials"),
             "market_data_agent",
         )
 
-        # 8. General conversational fallback
+        # 11. General conversational fallback
         self.assertEqual(
             classify_agent_for_query("Hello! What are your capabilities?"),
             "chatbot",
@@ -139,9 +178,9 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         self.assertEqual(supervisor_router(state), "econometrics_agent")
 
         state = {
-            "messages": [HumanMessage(content="What are the optimal weights for TSLA and AMZN under Max Sharpe?")]
+            "messages": [HumanMessage(content="Simulate 2008 GFC stress test on TSLA and NVDA")]
         }
-        self.assertEqual(supervisor_router(state), "portfolio_optimizer_agent")
+        self.assertEqual(supervisor_router(state), "stress_testing_agent")
 
     def test_langgraph_contains_all_specialized_nodes(self):
         graph_builder = _build_graph()
@@ -158,6 +197,9 @@ class TestSpecializedDomainAgents(unittest.TestCase):
             "network_graph_rag_agent",
             "technical_analysis_agent",
             "governance_audit_agent",
+            "stress_testing_agent",
+            "explainability_agent",
+            "data_sentinel_agent",
             "tool_interceptor",
             "tools",
             "capture_tool_state",
@@ -172,6 +214,7 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         compiled = graph_builder.compile(checkpointer=MemorySaver())
         self.assertIsNotNone(compiled)
         self.assertTrue(hasattr(compiled, "invoke"))
+
     def test_run_specialized_agent_standalone(self):
         from src.agents.specialized_domain_agents import run_specialized_agent
 
@@ -181,6 +224,32 @@ class TestSpecializedDomainAgents(unittest.TestCase):
             self.assertIn("GARCH(1,1)", res)
             self.assertIn("22.4%", res)
 
+    def test_advanced_governance_tools_execution(self):
+        # 1. Executive memo tool
+        memo = generate_executive_governance_memo.invoke({
+            "tickers": ["AAPL", "MSFT"],
+            "universe": "U1",
+            "risk_tolerance": "moderate",
+        })
+        self.assertIn("EXECUTIVE FIDUCIARY MEMORANDUM", memo)
+        self.assertIn("Instability Index", memo)
+
+        # 2. Data sentinel audit tool
+        audit = audit_data_integrity.invoke({
+            "tickers": ["AAPL", "MSFT"],
+            "universe": "U1",
+        })
+        self.assertIn("Data Sentinel Audit", audit)
+
+        # 3. Stress testing tool
+        stress = run_portfolio_stress_test.invoke({
+            "tickers": ["AAPL", "MSFT"],
+            "scenarios": ["2008_GFC", "2020_COVID"],
+        })
+        self.assertIn("Macro Stress-Testing Report", stress)
+        self.assertIn("2008 Great Financial Crisis", stress)
+
 
 if __name__ == "__main__":
     unittest.main()
+

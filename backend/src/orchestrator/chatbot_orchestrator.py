@@ -61,15 +61,23 @@ from src.agents.math_eda_tools import (
     forecast_price_arima,
     run_stationarity_and_econometric_tests,
 )
+from src.agents.advanced_governance_tools import (
+    audit_data_integrity,
+    generate_executive_governance_memo,
+    run_portfolio_stress_test,
+)
 from src.agents.price_series_tool import get_price_series_for_analysis
 from src.agents.specialized_domain_agents import (
+    DATA_SENTINEL_PROMPT,
     ECONOMETRIC_PROMPT,
+    EXPLAINABILITY_PROMPT,
     GOVERNANCE_AUDIT_PROMPT,
     MARKET_DATA_PROMPT,
     NETWORK_GRAPH_RAG_PROMPT,
     PORTFOLIO_OPTIMIZATION_PROMPT,
     RISK_VOLATILITY_PROMPT,
     SPECIALIZED_AGENTS_METADATA,
+    STRESS_TESTING_PROMPT,
     TECHNICAL_ANALYSIS_PROMPT,
     classify_agent_for_query,
 )
@@ -361,6 +369,9 @@ tools = [
     calculate_full_stock_eda,
     compute_optimal_portfolio_frontier,
     forecast_price_arima,
+    run_portfolio_stress_test,
+    generate_executive_governance_memo,
+    audit_data_integrity,
 ]
 
 # Register with LLM factory
@@ -418,6 +429,27 @@ governance_audit_agent_tools = [
     save_financial_metric,
 ]
 
+stress_testing_agent_tools = [
+    run_portfolio_stress_test,
+    fit_garch_volatility_model,
+    get_price_series_for_analysis,
+    save_financial_metric,
+]
+
+explainability_agent_tools = [
+    generate_executive_governance_memo,
+    search_methodology_knowledge_base,
+    get_detailed_past_weights,
+    save_financial_metric,
+]
+
+data_sentinel_agent_tools = [
+    audit_data_integrity,
+    generate_missing_data_heatmap,
+    get_price_series_for_analysis,
+    save_financial_metric,
+]
+
 
 # =====================================================================
 # Specialized Domain Agent Nodes
@@ -443,6 +475,15 @@ technical_analysis_agent_node = create_specialized_agent_node(
 )
 governance_audit_agent_node = create_specialized_agent_node(
     "governance_audit_agent", GOVERNANCE_AUDIT_PROMPT, governance_audit_agent_tools
+)
+stress_testing_agent_node = create_specialized_agent_node(
+    "stress_testing_agent", STRESS_TESTING_PROMPT, stress_testing_agent_tools
+)
+explainability_agent_node = create_specialized_agent_node(
+    "explainability_agent", EXPLAINABILITY_PROMPT, explainability_agent_tools
+)
+data_sentinel_agent_node = create_specialized_agent_node(
+    "data_sentinel_agent", DATA_SENTINEL_PROMPT, data_sentinel_agent_tools
 )
 
 
@@ -617,7 +658,7 @@ def _build_graph():
     builder.add_node("memory_manager", memory_manager_node)
     builder.add_node("chatbot", chatbot_node)
 
-    # 7 Specialized Domain Agent Nodes
+    # 10 Specialized Domain Agent Nodes
     builder.add_node("market_data_agent", market_data_agent_node)
     builder.add_node("econometrics_agent", econometrics_agent_node)
     builder.add_node("risk_volatility_agent", risk_volatility_agent_node)
@@ -625,6 +666,9 @@ def _build_graph():
     builder.add_node("network_graph_rag_agent", network_graph_rag_agent_node)
     builder.add_node("technical_analysis_agent", technical_analysis_agent_node)
     builder.add_node("governance_audit_agent", governance_audit_agent_node)
+    builder.add_node("stress_testing_agent", stress_testing_agent_node)
+    builder.add_node("explainability_agent", explainability_agent_node)
+    builder.add_node("data_sentinel_agent", data_sentinel_agent_node)
 
     # Execution pipeline
     builder.add_node("tool_interceptor", tool_interceptor_node)
@@ -651,6 +695,9 @@ def _build_graph():
             "network_graph_rag_agent": "network_graph_rag_agent",
             "technical_analysis_agent": "technical_analysis_agent",
             "governance_audit_agent": "governance_audit_agent",
+            "stress_testing_agent": "stress_testing_agent",
+            "explainability_agent": "explainability_agent",
+            "data_sentinel_agent": "data_sentinel_agent",
             "chatbot": "chatbot",
         },
     )
@@ -660,7 +707,8 @@ def _build_graph():
         "chatbot", "market_data_agent", "econometrics_agent",
         "risk_volatility_agent", "portfolio_optimizer_agent",
         "network_graph_rag_agent", "technical_analysis_agent",
-        "governance_audit_agent",
+        "governance_audit_agent", "stress_testing_agent",
+        "explainability_agent", "data_sentinel_agent",
     ]
     for agent_name in all_agent_nodes:
         builder.add_conditional_edges(
@@ -682,6 +730,9 @@ def _build_graph():
             "network_graph_rag_agent": "network_graph_rag_agent",
             "technical_analysis_agent": "technical_analysis_agent",
             "governance_audit_agent": "governance_audit_agent",
+            "stress_testing_agent": "stress_testing_agent",
+            "explainability_agent": "explainability_agent",
+            "data_sentinel_agent": "data_sentinel_agent",
             "finalize_governance": "finalize_governance",
             "end": END,
         },
@@ -701,6 +752,9 @@ def _build_graph():
             "network_graph_rag_agent": "network_graph_rag_agent",
             "technical_analysis_agent": "technical_analysis_agent",
             "governance_audit_agent": "governance_audit_agent",
+            "stress_testing_agent": "stress_testing_agent",
+            "explainability_agent": "explainability_agent",
+            "data_sentinel_agent": "data_sentinel_agent",
         },
     )
     builder.add_edge("finalize_governance", END)

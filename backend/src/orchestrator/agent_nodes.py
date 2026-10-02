@@ -18,12 +18,15 @@ from langchain_core.runnables import RunnableConfig
 
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
 from src.agents.specialized_domain_agents import (
+    DATA_SENTINEL_PROMPT,
     ECONOMETRIC_PROMPT,
+    EXPLAINABILITY_PROMPT,
     GOVERNANCE_AUDIT_PROMPT,
     MARKET_DATA_PROMPT,
     NETWORK_GRAPH_RAG_PROMPT,
     PORTFOLIO_OPTIMIZATION_PROMPT,
     RISK_VOLATILITY_PROMPT,
+    STRESS_TESTING_PROMPT,
     TECHNICAL_ANALYSIS_PROMPT,
     classify_agent_for_query,
 )
@@ -226,6 +229,7 @@ def _route_after_interceptor(state: dict[str, Any]) -> str:
             "market_data_agent", "econometrics_agent", "risk_volatility_agent",
             "portfolio_optimizer_agent", "network_graph_rag_agent",
             "technical_analysis_agent", "governance_audit_agent",
+            "stress_testing_agent", "explainability_agent", "data_sentinel_agent",
         }:
             return active
         return "chatbot"
@@ -246,7 +250,9 @@ def _route_after_tool(state: dict[str, Any]) -> str:
     if active in {
         "market_data_agent", "econometrics_agent", "risk_volatility_agent",
         "portfolio_optimizer_agent", "network_graph_rag_agent",
-        "technical_analysis_agent", "governance_audit_agent", "chatbot",
+        "technical_analysis_agent", "governance_audit_agent",
+        "stress_testing_agent", "explainability_agent", "data_sentinel_agent",
+        "chatbot",
     }:
         return active
     return "chatbot"
