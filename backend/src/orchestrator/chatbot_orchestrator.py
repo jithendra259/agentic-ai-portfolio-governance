@@ -55,7 +55,12 @@ from src.providers.groq_provider import (
     normalize_groq_base_url,
     DEFAULT_GROQ_MODEL,
 )
+from src.providers.omniroute_provider import (
+    get_omniroute_chat_llm,
+    is_omniroute_model,
+)
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
+
 
 
 logger = logging.getLogger(__name__)
@@ -87,33 +92,59 @@ CONFIGURED_DEFAULT_LLM_MODEL = (
 
 
 def _list_installed_ollama_models() -> list[str]:
+    # 1. First probe local Ollama HTTP API (fastest, PATH-independent)
+    try:
+        import urllib.request
+        base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").rstrip("/")
+        req = urllib.request.Request(f"{base_url}/api/tags", headers={"User-Agent": "PortfolioGovernance/1.0"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            models = []
+            for item in data.get("models", []):
+                name = item.get("name")
+                if name:
+                    models.append(name)
+            if models:
+                return models
+    except Exception as exc:
+        logger.debug("Ollama HTTP API check failed: %s", exc)
+
+    # 2. Try CLI subprocess (checking standard path and LocalAppData on Windows)
+    import shutil
+    ollama_bin = shutil.which("ollama")
+    if not ollama_bin and os.name == "nt":
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            candidate = Path(local_app_data) / "Programs" / "Ollama" / "ollama.exe"
+            if candidate.exists():
+                ollama_bin = str(candidate)
+
+    if not ollama_bin:
+        return []
+
     try:
         result = subprocess.run(
-            ["ollama", "list"],
+            [ollama_bin, "list"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=5,
             check=False,
         )
+        if result.returncode == 0:
+            models = []
+            for line in result.stdout.splitlines()[1:]:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                name = stripped.split()[0].strip()
+                if name and name not in models:
+                    models.append(name)
+            return models
     except Exception as exc:
-        logger.warning("Unable to inspect installed Ollama models: %s", exc)
+        logger.warning("Unable to inspect installed Ollama models via CLI: %s", exc)
         return []
 
-    if result.returncode != 0:
-        stderr = (result.stderr or "").strip()
-        if stderr:
-            logger.warning("`ollama list` failed while resolving models: %s", stderr)
-        return []
-
-    models = []
-    for line in result.stdout.splitlines()[1:]:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        name = stripped.split()[0].strip()
-        if name and name not in models:
-            models.append(name)
-    return models
+    return []
 
 
 def _resolve_ollama_model(preferred_models: list[str], installed_models: list[str]) -> str:
@@ -589,22 +620,47 @@ tools = [
 def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Optional[int] = None):
     groq_api_key = os.getenv("GROQ_API_KEY")
     ashna_api_key = os.getenv("ASHNA_API_KEY")
+    omniroute_api_key = os.getenv("OMNIROUTE_API_KEY")
 
-    # 1. Groq Provider Check
-    if is_groq_model(model_name) or (groq_api_key and not (model_name.startswith("ashna") or model_name == "ashnaai")):
-        if groq_api_key:
-            try:
-                return get_groq_chat_llm(
-                    model_name=model_name,
-                    temperature=temperature,
-                    max_tokens=num_predict,
-                )
-            except Exception as exc:
-                logger.error(f"Failed to initialize Groq API client: {exc}")
-        else:
-            logger.warning("GROQ_API_KEY is not set in environment.")
+    # 1. OmniRoute Provider Check
+    if is_omniroute_model(model_name) or (omniroute_api_key and model_name.startswith("omniroute/")):
+        try:
+            return get_omniroute_chat_llm(
+                model_name=model_name,
+                temperature=temperature,
+                max_tokens=num_predict,
+            )
+        except Exception as exc:
+            logger.error(f"Failed to initialize OmniRoute client: {exc}")
 
-    # 2. Ashna Provider Check
+    # 2. Local Ollama Provider Check
+    is_ollama_requested = (
+        model_name.startswith("ollama/")
+        or model_name in INSTALLED_OLLAMA_MODELS
+        or model_name.startswith("nemotron")
+        or model_name.startswith("gpt-oss:")
+    )
+    if is_ollama_requested:
+        try:
+            from langchain_ollama import ChatOllama
+            actual_model = model_name[len("ollama/"):] if model_name.startswith("ollama/") else model_name
+            ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").strip()
+            kwargs = {
+                "model": actual_model,
+                "temperature": temperature,
+                "base_url": ollama_base_url.rstrip("/"),
+                "num_ctx": 8192,
+                "keep_alive": "10m",
+                "tags": ["orchestrator_llm", "local_ollama"],
+            }
+            if num_predict is not None:
+                kwargs["num_predict"] = num_predict
+            logger.info(f"Initialized local ChatOllama with model={actual_model}, base_url={ollama_base_url}")
+            return ChatOllama(**kwargs)
+        except Exception as exc:
+            logger.warning(f"Failed to initialize local ChatOllama: {exc}")
+
+    # 3. Ashna Provider Check
     if model_name.startswith("ashna") or model_name == "ashnaai":
         try:
             from langchain_openai import ChatOpenAI
@@ -612,7 +668,6 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
             ChatOpenAI = None
         base_url = os.getenv("ASHNA_BASE_URL")
 
-        
         if ashna_api_key and base_url and ChatOpenAI is not None:
             base_url = normalize_ashna_base_url(base_url)
             
@@ -643,19 +698,33 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         else:
             logger.warning("ASHNA_API_KEY or ASHNA_BASE_URL is not set in environment.")
 
-    # 3. Local / Fallback Ollama Provider (for local development)
+    # 4. Groq Provider Check
+    if is_groq_model(model_name) or (groq_api_key and not is_ollama_requested):
+        if groq_api_key:
+            try:
+                return get_groq_chat_llm(
+                    model_name=model_name,
+                    temperature=temperature,
+                    max_tokens=num_predict,
+                )
+            except Exception as exc:
+                logger.error(f"Failed to initialize Groq API client: {exc}")
+        else:
+            logger.warning("GROQ_API_KEY is not set in environment.")
+
+    # 5. Local / Fallback Ollama Provider (for local development)
     try:
         from langchain_ollama import ChatOllama
-        ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "").strip() or None
+        ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").strip()
+        actual_model = model_name[len("ollama/"):] if model_name.startswith("ollama/") else model_name
         kwargs = {
-            "model": model_name,
+            "model": actual_model,
             "temperature": temperature,
+            "base_url": ollama_base_url.rstrip("/"),
             "num_ctx": 8192,
             "keep_alive": "10m",
             "tags": ["orchestrator_llm"],
         }
-        if ollama_base_url:
-            kwargs["base_url"] = ollama_base_url.rstrip("/")
         if num_predict is not None:
             kwargs["num_predict"] = num_predict
         return ChatOllama(**kwargs)
@@ -663,7 +732,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         if groq_api_key:
             return get_groq_chat_llm(model_name=DEFAULT_GROQ_MODEL, temperature=temperature, max_tokens=num_predict)
         raise ValueError(
-            "GROQ_API_KEY is not set in environment variables. Please add GROQ_API_KEY in your Vercel Project Settings > Environment Variables."
+            "No LLM provider available. Please set GROQ_API_KEY or OMNIROUTE_API_KEY or run Ollama locally."
         )
 
 

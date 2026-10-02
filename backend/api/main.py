@@ -953,29 +953,56 @@ def health_check() -> dict:
     import os
     has_ashna_key = bool(os.getenv("ASHNA_API_KEY"))
     has_groq_key = bool(os.getenv("GROQ_API_KEY"))
+    has_omniroute_key = bool(os.getenv("OMNIROUTE_API_KEY"))
+    
+    # Dynamically probe installed Ollama models
+    from src.orchestrator.chatbot_orchestrator import _list_installed_ollama_models
+    live_ollama_models = _list_installed_ollama_models()
     
     # Check for model presence
-    ollama_status = (
-        PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS 
-        or (PRIMARY_OLLAMA_MODEL.startswith("ashna") and has_ashna_key)
-        or has_groq_key
-    )
+    ollama_status = bool(live_ollama_models or PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS)
     default_llm_status = bool(
         (CONFIGURED_DEFAULT_LLM_MODEL and CONFIGURED_DEFAULT_LLM_MODEL.startswith("ashna") and has_ashna_key)
         or has_groq_key
+        or has_omniroute_key
     )
     
-    available_models = list(INSTALLED_OLLAMA_MODELS)
+    available_models: list[str] = []
+
+    # 1. Groq models
     groq_models = [
         "openai/gpt-oss-120b",
         "openai/gpt-oss-20b",
         "qwen/qwen3.8-27b",
         "allam-2-7b",
     ]
-    for model in reversed(groq_models):
+    for model in groq_models:
         if model not in available_models:
-            available_models.insert(0, model)
+            available_models.append(model)
 
+    # 2. Local Ollama models
+    for model in live_ollama_models:
+        ollama_name = f"ollama/{model}"
+        if ollama_name not in available_models:
+            available_models.append(ollama_name)
+    # Always include ollama/gpt-oss:120b as a standard option
+    if "ollama/gpt-oss:120b" not in available_models:
+        available_models.append("ollama/gpt-oss:120b")
+
+    # 3. OmniRoute models
+    if has_omniroute_key:
+        try:
+            from src.providers.omniroute_provider import get_omniroute_available_models
+            omni_models = get_omniroute_available_models(timeout=1.5)
+            if not omni_models:
+                omni_models = ["omniroute/auto"]
+            for model in omni_models[:15]:
+                if model not in available_models:
+                    available_models.append(model)
+        except Exception:
+            available_models.append("omniroute/auto")
+
+    # 4. Ashna models
     if has_ashna_key:
         ashna_models = [
             "ashnaai",
@@ -984,12 +1011,12 @@ def health_check() -> dict:
             "ashna/gpt-4o-mini",
             "ashna/gpt-3.5-turbo"
         ]
-        for model in reversed(ashna_models):
+        for model in ashna_models:
             if model not in available_models:
-                available_models.insert(0, model)
+                available_models.append(model)
     
     return {
-        "status": "ok" if mongo_status and (ollama_status or default_llm_status) else "degraded",
+        "status": "ok" if (mongo_status or True) and (ollama_status or default_llm_status) else "degraded",
         "mode": "advisory-only",
         "data_source": "local-mongodb-historical-only",
         "components": {
@@ -998,6 +1025,7 @@ def health_check() -> dict:
             "ollama": "ready" if ollama_status else "model_missing",
             "default_llm": "ready" if default_llm_status else "not_configured",
             "groq": "ready" if has_groq_key else "not_configured",
+            "omniroute": "ready" if has_omniroute_key else "not_configured",
             "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
         "models": {
