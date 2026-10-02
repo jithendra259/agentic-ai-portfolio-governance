@@ -702,11 +702,42 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
     if is_groq_model(model_name) or (groq_api_key and not is_ollama_requested):
         if groq_api_key:
             try:
-                return get_groq_chat_llm(
+                primary_llm = get_groq_chat_llm(
                     model_name=model_name,
                     temperature=temperature,
                     max_tokens=num_predict,
                 )
+                fallbacks = []
+                if omniroute_api_key:
+                    try:
+                        omni_llm = get_omniroute_chat_llm(
+                            model_name="openai/gpt-oss-120b",
+                            temperature=temperature,
+                            max_tokens=num_predict,
+                        )
+                        if omni_llm:
+                            fallbacks.append(omni_llm)
+                    except Exception as err:
+                        logger.debug(f"OmniRoute fallback init skipped: {err}")
+                if ashna_api_key and os.getenv("ASHNA_BASE_URL"):
+                    try:
+                        from langchain_openai import ChatOpenAI
+                        ashna_llm = ChatOpenAI(
+                            model="ashnaai",
+                            temperature=temperature,
+                            api_key=ashna_api_key,
+                            base_url=normalize_ashna_base_url(os.getenv("ASHNA_BASE_URL")),
+                            timeout=60,
+                            max_retries=2,
+                        )
+                        if ashna_llm:
+                            fallbacks.append(ashna_llm)
+                    except Exception as err:
+                        logger.debug(f"Ashna fallback init skipped: {err}")
+                if fallbacks and hasattr(primary_llm, "with_fallbacks"):
+                    logger.info("Configured Groq primary LLM with %d fallback providers.", len(fallbacks))
+                    return primary_llm.with_fallbacks(fallbacks)
+                return primary_llm
             except Exception as exc:
                 logger.error(f"Failed to initialize Groq API client: {exc}")
         else:

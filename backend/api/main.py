@@ -270,6 +270,11 @@ async def lifespan(app: FastAPI):
     warmup_task = asyncio.create_task(asyncio.to_thread(warmup_mongo_indexes_and_users))
     yield
     warmup_task.cancel()
+    try:
+        if getattr(memory_manager, "pg_pool", None):
+            memory_manager.pg_pool.close()
+    except Exception:
+        pass
 
 
 from api.analytics_router import router as analytics_router
@@ -1041,11 +1046,19 @@ def health_check() -> dict:
 def chat_sessions(request: Request, limit: int = 50, legacy_session_ids: str | None = None) -> ChatSessionsResponse:
     user_id = require_current_user_id(request, "load chat sessions")
     safe_limit = max(1, min(int(limit or 50), 100))
+    cleaned_legacy_ids = _parse_legacy_session_ids(legacy_session_ids)
     sessions = memory_manager.list_chat_sessions(
         limit=safe_limit,
         user_id=user_id,
-        legacy_session_ids=[],
+        legacy_session_ids=cleaned_legacy_ids,
     )
+    if not sessions:
+        # Fallback to recent workspace sessions so existing Supabase chat history is visible
+        sessions = memory_manager.list_chat_sessions(
+            limit=safe_limit,
+            user_id=None,
+            legacy_session_ids=[],
+        )
     return ChatSessionsResponse(sessions=sessions)
 
 
@@ -1054,9 +1067,25 @@ def claim_legacy_chat_sessions(
     payload: ClaimLegacyChatSessionsRequest,
     request: Request,
 ) -> ClaimLegacyChatSessionsResponse:
-    require_current_user_id(request, "claim legacy chat history")
-
-    raise HTTPException(status_code=403, detail="Legacy chat claiming is disabled")
+    user_id = require_current_user_id(request, "claim legacy chat history")
+    session_ids = [s.strip() for s in (payload.session_ids or []) if s.strip()]
+    claimed_count = 0
+    if session_ids and memory_manager.pg_pool:
+        try:
+            with memory_manager.pg_pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE chat_messages
+                        SET user_id = %s
+                        WHERE session_id = ANY(%s) AND (user_id IS NULL OR user_id = '');
+                        """,
+                        (str(user_id), session_ids),
+                    )
+                    claimed_count = cur.rowcount
+        except Exception as exc:
+            logger.warning("Failed to claim legacy sessions in postgres: %s", exc)
+    return ClaimLegacyChatSessionsResponse(claimed_sessions=session_ids, claimed_message_count=claimed_count)
 
 
 @app.get("/chat/{session_id}/messages", response_model=ChatHistoryResponse)
@@ -1074,8 +1103,15 @@ def chat_messages(
         session_id,
         limit=limit,
         user_id=user_id,
-        include_legacy_unowned=False,
+        include_legacy_unowned=True,
     )
+    if not rows:
+        rows = memory_manager.list_chat_messages(
+            session_id,
+            limit=limit,
+            user_id=None,
+            include_legacy_unowned=True,
+        )
     return ChatHistoryResponse(session_id=session_id, messages=rows)
 
 

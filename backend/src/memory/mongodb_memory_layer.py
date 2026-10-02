@@ -288,6 +288,21 @@ class MongoMemoryManager:
                         CREATE INDEX IF NOT EXISTS idx_market_data_cache_expiry
                         ON market_data_cache (expires_at);
                     """)
+                    cur.execute("""
+                        CREATE TABLE IF NOT EXISTS methodology_embeddings (
+                            chunk_id VARCHAR(128) PRIMARY KEY,
+                            source_paper VARCHAR(256),
+                            source_type VARCHAR(64),
+                            page_number VARCHAR(32),
+                            raw_text TEXT NOT NULL,
+                            embedding vector(384),
+                            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                        );
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_methodology_embeddings_hnsw
+                        ON methodology_embeddings USING hnsw (embedding vector_cosine_ops);
+                    """)
             logger.info("Postgres cache tables checked/created.")
         except Exception as exc:
             logger.error("Failed to set up postgres tables: %s", exc)
