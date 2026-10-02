@@ -113,10 +113,19 @@ def get_groq_chat_llm(
     try:
         from langchain_groq import ChatGroq
 
+        groq_native_base = (base_url or os.getenv("GROQ_BASE_URL") or "https://api.groq.com").strip().rstrip("/")
+        if groq_native_base.endswith("/openai/v1"):
+            groq_native_base = groq_native_base[:-len("/openai/v1")].rstrip("/")
+        elif groq_native_base.endswith("/openai"):
+            groq_native_base = groq_native_base[:-len("/openai")].rstrip("/")
+        if not groq_native_base:
+            groq_native_base = "https://api.groq.com"
+
         params = {
             "model_name": actual_model,
             "temperature": temperature,
             "groq_api_key": resolved_api_key,
+            "base_url": groq_native_base,
             "streaming": streaming,
             "max_retries": 2,
             "tags": ["groq_llm"],
