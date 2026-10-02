@@ -219,6 +219,11 @@ async def lifespan(app: FastAPI):
         logger.info("Initializing MongoDB indexes in background...")
         try:
             memory = MongoMemoryManager()
+            if not memory.is_available or memory._db is None:
+                logger.warning("MongoDB is offline or unreachable; running with in-memory fallback store.")
+                app.state.mongo_available = False
+                return
+
             memory.setup_indexes()
             logger.info("MongoDB indexes are active.")
             app.state.mongo_available = True
