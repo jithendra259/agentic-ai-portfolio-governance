@@ -235,3 +235,38 @@ SPECIALIZED_AGENTS_METADATA = {
         ],
     },
 }
+
+
+def run_specialized_agent(agent_name: str, user_query: str, portfolio: list[str] | None = None) -> str:
+    """Execute a specialized agent directly for fast standalone or subagent queries."""
+    from src.orchestrator.chatbot_orchestrator import (
+        chatbot_node,
+        econometrics_agent_node,
+        governance_audit_agent_node,
+        market_data_agent_node,
+        network_graph_rag_agent_node,
+        portfolio_optimizer_agent_node,
+        risk_volatility_agent_node,
+        technical_analysis_agent_node,
+    )
+    node_map = {
+        "market_data_agent": market_data_agent_node,
+        "econometrics_agent": econometrics_agent_node,
+        "risk_volatility_agent": risk_volatility_agent_node,
+        "portfolio_optimizer_agent": portfolio_optimizer_agent_node,
+        "network_graph_rag_agent": network_graph_rag_agent_node,
+        "technical_analysis_agent": technical_analysis_agent_node,
+        "governance_audit_agent": governance_audit_agent_node,
+        "chatbot": chatbot_node,
+    }
+    node = node_map.get(agent_name, chatbot_node)
+    state = {
+        "messages": [HumanMessage(content=user_query)],
+        "user_portfolio": portfolio or [],
+    }
+    result = node(state)
+    msgs = result.get("messages", [])
+    if msgs:
+        content = getattr(msgs[-1], "content", str(msgs[-1]))
+        return str(content)
+    return "No response produced."

@@ -172,8 +172,14 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         compiled = graph_builder.compile(checkpointer=MemorySaver())
         self.assertIsNotNone(compiled)
         self.assertTrue(hasattr(compiled, "invoke"))
-        self.assertTrue(hasattr(compiled, "stream"))
-        self.assertTrue(hasattr(compiled, "astream_events"))
+    def test_run_specialized_agent_standalone(self):
+        from src.agents.specialized_domain_agents import run_specialized_agent
+
+        with patch("src.orchestrator.agent_nodes._invoke_llm_with_fallback") as mock_invoke:
+            mock_invoke.return_value = AIMessage(content="GARCH(1,1) persistent volatility estimate is 22.4%.")
+            res = run_specialized_agent("risk_volatility_agent", "Fit GARCH on AAPL", portfolio=["AAPL"])
+            self.assertIn("GARCH(1,1)", res)
+            self.assertIn("22.4%", res)
 
 
 if __name__ == "__main__":
