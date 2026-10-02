@@ -1,6 +1,15 @@
 # Data & Numerics
 numpy>=1.26.0,<2.0.0
+scipy>=1.11.0,<2.0.0
 pandas>=2.2.0,<2.3.0
+
+# Convex Optimization (Critical for Agent 3)
+cvxpy>=1.4.0
+scs
+clarabel
+osqp
+
+# Graph Analysis (Critical for Agent 2)
 networkx>=3.0
 
 # Backend API
@@ -12,14 +21,25 @@ PyJWT[crypto]>=2.8.0
 # Data Sources & Storage
 pymongo==4.6.0
 yfinance>=0.2.54,<0.3.0
+pypdf>=5.0.0
+langgraph-checkpoint-postgres
+psycopg[binary,pool]
 
 # Configuration
 python-dotenv==1.0.0
 certifi==2024.2.2
 
-# LLM & Orchestration (Groq Cloud API & LangGraph)
+# LLM & Orchestration (Groq, OpenAI, Ollama Cloud/Local APIs)
+langchain>=0.1.0
 langchain-core>=0.1.0
 langchain-groq>=0.1.0
 groq>=0.9.0
+langchain-openai>=0.1.0
+langchain-ollama>=0.1.0
 langgraph>=0.1.0
+langchain-text-splitters>=0.2.0
 
+# Embeddings, Visualization & Research
+sentence-transformers>=3.0.0
+matplotlib>=3.5.0
+seaborn>=0.12.0
