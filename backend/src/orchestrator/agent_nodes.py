@@ -30,6 +30,7 @@ from src.orchestrator.prompts import (
     SUPERVISOR_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     TECHNICAL_ANALYSIS_PROMPT,
+    compose_agent_prompt,
     get_agent_prompt,
     get_chatbot_prompt,
     get_prompt,
@@ -75,11 +76,22 @@ def create_specialized_agent_node(agent_name: str, prompt_text: Optional[str] = 
         messages = state.get("messages", [])
         working_messages = list(messages)
         remembered_portfolio = _extract_portfolio_from_messages(working_messages)
+        caveman_intensity = state.get("caveman_intensity") if state.get("caveman_mode") else None
 
-        # Access the exact specialized agent prompt on demand from the dedicated prompts module
-        sys_prompt = prompt_text or get_agent_prompt(agent_name)
-        if remembered_portfolio:
-            sys_prompt += f"\n\nActive Portfolio Context: {', '.join(remembered_portfolio)}."
+        # Access and compose the exact specialized agent prompt on demand from the dedicated prompts module
+        if prompt_text:
+            sys_prompt = prompt_text
+            if remembered_portfolio:
+                sys_prompt += f"\n\nActive Portfolio Context: {', '.join(remembered_portfolio)}."
+        else:
+            sys_prompt = compose_agent_prompt(
+                agent_name=agent_name,
+                style="executive",
+                include_math=True,
+                include_guardrails=True,
+                portfolio=remembered_portfolio,
+                caveman_mode=caveman_intensity,
+            )
 
         summary = state.get("summary", "").strip()
         if summary:

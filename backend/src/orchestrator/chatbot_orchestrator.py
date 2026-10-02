@@ -463,34 +463,34 @@ data_sentinel_agent_tools = [
 # =====================================================================
 
 market_data_agent_node = create_specialized_agent_node(
-    "market_data_agent", MARKET_DATA_PROMPT, market_data_agent_tools
+    "market_data_agent", agent_tools=market_data_agent_tools
 )
 econometrics_agent_node = create_specialized_agent_node(
-    "econometrics_agent", ECONOMETRIC_PROMPT, econometrics_agent_tools
+    "econometrics_agent", agent_tools=econometrics_agent_tools
 )
 risk_volatility_agent_node = create_specialized_agent_node(
-    "risk_volatility_agent", RISK_VOLATILITY_PROMPT, risk_volatility_agent_tools
+    "risk_volatility_agent", agent_tools=risk_volatility_agent_tools
 )
 portfolio_optimizer_agent_node = create_specialized_agent_node(
-    "portfolio_optimizer_agent", PORTFOLIO_OPTIMIZATION_PROMPT, portfolio_optimizer_agent_tools
+    "portfolio_optimizer_agent", agent_tools=portfolio_optimizer_agent_tools
 )
 network_graph_rag_agent_node = create_specialized_agent_node(
-    "network_graph_rag_agent", NETWORK_GRAPH_RAG_PROMPT, network_graph_rag_agent_tools
+    "network_graph_rag_agent", agent_tools=network_graph_rag_agent_tools
 )
 technical_analysis_agent_node = create_specialized_agent_node(
-    "technical_analysis_agent", TECHNICAL_ANALYSIS_PROMPT, technical_analysis_agent_tools
+    "technical_analysis_agent", agent_tools=technical_analysis_agent_tools
 )
 governance_audit_agent_node = create_specialized_agent_node(
-    "governance_audit_agent", GOVERNANCE_AUDIT_PROMPT, governance_audit_agent_tools
+    "governance_audit_agent", agent_tools=governance_audit_agent_tools
 )
 stress_testing_agent_node = create_specialized_agent_node(
-    "stress_testing_agent", STRESS_TESTING_PROMPT, stress_testing_agent_tools
+    "stress_testing_agent", agent_tools=stress_testing_agent_tools
 )
 explainability_agent_node = create_specialized_agent_node(
-    "explainability_agent", EXPLAINABILITY_PROMPT, explainability_agent_tools
+    "explainability_agent", agent_tools=explainability_agent_tools
 )
 data_sentinel_agent_node = create_specialized_agent_node(
-    "data_sentinel_agent", DATA_SENTINEL_PROMPT, data_sentinel_agent_tools
+    "data_sentinel_agent", agent_tools=data_sentinel_agent_tools
 )
 
 

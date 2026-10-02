@@ -282,6 +282,40 @@ class TestSpecializedDomainAgents(unittest.TestCase):
         fallback = get_agent_prompt("unknown_agent")
         self.assertEqual(fallback, SUPERVISOR_SYSTEM_PROMPT)
 
+        # Test expanded styles and personas
+        from src.orchestrator.prompts import (
+            EXECUTIVE_FIDUCIARY_STYLE_PROMPT,
+            QUANTITATIVE_RESEARCH_STYLE_PROMPT,
+            MATHEMATICAL_FORMULATION_PROMPT,
+            ANTI_HALLUCINATION_GUARDRAILS_PROMPT,
+            compose_agent_prompt,
+        )
+        self.assertIn("EXECUTIVE FIDUCIARY", EXECUTIVE_FIDUCIARY_STYLE_PROMPT)
+        self.assertIn("QUANTITATIVE RESEARCH", QUANTITATIVE_RESEARCH_STYLE_PROMPT)
+        self.assertIn("Sharpe Ratio", MATHEMATICAL_FORMULATION_PROMPT)
+        self.assertIn("EVIDENCE BOUNDARY", ANTI_HALLUCINATION_GUARDRAILS_PROMPT)
+
+        # Test compose_agent_prompt
+        composed = compose_agent_prompt(
+            agent_name="portfolio_optimizer_agent",
+            style="executive",
+            include_math=True,
+            include_guardrails=True,
+            portfolio=["AAPL", "MSFT"],
+        )
+        self.assertIn("Conic Portfolio Optimization", composed)
+        self.assertIn("EXECUTIVE FIDUCIARY", composed)
+        self.assertIn("LATEX MATHEMATICAL", composed)
+        self.assertIn("ANTI-HALLUCINATION", composed)
+        self.assertIn("Active Portfolio Securities Context: AAPL, MSFT", composed)
+
+        # Test caveman compression mode in compose_agent_prompt
+        caveman_composed = compose_agent_prompt(
+            agent_name="risk_volatility_agent",
+            caveman_mode="lite",
+        )
+        self.assertIn("Respond professionally but extremely tight", caveman_composed)
+
 
 if __name__ == "__main__":
     unittest.main()
