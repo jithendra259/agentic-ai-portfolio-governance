@@ -67,8 +67,17 @@ from src.providers.omniroute_provider import (
     is_omniroute_model,
 )
 from src.orchestrator.caveman_agent import detect_caveman_request, get_caveman_system_prompt
-
-
+from src.agents.specialized_domain_agents import (
+    MARKET_DATA_PROMPT,
+    ECONOMETRIC_PROMPT,
+    RISK_VOLATILITY_PROMPT,
+    PORTFOLIO_OPTIMIZATION_PROMPT,
+    NETWORK_GRAPH_RAG_PROMPT,
+    TECHNICAL_ANALYSIS_PROMPT,
+    GOVERNANCE_AUDIT_PROMPT,
+    classify_agent_for_query,
+    SPECIALIZED_AGENTS_METADATA,
+)
 
 logger = logging.getLogger(__name__)
 GOVERNANCE_CACHE_VERSION = "optimizer-audit-v3-yfinance"
@@ -597,6 +606,7 @@ class AgentState(TypedDict, total=False):
     pending_action: dict[str, Any] | None
     memory_update: dict[str, Any]
     validation_result: dict[str, Any]
+    active_agent: str
 
 # 2. Bind the Tools to the LLM
 # Historical database lookup + advisory optimization only. No execution tools are exposed.
@@ -629,6 +639,59 @@ tools = [
     calculate_full_stock_eda,
     compute_optimal_portfolio_frontier,
     forecast_price_arima,
+]
+
+# Specialized Domain Agent Tool Subsets (Compact schemas to conserve tokens and prevent TPM limits)
+market_data_agent_tools = [
+    list_available_sectors,
+    list_available_universes,
+    get_stocks_by_sector,
+    get_stocks_by_universe,
+    get_universe_overview,
+    get_stock_database_snapshot,
+    get_market_data_bundle,
+    get_yfinance_market_data,
+    plot_historical_prices,
+    plot_us_economic_indicators,
+]
+
+econometrics_agent_tools = [
+    run_stationarity_and_econometric_tests,
+    forecast_price_arima,
+    get_price_series_for_analysis,
+]
+
+risk_volatility_agent_tools = [
+    fit_garch_volatility_model,
+    calculate_full_stock_eda,
+    generate_ohlc_correlation_heatmap,
+    generate_missing_data_heatmap,
+    save_financial_metric,
+]
+
+portfolio_optimizer_agent_tools = [
+    compute_optimal_portfolio_frontier,
+    governance_pipeline_with_cache,
+    get_detailed_past_weights,
+    save_financial_metric,
+]
+
+network_graph_rag_agent_tools = [
+    retrieve_graph_rag_context,
+    compare_common_institutional_holders,
+    search_methodology_knowledge_base,
+]
+
+technical_analysis_agent_tools = [
+    get_price_series_for_analysis,
+    generate_financial_plot,
+    generate_custom_math_plot,
+    run_data_analysis_plot,
+]
+
+governance_audit_agent_tools = [
+    get_user_analysis_history,
+    save_financial_metric,
 ]
 
 
@@ -782,10 +845,11 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
         )
 
 
-def _build_llm_with_tools(model_name: str):
+def _build_llm_with_tools(model_name: str, bound_tools: list = None):
+    target_tools = tools if bound_tools is None else bound_tools
     llm = _get_chat_llm(model_name)
     try:
-        return llm.bind_tools(tools)
+        return llm.bind_tools(target_tools)
     except Exception as exc:
         logger.warning(
             "Model %s does not support tool calling (%s). Falling back to tool-capable %s",
@@ -793,7 +857,7 @@ def _build_llm_with_tools(model_name: str):
             exc,
             DEFAULT_GROQ_MODEL,
         )
-        return _get_chat_llm(DEFAULT_GROQ_MODEL).bind_tools(tools)
+        return _get_chat_llm(DEFAULT_GROQ_MODEL).bind_tools(target_tools)
 
 
 
@@ -939,18 +1003,25 @@ def _clean_messages_for_model(model_name: str, messages: list[BaseMessage]) -> l
     return messages
 
 
-def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfig = None) -> BaseMessage:
+def _invoke_llm_with_fallback(
+    messages: list[BaseMessage],
+    config: RunnableConfig = None,
+    bound_tools: list = None,
+) -> BaseMessage:
     """
     Primary LLM invocation wrapper with multi-stage recovery:
-    1. Try Primary Model.
+    1. Try Primary Model (with agent-specific bound_tools if provided).
     2. If Memory/Crash occurs, retry Primary with AGGRESSIVE context trimming.
     3. If still fails, try Fallback Model.
     """
     override_model = config.get("configurable", {}).get("override_model") if config else None
     
     if override_model:
-        active_llm = _build_llm_with_tools(override_model)
+        active_llm = _build_llm_with_tools(override_model, bound_tools=bound_tools)
         active_primary = override_model
+    elif bound_tools is not None:
+        active_llm = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL, bound_tools=bound_tools)
+        active_primary = PRIMARY_OLLAMA_MODEL
     else:
         active_llm = get_llm_with_tools()
         active_primary = PRIMARY_OLLAMA_MODEL
@@ -967,7 +1038,7 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
             # 1. First attempt: aggressive context trim with DEFAULT_GROQ_MODEL
             try:
                 emergency_messages = _trim_context(messages, max_non_system=2)
-                return _build_llm_with_tools(DEFAULT_GROQ_MODEL).invoke(emergency_messages)
+                return _build_llm_with_tools(DEFAULT_GROQ_MODEL, bound_tools=bound_tools).invoke(emergency_messages)
             except Exception as trim_exc:
                 logger.warning("Trimmed context retry on Groq failed: %s", trim_exc)
 
@@ -975,12 +1046,12 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
             if os.getenv("ASHNA_API_KEY") and os.getenv("ASHNA_BASE_URL"):
                 try:
                     logger.info("Failing over from Groq to Ashna AI...")
-                    return _build_llm_with_tools("ashnaai").invoke(emergency_messages if 'emergency_messages' in locals() else messages)
+                    return _build_llm_with_tools("ashnaai", bound_tools=bound_tools).invoke(emergency_messages if 'emergency_messages' in locals() else messages)
                 except Exception as ashna_exc:
                     logger.warning("Failover to Ashna AI failed: %s", ashna_exc)
 
             # 3. Third attempt: fail over to local Ollama
-            fallback_llm = get_fallback_llm_with_tools()
+            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
             if fallback_llm is not None:
                 try:
                     logger.info("Failing over from Groq to local Ollama...")
@@ -993,7 +1064,7 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
 
         if is_ashna:
             logger.warning("Ashna model %s failed. Attempting configured fallback if available. Error: %s", active_primary, exc)
-            fallback_llm = get_fallback_llm_with_tools()
+            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
             if fallback_llm is not None and FALLBACK_OLLAMA_MODEL != active_primary:
                 try:
                     fallback_messages = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
@@ -1005,7 +1076,7 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
 
         if _is_ollama_model_not_found_error(exc) or _is_ollama_unavailable_error(exc):
             logger.warning("Primary Ollama model %s is not available. Error: %s", active_primary, exc)
-            fallback_llm = get_fallback_llm_with_tools()
+            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
             if fallback_llm is None:
                 return _model_not_found_message(active_primary)
             try:
@@ -1031,14 +1102,14 @@ def _invoke_llm_with_fallback(messages: list[BaseMessage], config: RunnableConfi
             emergency_messages = _trim_context(messages, max_non_system=2)
             if is_ashna:
                 emergency_messages = _clean_messages_for_ashna(emergency_messages)
-            return active_llm.invoke(emergency_messages)
+            return _build_llm_with_tools(active_primary, bound_tools=bound_tools).invoke(emergency_messages)
         except Exception as retry_exc:
             if not _is_retryable_ollama_error(retry_exc):
                 raise
             
             # STAGE 3: Fallback Model
             logger.warning("Emergency recovery failed. Failing over to %s", FALLBACK_OLLAMA_MODEL)
-            fallback_llm = get_fallback_llm_with_tools()
+            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
             if fallback_llm is None:
                 return _memory_error_message()
             
@@ -1069,14 +1140,14 @@ TOOL SELECTION:
 - Volatility Modeling: Use fit_garch_volatility_model for GARCH(1,1) volatility persistence and term forecasts.
 - Portfolio Optimization: Use compute_optimal_portfolio_frontier for Markowitz Max Sharpe, Min Volatility, and Risk Parity allocations.
 - ARIMA Price Forecasting: Use forecast_price_arima for short-term price paths with 95% confidence intervals.
-- Analysis & Statistics: Use get_price_series_for_analysis for returns, volatility, drawdowns, correlations.
+- Analysis & Statistics: Use get_price_series_for_analysis for returns, volatility, drawdowns, correlations, or correlation heatmap. Never tell the user you cannot do this analysis.
 - Ownership & Graph: Use retrieve_graph_rag_context for institutional holdings and ownership overlap.
 - Discovery: Use list_available_universes, list_available_sectors, get_stocks_by_sector, get_stocks_by_universe, get_stock_database_snapshot.
 - Methodology: Use search_methodology_knowledge_base for questions about the research paper, ARIMA, GARCH, ADF, or G-CVaR.
 
 FOLLOW-UP & MEMORY:
 - Maintain context across conversation turns. Reuse previously selected tickers and dates unless changed.
-- Reference charts using registered plot tokens (__PLOTSPEC__:<plot_id>) or tool output links."""
+- Never output attachment:// or unregistered plot:// links. Reference charts using registered plot tokens (__PLOTSPEC__:<plot_id>) or tool output links."""
 
 
 # 4. Define the Nodes
@@ -1825,19 +1896,31 @@ def finalize_governance_node(state: AgentState, config: RunnableConfig):
 
 def _route_after_tool(state: AgentState) -> str:
     latest_tool_name, latest_tool_output = _extract_latest_tool_output(state.get("messages", []))
-    # Tools that produce final output go to finalize_governance.
-    # get_price_series_for_analysis returns an intermediate cache reference —
+    # Tools that produce final standalone reports go directly to finalize_governance.
+    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot"}:
+        return "finalize_governance"
     if latest_tool_name == "plot_historical_prices":
         last_human = next((m for m in reversed(state.get("messages", [])) if isinstance(m, HumanMessage)), None)
         user_text = _message_content_to_text(last_human) if last_human else ""
-        if re.search(
+        if not re.search(
             r"\b(volatility|cagr|drawdown|sharpe|sortino|return\s+distribution|correlation|covariance)\b",
             user_text,
             re.IGNORECASE,
         ):
-            return "chatbot"
-    if latest_tool_name in {"run_full_governance_pipeline", "get_stock_database_snapshot", "plot_historical_prices"}:
-        return "finalize_governance"
+            return "finalize_governance"
+
+    active = state.get("active_agent")
+    if active in {
+        "market_data_agent",
+        "econometrics_agent",
+        "risk_volatility_agent",
+        "portfolio_optimizer_agent",
+        "network_graph_rag_agent",
+        "technical_analysis_agent",
+        "governance_audit_agent",
+        "chatbot",
+    }:
+        return active
     return "chatbot"
 
 def _latest_ai_tool_calls(messages: list[BaseMessage]) -> list[dict[str, Any]]:
@@ -1892,8 +1975,10 @@ def tool_interceptor_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-def _route_after_chatbot(state: AgentState) -> str:
+def _route_after_agent(state: AgentState) -> str:
     return "tool_interceptor" if _latest_ai_tool_calls(state.get("messages", [])) else "end"
+
+_route_after_chatbot = _route_after_agent
 
 
 def _route_after_interceptor(state: AgentState) -> str:
@@ -1902,6 +1987,17 @@ def _route_after_interceptor(state: AgentState) -> str:
     if state.get("route_status") == "loop_blocked":
         if state.get("scratchpad"):
             return "finalize_governance"
+        active = state.get("active_agent")
+        if active in {
+            "market_data_agent",
+            "econometrics_agent",
+            "risk_volatility_agent",
+            "portfolio_optimizer_agent",
+            "network_graph_rag_agent",
+            "technical_analysis_agent",
+            "governance_audit_agent",
+        }:
+            return active
         return "chatbot"
     return "end"
 
@@ -1932,16 +2028,119 @@ def capture_tool_state_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _create_specialized_agent_node(agent_name: str, prompt_text: str, agent_tools: list):
+    """Factory creating discrete, specialized domain agent nodes with isolated tool bindings."""
+    def agent_node(state: AgentState, config: RunnableConfig = None) -> dict[str, Any]:
+        configured_session_state = (config or {}).get("configurable", {}).get("session_state") if config else None
+        if isinstance(configured_session_state, dict):
+            state = {**state, "session_state": configured_session_state}
+        messages = state.get("messages", [])
+        working_messages = list(messages)
+        remembered_portfolio = _extract_portfolio_from_messages(working_messages)
+
+        sys_prompt = prompt_text
+        if remembered_portfolio:
+            sys_prompt += f"\n\nActive Portfolio Context: {', '.join(remembered_portfolio)}."
+
+        summary = state.get("summary", "").strip()
+        if summary:
+            if len(summary) > _MAX_SUMMARY_CHARS:
+                summary = summary[:_MAX_SUMMARY_CHARS] + "..."
+            sys_prompt += f"\n\nConversation Context Summary: {summary}"
+
+        system_messages = [SystemMessage(content=sys_prompt)]
+        if not working_messages or not isinstance(working_messages[0], SystemMessage):
+            working_messages = system_messages + working_messages
+        else:
+            working_messages = system_messages + [
+                m for m in working_messages if not isinstance(m, SystemMessage)
+            ]
+
+        working_messages = _trim_context(working_messages)
+        response = _invoke_llm_with_fallback(working_messages, config, bound_tools=agent_tools)
+
+        if hasattr(response, "content") and response.content:
+            clean_content = re.sub(r"```python.*?```", "", response.content, flags=re.DOTALL)
+            clean_content = re.sub(r"```.*?```", "", clean_content, flags=re.DOTALL)
+            if any(marker in clean_content for marker in ["plt.style.use", "import matplotlib", "sns.heatmap"]):
+                lines = clean_content.splitlines()
+                clean_content = "\n".join(l for l in lines if not any(m in l for m in ["plt.", "sns.", "import ", "pd.DataFrame"]))
+            clean_content = re.sub(r"(?<!\bno\s)\bbuy\b(?!-)", "increase advisory exposure to", clean_content, flags=re.IGNORECASE)
+            clean_content = re.sub(r"(?<!\bno\s)\bsell\b(?!-)", "reduce advisory exposure to", clean_content, flags=re.IGNORECASE)
+            response.content = _sanitize_user_visible_response(clean_content.strip(), scratchpad=state.get("scratchpad"))
+
+        return {
+            "messages": [response],
+            "active_agent": agent_name,
+            "user_portfolio": remembered_portfolio or state.get("user_portfolio", []),
+        }
+
+    agent_node.__name__ = f"{agent_name}_node"
+    return agent_node
+
+
+# Instantiate 7 specialized domain agents
+market_data_agent_node = _create_specialized_agent_node(
+    "market_data_agent", MARKET_DATA_PROMPT, market_data_agent_tools
+)
+econometrics_agent_node = _create_specialized_agent_node(
+    "econometrics_agent", ECONOMETRIC_PROMPT, econometrics_agent_tools
+)
+risk_volatility_agent_node = _create_specialized_agent_node(
+    "risk_volatility_agent", RISK_VOLATILITY_PROMPT, risk_volatility_agent_tools
+)
+portfolio_optimizer_agent_node = _create_specialized_agent_node(
+    "portfolio_optimizer_agent", PORTFOLIO_OPTIMIZATION_PROMPT, portfolio_optimizer_agent_tools
+)
+network_graph_rag_agent_node = _create_specialized_agent_node(
+    "network_graph_rag_agent", NETWORK_GRAPH_RAG_PROMPT, network_graph_rag_agent_tools
+)
+technical_analysis_agent_node = _create_specialized_agent_node(
+    "technical_analysis_agent", TECHNICAL_ANALYSIS_PROMPT, technical_analysis_agent_tools
+)
+governance_audit_agent_node = _create_specialized_agent_node(
+    "governance_audit_agent", GOVERNANCE_AUDIT_PROMPT, governance_audit_agent_tools
+)
+
+
+def supervisor_router(state: AgentState) -> str:
+    """Route from memory manager to the appropriate specialized agent or general chatbot supervisor."""
+    messages = state.get("messages", [])
+    if not messages:
+        return "chatbot"
+
+    last_human = next((m for m in reversed(messages) if isinstance(m, HumanMessage)), None)
+    if not last_human:
+        return "chatbot"
+
+    user_text = _message_content_to_text(last_human)
+    target_agent = classify_agent_for_query(user_text, state)
+    logger.info("Supervisor orchestrator routed request to specialized agent: %s", target_agent)
+    return target_agent
+
+
 def _build_graph():
-    """Build the LangGraph state machine lazily on the first chat request."""
+    """Build the LangGraph multi-agent state machine lazily on the first chat request."""
     from langgraph.graph import END, StateGraph
     from langgraph.prebuilt import ToolNode
 
     builder = StateGraph(AgentState)
 
+    # Core nodes
     builder.add_node("classify_and_route", classify_and_route_node)
     builder.add_node("memory_manager", memory_manager_node)
     builder.add_node("chatbot", chatbot_node)
+
+    # 7 Specialized Domain Agent Nodes
+    builder.add_node("market_data_agent", market_data_agent_node)
+    builder.add_node("econometrics_agent", econometrics_agent_node)
+    builder.add_node("risk_volatility_agent", risk_volatility_agent_node)
+    builder.add_node("portfolio_optimizer_agent", portfolio_optimizer_agent_node)
+    builder.add_node("network_graph_rag_agent", network_graph_rag_agent_node)
+    builder.add_node("technical_analysis_agent", technical_analysis_agent_node)
+    builder.add_node("governance_audit_agent", governance_audit_agent_node)
+
+    # Shared execution pipeline nodes
     builder.add_node("tool_interceptor", tool_interceptor_node)
     builder.add_node("tools", ToolNode(tools))
     builder.add_node("capture_tool_state", capture_tool_state_node)
@@ -1957,15 +2156,43 @@ def _build_graph():
         },
     )
 
-    builder.add_edge("memory_manager", "chatbot")
+    # Supervisor conditional routing to target specialized agent or general chatbot
     builder.add_conditional_edges(
-        "chatbot",
-        _route_after_chatbot,
+        "memory_manager",
+        supervisor_router,
         {
-            "tool_interceptor": "tool_interceptor",
-            "end": END,
+            "market_data_agent": "market_data_agent",
+            "econometrics_agent": "econometrics_agent",
+            "risk_volatility_agent": "risk_volatility_agent",
+            "portfolio_optimizer_agent": "portfolio_optimizer_agent",
+            "network_graph_rag_agent": "network_graph_rag_agent",
+            "technical_analysis_agent": "technical_analysis_agent",
+            "governance_audit_agent": "governance_audit_agent",
+            "chatbot": "chatbot",
         },
     )
+
+    # Wire conditional edges for all agents to interceptor or end
+    all_agent_nodes = [
+        "chatbot",
+        "market_data_agent",
+        "econometrics_agent",
+        "risk_volatility_agent",
+        "portfolio_optimizer_agent",
+        "network_graph_rag_agent",
+        "technical_analysis_agent",
+        "governance_audit_agent",
+    ]
+
+    for agent_name in all_agent_nodes:
+        builder.add_conditional_edges(
+            agent_name,
+            _route_after_agent,
+            {
+                "tool_interceptor": "tool_interceptor",
+                "end": END,
+            },
+        )
 
     builder.add_conditional_edges(
         "tool_interceptor",
@@ -1973,6 +2200,13 @@ def _build_graph():
         {
             "tools": "tools",
             "chatbot": "chatbot",
+            "market_data_agent": "market_data_agent",
+            "econometrics_agent": "econometrics_agent",
+            "risk_volatility_agent": "risk_volatility_agent",
+            "portfolio_optimizer_agent": "portfolio_optimizer_agent",
+            "network_graph_rag_agent": "network_graph_rag_agent",
+            "technical_analysis_agent": "technical_analysis_agent",
+            "governance_audit_agent": "governance_audit_agent",
             "finalize_governance": "finalize_governance",
             "end": END,
         },
@@ -1984,7 +2218,14 @@ def _build_graph():
         _route_after_tool,
         {
             "finalize_governance": "finalize_governance",
-            "chatbot": "memory_manager",
+            "chatbot": "chatbot",
+            "market_data_agent": "market_data_agent",
+            "econometrics_agent": "econometrics_agent",
+            "risk_volatility_agent": "risk_volatility_agent",
+            "portfolio_optimizer_agent": "portfolio_optimizer_agent",
+            "network_graph_rag_agent": "network_graph_rag_agent",
+            "technical_analysis_agent": "technical_analysis_agent",
+            "governance_audit_agent": "governance_audit_agent",
         },
     )
     builder.add_edge("finalize_governance", END)
