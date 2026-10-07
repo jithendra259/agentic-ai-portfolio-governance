@@ -18,40 +18,36 @@ import urllib.request
 from pathlib import Path
 from typing import Any, List, Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
-from src.providers.ashna_provider import normalize_ashna_base_url
-from src.providers.groq_provider import (
-    DEFAULT_GROQ_MODEL,
-    get_groq_chat_llm,
-    is_groq_model,
-    normalize_groq_base_url,
-    normalize_groq_model_name,
+from src.providers.omniroute_provider import (
+    DEFAULT_OMNIROUTE_MODEL,
+    get_omniroute_chat_llm,
+    is_omniroute_model,
 )
-from src.providers.omniroute_provider import get_omniroute_chat_llm, is_omniroute_model
 
 logger = logging.getLogger(__name__)
 
 # Constants
-_MAX_TOOL_MSG_CHARS = 1000
-_MAX_CONTEXT_MESSAGES = 5
-_MAX_SUMMARY_CHARS = 800
-
-_HAS_GROQ_KEY = bool(os.getenv("GROQ_API_KEY"))
-_HAS_ASHNA_KEY = bool(os.getenv("ASHNA_API_KEY"))
+_MAX_TOOL_MSG_CHARS = 4000
+_MAX_CONTEXT_MESSAGES = 15
+_MAX_SUMMARY_CHARS = 1200
 
 CONFIGURED_PRIMARY_OLLAMA_MODEL = (
-    os.getenv("PORTFOLIO_OLLAMA_MODEL")
-    or (DEFAULT_GROQ_MODEL if _HAS_GROQ_KEY else ("ashnaai" if _HAS_ASHNA_KEY else "qwen3-coder-next:cloud"))
+    os.getenv("PORTFOLIO_OLLAMA_MODEL") or "gpt-oss:120b-cloud"
 ).strip()
 CONFIGURED_FALLBACK_OLLAMA_MODEL = (
-    os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL")
-    or ("openai/gpt-oss-20b" if _HAS_GROQ_KEY else "qwen3:1.7b")
+    os.getenv("PORTFOLIO_OLLAMA_FALLBACK_MODEL") or "gpt-oss:20b-cloud"
 ).strip()
 CONFIGURED_DEFAULT_LLM_MODEL = (
-    os.getenv("PORTFOLIO_DEFAULT_LLM_MODEL")
-    or (DEFAULT_GROQ_MODEL if _HAS_GROQ_KEY else ("ashnaai" if _HAS_ASHNA_KEY else ""))
+    os.getenv("PORTFOLIO_DEFAULT_LLM_MODEL") or CONFIGURED_PRIMARY_OLLAMA_MODEL
 ).strip()
 
 
@@ -100,24 +96,30 @@ def _list_installed_ollama_models() -> list[str]:
 def _resolve_ollama_model(preferred_models: list[str], installed_models: list[str]) -> str:
     for model_name in preferred_models:
         candidate = (model_name or "").strip()
-        if candidate and (candidate in installed_models or candidate.startswith("openai/") or candidate.startswith("ashna")):
+        if candidate and candidate in installed_models:
             return candidate
-    return preferred_models[0] if preferred_models else "qwen3:1.7b"
+    return installed_models[0] if installed_models else (preferred_models[0] if preferred_models else "nemotron-3.5-lightning:latest")
 
 
 def _should_probe_ollama_on_startup() -> bool:
     explicit = os.getenv("PORTFOLIO_PROBE_OLLAMA_ON_STARTUP")
     if explicit is not None:
         return explicit.strip().lower() in {"1", "true", "yes", "on"}
-    return not _HAS_GROQ_KEY and not _HAS_ASHNA_KEY
+    return True
 
 
 INSTALLED_OLLAMA_MODELS = (
     _list_installed_ollama_models() if _should_probe_ollama_on_startup() else []
 )
 
-PRIMARY_OLLAMA_MODEL = CONFIGURED_PRIMARY_OLLAMA_MODEL
-FALLBACK_OLLAMA_MODEL = CONFIGURED_FALLBACK_OLLAMA_MODEL
+PRIMARY_OLLAMA_MODEL = _resolve_ollama_model(
+    [CONFIGURED_PRIMARY_OLLAMA_MODEL, "nemotron-3.5-lightning:latest"],
+    INSTALLED_OLLAMA_MODELS,
+)
+FALLBACK_OLLAMA_MODEL = _resolve_ollama_model(
+    [CONFIGURED_FALLBACK_OLLAMA_MODEL, PRIMARY_OLLAMA_MODEL],
+    INSTALLED_OLLAMA_MODELS,
+)
 
 
 # =====================================================================
@@ -157,17 +159,6 @@ def _is_retryable_ollama_error(exc: Exception) -> bool:
     return _is_ollama_memory_error(exc) or _is_ollama_unavailable_error(exc)
 
 
-def _ashna_provider_error_message(exc: Exception, fallback_exc: Exception | None = None) -> AIMessage:
-    fallback_text = f"\n\nThe configured fallback model also failed: {type(fallback_exc).__name__}." if fallback_exc is not None else ""
-    return AIMessage(
-        content=(
-            "Ashna API returned an error before the model could answer. "
-            "Please verify `ASHNA_BASE_URL=https://api.ashna.ai/v1/api`, the API key, and the model id."
-            f"{fallback_text}"
-        )
-    )
-
-
 def _available_models_text() -> str:
     return ", ".join(INSTALLED_OLLAMA_MODELS) if INSTALLED_OLLAMA_MODELS else "No installed models detected from `ollama list`."
 
@@ -176,8 +167,8 @@ def _memory_error_message() -> AIMessage:
     fallback_text = f" I also attempted fallback `{FALLBACK_OLLAMA_MODEL}`." if FALLBACK_OLLAMA_MODEL != PRIMARY_OLLAMA_MODEL else ""
     return AIMessage(
         content=(
-            f"The local Ollama model `{PRIMARY_OLLAMA_MODEL}` needs more RAM than is available."
-            f"{fallback_text}\n\nTry switching to `{FALLBACK_OLLAMA_MODEL}` or setting `GROQ_API_KEY`."
+            f"The local Ollama model `{PRIMARY_OLLAMA_MODEL}` needs more system RAM/VRAM than is available."
+            f"{fallback_text}\n\nTry running a smaller Ollama model or ensuring Ollama has sufficient resources."
         )
     )
 
@@ -186,37 +177,51 @@ def _model_not_found_message(model_name: str) -> AIMessage:
     return AIMessage(
         content=(
             f"The configured Ollama model `{model_name}` is not installed.\n\n"
-            f"Detected models: {_available_models_text()}\n\n"
-            "Either pull the model or set `PORTFOLIO_OLLAMA_MODEL`."
+            f"Detected local models: {_available_models_text()}\n\n"
+            "Either pull the model via `ollama run <name>` or set `PORTFOLIO_OLLAMA_MODEL`."
         )
     )
 
 
-def _is_ashna_model(model_name: str) -> bool:
-    return model_name.startswith("ashna") or model_name == "ashnaai"
+def _clean_messages_for_model(model_name: str, messages: list[BaseMessage]) -> list[BaseMessage]:
+    if not is_omniroute_model(model_name):
+        return messages
 
-
-def _clean_messages_for_ashna(messages: list[BaseMessage]) -> list[BaseMessage]:
-    cleaned = []
-    for msg in messages:
-        if isinstance(msg, ToolMessage):
-            cleaned.append(HumanMessage(content=f"[Tool Output for {msg.name}]: {msg.content}", id=getattr(msg, "id", None)))
-        elif isinstance(msg, AIMessage):
-            content = msg.content
-            if not content:
-                if msg.tool_calls:
-                    tool_names = [t.get("name", "unknown") for t in msg.tool_calls]
-                    content = f"I will call tools: {', '.join(tool_names)} to fetch the data."
-                else:
-                    content = "I will process that for you."
-            cleaned.append(AIMessage(content=content, id=getattr(msg, "id", None)))
+    cleaned: list[BaseMessage] = []
+    sys_texts: list[str] = []
+    for m in messages:
+        if isinstance(m, SystemMessage):
+            sys_texts.append(str(m.content))
+        elif isinstance(m, ToolMessage):
+            name = getattr(m, "name", None) or "tool"
+            cleaned.append(HumanMessage(content=f"[Tool Output ({name})]:\n{m.content}"))
         else:
-            cleaned.append(msg)
+            cleaned.append(m)
+
+    if sys_texts:
+        combined_sys = "\n\n".join(sys_texts)
+        found_human = False
+        for i, m in enumerate(cleaned):
+            if isinstance(m, HumanMessage):
+                cleaned[i] = HumanMessage(content=f"System Instructions:\n{combined_sys}\n\nUser Request:\n{m.content}")
+                found_human = True
+                break
+        if not found_human:
+            cleaned.insert(0, HumanMessage(content=f"System Instructions:\n{combined_sys}"))
+
     return cleaned
 
 
-def _clean_messages_for_model(model_name: str, messages: list[BaseMessage]) -> list[BaseMessage]:
-    return _clean_messages_for_ashna(messages) if _is_ashna_model(model_name) else messages
+def _is_ashna_model(model_name: str) -> bool:
+    return False
+
+
+def _clean_messages_for_ashna(messages: list[BaseMessage]) -> list[BaseMessage]:
+    return messages
+
+
+def _ashna_provider_error_message(exc: Exception, fallback_exc: Exception | None = None) -> AIMessage:
+    return AIMessage(content="External providers disabled. Only local Ollama and OmniRoute models are enabled.")
 
 
 # =====================================================================
@@ -254,83 +259,36 @@ def _trim_context(messages: list, max_non_system: int = _MAX_CONTEXT_MESSAGES) -
 # =====================================================================
 
 def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Optional[int] = None):
-    groq_api_key = os.getenv("GROQ_API_KEY")
-    ashna_api_key = os.getenv("ASHNA_API_KEY")
     omniroute_api_key = os.getenv("OMNIROUTE_API_KEY")
 
-    # 1. OmniRoute
-    if is_omniroute_model(model_name) or (omniroute_api_key and model_name.startswith("omniroute/")):
+    # 1. OmniRoute (Local proxy)
+    if is_omniroute_model(model_name) or (omniroute_api_key and str(model_name).startswith("omniroute/")):
         try:
             return get_omniroute_chat_llm(model_name=model_name, temperature=temperature, max_tokens=num_predict)
         except Exception as exc:
             logger.error("Failed to initialize OmniRoute client: %s", exc)
 
-    # 2. Local Ollama
-    is_ollama_requested = (
-        model_name.startswith("ollama/")
-        or model_name in INSTALLED_OLLAMA_MODELS
-        or model_name.startswith("nemotron")
-        or model_name.startswith("gpt-oss:")
-    )
-    if is_ollama_requested:
-        try:
-            from langchain_ollama import ChatOllama
-            ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").strip()
-            actual_model = model_name[len("ollama/"):] if model_name.startswith("ollama/") else model_name
-            kwargs = {
-                "model": actual_model,
-                "temperature": temperature,
-                "base_url": ollama_base_url.rstrip("/"),
-                "num_ctx": 8192,
-                "keep_alive": "10m",
-                "tags": ["orchestrator_llm", "local_ollama"],
-            }
-            if num_predict is not None:
-                kwargs["num_predict"] = num_predict
-            return ChatOllama(**kwargs)
-        except Exception as exc:
-            logger.warning("Local Ollama initialization failed: %s. Falling back to Groq.", exc)
-
-    # 3. Groq
-    if groq_api_key:
-        groq_model = DEFAULT_GROQ_MODEL if (is_ollama_requested or not model_name) else model_name
-        return get_groq_chat_llm(model_name=groq_model, temperature=temperature, max_tokens=num_predict)
-
-    # 4. Ashna AI
-    if ashna_api_key:
-        from langchain_openai import ChatOpenAI
-        raw_base = os.getenv("ASHNA_BASE_URL", "https://api.ashna.ai")
-        base_url = normalize_ashna_base_url(raw_base)
-        ashna_model = os.getenv("ASHNA_MODEL", "gpt-4o-mini")
-        return ChatOpenAI(
-            model=ashna_model,
-            openai_api_key=ashna_api_key,
-            openai_api_base=base_url,
-            temperature=temperature,
-            max_tokens=num_predict,
-            tags=["orchestrator_llm"],
-        )
-
-    # 5. Local Fallback Ollama
+    # 2. Local Ollama (Primary / Fallback)
     try:
         from langchain_ollama import ChatOllama
         ollama_base_url = (os.getenv("PORTFOLIO_OLLAMA_BASE_URL") or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434").strip()
-        actual_model = model_name[len("ollama/"):] if model_name.startswith("ollama/") else model_name
+        actual_model = model_name[len("ollama/"):] if str(model_name).startswith("ollama/") else (model_name or PRIMARY_OLLAMA_MODEL)
+        if not actual_model or actual_model in ("default", "primary"):
+            actual_model = PRIMARY_OLLAMA_MODEL
         kwargs = {
             "model": actual_model,
             "temperature": temperature,
             "base_url": ollama_base_url.rstrip("/"),
             "num_ctx": 8192,
             "keep_alive": "10m",
-            "tags": ["orchestrator_llm"],
+            "tags": ["orchestrator_llm", "local_ollama"],
         }
         if num_predict is not None:
             kwargs["num_predict"] = num_predict
         return ChatOllama(**kwargs)
-    except Exception:
-        if groq_api_key:
-            return get_groq_chat_llm(model_name=DEFAULT_GROQ_MODEL, temperature=temperature, max_tokens=num_predict)
-        raise ValueError("No LLM provider available. Set GROQ_API_KEY, ASHNA_API_KEY, or run Ollama locally.")
+    except Exception as exc:
+        logger.error("Local Ollama initialization failed: %s", exc)
+        raise ValueError(f"No local LLM available. Ensure Ollama is running at {ollama_base_url} or OmniRoute is active.")
 
 
 _llm_lock = threading.Lock()
@@ -345,14 +303,24 @@ def register_global_tools(tools_list: list):
 def _build_llm_with_tools(model_name: str, bound_tools: list = None):
     target_tools = _cached_tools if bound_tools is None else bound_tools
     llm = _get_chat_llm(model_name)
+    if is_omniroute_model(model_name):
+        # DuckDuckGo and web routes behind OmniRoute do not accept native tool/function payloads
+        # and reject requests with HTTP 400 ERR_BAD_REQUEST if tools are attached.
+        # Return base model directly so conversational inference succeeds cleanly.
+        return llm
     try:
         return llm.bind_tools(target_tools)
     except Exception as exc:
         logger.warning(
-            "Model %s does not support tool calling (%s). Falling back to %s",
-            model_name, exc, DEFAULT_GROQ_MODEL
+            "Model %s does not support tool calling (%s). Binding to primary Ollama %s",
+            model_name, exc, PRIMARY_OLLAMA_MODEL
         )
-        return _get_chat_llm(DEFAULT_GROQ_MODEL).bind_tools(target_tools)
+        if model_name != PRIMARY_OLLAMA_MODEL:
+            try:
+                return _get_chat_llm(PRIMARY_OLLAMA_MODEL).bind_tools(target_tools)
+            except Exception:
+                pass
+        return llm
 
 
 _llm_with_tools_instance = None
@@ -384,7 +352,7 @@ def _invoke_llm_with_fallback(
     config: RunnableConfig = None,
     bound_tools: list = None,
 ) -> BaseMessage:
-    """Primary LLM invocation with multi-tier failover and context trimming."""
+    """Local LLM invocation across Ollama and OmniRoute with failover."""
     override_model = config.get("configurable", {}).get("override_model") if config else None
 
     if override_model:
@@ -397,66 +365,67 @@ def _invoke_llm_with_fallback(
         active_llm = get_llm_with_tools()
         active_primary = PRIMARY_OLLAMA_MODEL
 
-    is_groq = is_groq_model(active_primary)
-    is_ashna = _is_ashna_model(active_primary)
-    messages = _clean_messages_for_model(active_primary, messages)
+    is_omni = is_omniroute_model(active_primary)
+    cleaned_messages = _clean_messages_for_model(active_primary, messages)
 
     try:
-        return active_llm.invoke(messages)
+        return active_llm.invoke(cleaned_messages)
     except Exception as exc:
-        if is_groq:
-            logger.warning("Groq model %s failed: %s. Attempting fallback.", active_primary, exc)
+        err_str = str(exc).lower()
+        if "bad_request" in err_str or "err_bad_request" in err_str or "400" in err_str:
+            logger.warning("Invocation error on %s (%s). Retrying raw invocation without tools...", active_primary, exc)
             try:
-                emergency = _trim_context(messages, max_non_system=2)
-                return _build_llm_with_tools(DEFAULT_GROQ_MODEL, bound_tools=bound_tools).invoke(emergency)
-            except Exception as trim_exc:
-                logger.warning("Trimmed context retry on Groq failed: %s", trim_exc)
+                raw_llm = _get_chat_llm(active_primary)
+                return raw_llm.invoke(cleaned_messages)
+            except Exception as retry_exc:
+                logger.warning("Raw invocation retry on %s also failed: %s", active_primary, retry_exc)
 
-            if os.getenv("ASHNA_API_KEY") and os.getenv("ASHNA_BASE_URL"):
-                try:
-                    logger.info("Failing over from Groq to Ashna AI...")
-                    return _build_llm_with_tools("ashnaai", bound_tools=bound_tools).invoke(emergency if 'emergency' in locals() else messages)
-                except Exception as ashna_exc:
-                    logger.warning("Failover to Ashna AI failed: %s", ashna_exc)
+        if is_omni:
+            # Automatic sibling failover across verified active OmniRoute models if one route fails or hits rate limits
+            candidate_siblings = [
+                "omniroute/ddgw/claude-haiku-4-5",
+                "omniroute/ddgw/mistral-small-2603",
+                "omniroute/ddgw/gpt-5.4-nano",
+                "omniroute/ddgw/gpt-5.4-mini",
+            ]
+            for sibling in candidate_siblings:
+                if sibling != active_primary and not sibling.endswith(active_primary):
+                    try:
+                        logger.info("Attempting OmniRoute sibling failover to %s...", sibling)
+                        sib_llm = _get_chat_llm(sibling)
+                        return sib_llm.invoke(_clean_messages_for_model(sibling, messages))
+                    except Exception as sib_exc:
+                        logger.debug("OmniRoute sibling %s failed: %s", sibling, sib_exc)
 
-            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
-            if fallback_llm is not None:
-                try:
-                    logger.info("Failing over from Groq to local Ollama...")
-                    return fallback_llm.invoke(emergency if 'emergency' in locals() else messages)
-                except Exception as ollama_exc:
-                    logger.warning("Failover to Ollama failed: %s", ollama_exc)
+            logger.warning("OmniRoute model %s failed: %s. Attempting failover to local Ollama (%s).", active_primary, exc, PRIMARY_OLLAMA_MODEL)
+            try:
+                fallback_llm = _build_llm_with_tools(PRIMARY_OLLAMA_MODEL, bound_tools=bound_tools)
+                return fallback_llm.invoke(_clean_messages_for_model(PRIMARY_OLLAMA_MODEL, messages))
+            except Exception as ollama_exc:
+                logger.warning("Failover from OmniRoute to Ollama failed: %s", ollama_exc)
 
-            raise exc
-
-        if is_ashna:
-            logger.warning("Ashna model %s failed: %s", active_primary, exc)
-            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
-            if fallback_llm is not None and FALLBACK_OLLAMA_MODEL != active_primary:
-                try:
-                    fallback_msgs = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                    return fallback_llm.invoke(fallback_msgs)
-                except Exception as fb_exc:
-                    return _ashna_provider_error_message(exc, fb_exc)
-            return _ashna_provider_error_message(exc)
+            return AIMessage(content=f"OmniRoute request encountered an error: {exc}. All sibling routes and local Ollama fallback were unavailable.")
 
         if _is_ollama_model_not_found_error(exc) or _is_ollama_unavailable_error(exc):
             logger.warning("Primary Ollama %s unavailable: %s", active_primary, exc)
-            fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
-            if fallback_llm is None:
-                return _model_not_found_message(active_primary)
-            try:
-                fallback_msgs = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                return fallback_llm.invoke(fallback_msgs)
-            except Exception as fb_exc:
-                if _is_retryable_ollama_error(fb_exc):
-                    return _memory_error_message()
-                raise
+            if os.getenv("OMNIROUTE_API_KEY"):
+                try:
+                    logger.info("Failing over from Ollama to OmniRoute...")
+                    omni_llm = _build_llm_with_tools("omniroute/auto", bound_tools=bound_tools)
+                    return omni_llm.invoke(messages)
+                except Exception as omni_exc:
+                    logger.warning("Failover from Ollama to OmniRoute failed: %s", omni_exc)
+            return _model_not_found_message(active_primary)
 
         if not _is_ollama_memory_error(exc):
+            try:
+                trimmed = _trim_context(messages, max_non_system=1)
+                return _build_llm_with_tools(active_primary, bound_tools=bound_tools).invoke(trimmed)
+            except Exception:
+                pass
             raise
 
-        logger.warning("Primary Model crash. Retrying with emergency trimmed history...")
+        logger.warning("Ollama memory error. Retrying with emergency trimmed history...")
         time.sleep(1.0)
         try:
             trimmed = _trim_context(messages, max_non_system=1)
@@ -465,8 +434,7 @@ def _invoke_llm_with_fallback(
             fallback_llm = _build_llm_with_tools(FALLBACK_OLLAMA_MODEL, bound_tools=bound_tools) if (FALLBACK_OLLAMA_MODEL and bound_tools is not None) else get_fallback_llm_with_tools()
             if fallback_llm is not None and FALLBACK_OLLAMA_MODEL != active_primary:
                 try:
-                    fallback_msgs = _clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages)
-                    return fallback_llm.invoke(fallback_msgs)
+                    return fallback_llm.invoke(_clean_messages_for_model(FALLBACK_OLLAMA_MODEL, messages))
                 except Exception as fb_exc:
                     if _is_retryable_ollama_error(fb_exc):
                         return _memory_error_message()

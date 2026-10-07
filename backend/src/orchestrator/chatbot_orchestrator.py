@@ -66,6 +66,7 @@ from src.agents.advanced_governance_tools import (
     generate_executive_governance_memo,
     run_portfolio_stress_test,
 )
+from src.agents.dynamic_code_executor import execute_dynamic_portfolio_code
 from src.agents.price_series_tool import get_price_series_for_analysis
 from src.orchestrator.prompts import (
     DATA_SENTINEL_PROMPT,
@@ -379,6 +380,7 @@ tools = [
     run_portfolio_stress_test,
     generate_executive_governance_memo,
     audit_data_integrity,
+    execute_dynamic_portfolio_code,
 ]
 
 # Register with LLM factory
@@ -401,6 +403,7 @@ econometrics_agent_tools = [
     run_stationarity_and_econometric_tests,
     forecast_price_arima,
     get_price_series_for_analysis,
+    execute_dynamic_portfolio_code,
 ]
 
 risk_volatility_agent_tools = [
@@ -409,6 +412,7 @@ risk_volatility_agent_tools = [
     generate_ohlc_correlation_heatmap,
     generate_missing_data_heatmap,
     save_financial_metric,
+    execute_dynamic_portfolio_code,
 ]
 
 portfolio_optimizer_agent_tools = [
@@ -416,6 +420,7 @@ portfolio_optimizer_agent_tools = [
     governance_pipeline_with_cache,
     get_detailed_past_weights,
     save_financial_metric,
+    execute_dynamic_portfolio_code,
 ]
 
 network_graph_rag_agent_tools = [

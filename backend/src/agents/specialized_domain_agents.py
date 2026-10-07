@@ -169,6 +169,7 @@ SPECIALIZED_AGENTS_METADATA = {
             "run_stationarity_and_econometric_tests",
             "forecast_price_arima",
             "get_price_series_for_analysis",
+            "execute_dynamic_portfolio_code",
         ],
     },
     "risk_volatility_agent": {
@@ -180,6 +181,7 @@ SPECIALIZED_AGENTS_METADATA = {
             "generate_ohlc_correlation_heatmap",
             "generate_missing_data_heatmap",
             "save_financial_metric",
+            "execute_dynamic_portfolio_code",
         ],
     },
     "portfolio_optimizer_agent": {
@@ -190,6 +192,7 @@ SPECIALIZED_AGENTS_METADATA = {
             "governance_pipeline_with_cache",
             "get_detailed_past_weights",
             "save_financial_metric",
+            "execute_dynamic_portfolio_code",
         ],
     },
     "network_graph_rag_agent": {

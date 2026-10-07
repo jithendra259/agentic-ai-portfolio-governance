@@ -47,9 +47,10 @@ const SESSION_INDEX_STORAGE_KEY = 'portfolio-ai-chat-session-ids';
 const WELCOME_MESSAGE_ID = 'msg-welcome-1';
 
 const DEFAULT_MODEL_LIST = [
-  'openai/gpt-oss-120b',
-  'openai/gpt-oss-20b',
-  'qwen/qwen3.8-27b',
+  'ollama/gpt-oss:120b-cloud',
+  'ollama/gpt-oss:20b-cloud',
+  'omniroute/ddgw/gpt-5.4-mini',
+  'omniroute/ddgw/claude-haiku-4-5',
 ];
 
 function createSessionId() {
@@ -582,7 +583,7 @@ export default function ChatInterface({ setView }) {
     return nextSessionId;
   });
 
-  const [selectedModel, setSelectedModel] = useState('openai/gpt-oss-120b');
+  const [selectedModel, setSelectedModel] = useState('ollama/gpt-oss:120b-cloud');
   const [availableModels, setAvailableModels] = useState(DEFAULT_MODEL_LIST);
   const [loadingModels, setLoadingModels] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState(sessionId);

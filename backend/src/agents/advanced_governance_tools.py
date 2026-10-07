@@ -284,7 +284,7 @@ def audit_data_integrity(
     for ticker in clean_tickers:
         frame = pd.DataFrame()
         # 1. Check MongoDB price storage
-        docs = _find_price_documents_with_retry(ticker)
+        docs = _find_price_documents_with_retry([ticker])
         source = "MongoDB"
         if docs:
             doc = docs[0] if isinstance(docs, list) and docs else (docs if isinstance(docs, dict) else None)

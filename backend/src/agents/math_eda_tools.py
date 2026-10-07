@@ -34,7 +34,7 @@ def _fetch_price_df(tickers: list[str], start_date: str = "2020-01-01", end_date
     for ticker in clean_tickers:
         frame = pd.DataFrame()
         # 1. MongoDB
-        docs = _find_price_documents_with_retry(ticker)
+        docs = _find_price_documents_with_retry([ticker])
         if docs:
             doc = docs[0] if isinstance(docs, list) and docs else (docs if isinstance(docs, dict) else None)
             if doc:
@@ -44,6 +44,7 @@ def _fetch_price_df(tickers: list[str], start_date: str = "2020-01-01", end_date
             frame = _cached_yfinance_history_frame(ticker, start_date, end_date)
 
         if not frame.empty and "Close" in frame.columns:
+            frame = frame.copy()
             frame["Date"] = pd.to_datetime(frame["Date"], utc=True).dt.tz_localize(None)
             filtered = frame[(frame["Date"] >= start_dt) & (frame["Date"] <= end_dt)]
             if len(filtered) >= 10:

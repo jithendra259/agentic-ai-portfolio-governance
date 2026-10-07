@@ -956,8 +956,6 @@ def health_check() -> dict:
     mongo_status = getattr(app.state, "mongo_available", False)
     
     import os
-    has_ashna_key = bool(os.getenv("ASHNA_API_KEY"))
-    has_groq_key = bool(os.getenv("GROQ_API_KEY"))
     has_omniroute_key = bool(os.getenv("OMNIROUTE_API_KEY"))
     
     # Dynamically probe installed Ollama models
@@ -966,59 +964,29 @@ def health_check() -> dict:
     
     # Check for model presence
     ollama_status = bool(live_ollama_models or PRIMARY_OLLAMA_MODEL in INSTALLED_OLLAMA_MODELS)
-    default_llm_status = bool(
-        (CONFIGURED_DEFAULT_LLM_MODEL and CONFIGURED_DEFAULT_LLM_MODEL.startswith("ashna") and has_ashna_key)
-        or has_groq_key
-        or has_omniroute_key
-    )
+    default_llm_status = bool(ollama_status or has_omniroute_key)
     
     available_models: list[str] = []
 
-    # 1. Groq models
-    groq_models = [
-        "openai/gpt-oss-120b",
-        "openai/gpt-oss-20b",
-        "qwen/qwen3.8-27b",
-        "allam-2-7b",
-    ]
-    for model in groq_models:
-        if model not in available_models:
-            available_models.append(model)
-
-    # 2. Local Ollama models
+    # 1. Ollama Cloud models (no local weights needed)
+    available_models.extend(["ollama/gpt-oss:120b-cloud", "ollama/gpt-oss:20b-cloud"])
     for model in live_ollama_models:
         ollama_name = f"ollama/{model}"
-        if ollama_name not in available_models:
+        if "nemotron" not in model.lower() and ollama_name not in available_models:
             available_models.append(ollama_name)
-    # Always include ollama/gpt-oss:120b as a standard option
-    if "ollama/gpt-oss:120b" not in available_models:
-        available_models.append("ollama/gpt-oss:120b")
 
-    # 3. OmniRoute models
+    # 2. OmniRoute models (Local proxy)
     if has_omniroute_key:
         try:
             from src.providers.omniroute_provider import get_omniroute_available_models
             omni_models = get_omniroute_available_models(timeout=1.5)
             if not omni_models:
-                omni_models = ["omniroute/auto"]
+                omni_models = ["omniroute/ddgw/gpt-5.4-mini", "omniroute/ddgw/claude-haiku-4-5"]
             for model in omni_models[:15]:
                 if model not in available_models:
                     available_models.append(model)
         except Exception:
-            available_models.append("omniroute/auto")
-
-    # 4. Ashna models
-    if has_ashna_key:
-        ashna_models = [
-            "ashnaai",
-            "ashna-x1",
-            "ashna/gpt-4o",
-            "ashna/gpt-4o-mini",
-            "ashna/gpt-3.5-turbo"
-        ]
-        for model in ashna_models:
-            if model not in available_models:
-                available_models.append(model)
+            available_models.extend(["omniroute/ddgw/gpt-5.4-mini", "omniroute/ddgw/claude-haiku-4-5"])
     
     return {
         "status": "ok" if (mongo_status or True) and (ollama_status or default_llm_status) else "degraded",
@@ -1028,10 +996,7 @@ def health_check() -> dict:
             "mongodb": "connected" if mongo_status else ("initializing" if mongo_status is None else "disconnected"),
             "supabase_postgres": get_postgres_status(),
             "ollama": "ready" if ollama_status else "model_missing",
-            "default_llm": "ready" if default_llm_status else "not_configured",
-            "groq": "ready" if has_groq_key else "not_configured",
             "omniroute": "ready" if has_omniroute_key else "not_configured",
-            "ashnaai": "ready" if has_ashna_key else "not_configured"
         },
         "models": {
             "primary": PRIMARY_OLLAMA_MODEL,

@@ -8,10 +8,16 @@ import os
 import urllib.request
 from typing import Any, Optional
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OMNIROUTE_BASE_URL = "http://127.0.0.1:20128/v1"
-DEFAULT_OMNIROUTE_MODEL = "auto"
+DEFAULT_OMNIROUTE_MODEL = "ddgw/gpt-5.4-mini"
 
 
 def normalize_omniroute_base_url(base_url: str | None) -> str:
@@ -44,21 +50,30 @@ def get_omniroute_available_models(
     if resolved_key:
         headers["Authorization"] = f"Bearer {resolved_key}"
 
+    # Verified active streaming models in OmniRoute
+    priority_models = [
+        "omniroute/ddgw/gpt-5.4-mini",
+        "omniroute/ddgw/claude-haiku-4-5",
+        "omniroute/ddgw/mistral-small-2603",
+        "omniroute/ddgw/gpt-5.4-nano",
+    ]
+
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             model_items = data.get("data", [])
-            # Return IDs with omniroute/ prefix
-            models = []
+            models = list(priority_models)
             for item in model_items:
                 model_id = item.get("id")
-                if model_id and not item.get("id", "").startswith("aihorde"):  # filter out heavy image diffusion models
-                    models.append(f"omniroute/{model_id}")
+                if model_id and not item.get("id", "").startswith("aihorde"):
+                    name = f"omniroute/{model_id}"
+                    if name not in models:
+                        models.append(name)
             return models
     except Exception as exc:
         logger.debug("OmniRoute models fetch failed or unreachable: %s", exc)
-        return []
+        return list(priority_models)
 
 
 def is_omniroute_model(model_name: str | None) -> bool:

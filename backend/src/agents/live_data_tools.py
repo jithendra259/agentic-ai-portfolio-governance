@@ -312,7 +312,11 @@ def _get_effective_price_on_or_before(df: pd.DataFrame, target_date: pd.Timestam
     return eligible.iloc[-1]
 
 
-def _normalize_tickers(tickers: list[str]) -> list[str]:
+def _normalize_tickers(tickers: Any) -> list[str]:
+    if isinstance(tickers, str):
+        tickers = [tickers]
+    elif not isinstance(tickers, (list, tuple, set)):
+        return []
     return sorted({t.strip().upper() for t in tickers if isinstance(t, str) and t.strip()})
 
 
