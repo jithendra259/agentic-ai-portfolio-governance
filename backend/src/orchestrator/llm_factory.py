@@ -279,7 +279,7 @@ def _get_chat_llm(model_name: str, temperature: float = 0.2, num_predict: Option
             "model": actual_model,
             "temperature": temperature,
             "base_url": ollama_base_url.rstrip("/"),
-            "num_ctx": 8192,
+            "num_ctx": int(os.getenv("OLLAMA_NUM_CTX", "4096")),
             "keep_alive": "10m",
             "tags": ["orchestrator_llm", "local_ollama"],
         }

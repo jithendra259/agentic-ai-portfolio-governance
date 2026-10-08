@@ -244,7 +244,14 @@ def is_memory_initialized() -> bool:
 def get_postgres_status() -> dict[str, Any]:
     if not is_memory_initialized():
         return {"status": "uninitialized", "pg_pool": False, "write_errors": 0}
-    return get_memory_manager().get_postgres_health()
+    try:
+        mgr = get_memory_manager()
+        if hasattr(mgr, "get_postgres_health"):
+            return mgr.get_postgres_health()
+        pg_pool = getattr(mgr, "pg_pool", None) is not None
+        return {"status": "connected" if pg_pool else "active", "pg_pool": pg_pool, "write_errors": 0}
+    except Exception as exc:
+        return {"status": "degraded", "pg_pool": False, "error": str(exc), "write_errors": 0}
 
 
 class LazyMemoryManager:

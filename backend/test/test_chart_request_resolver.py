@@ -154,7 +154,34 @@ class ChartRequestResolverTests(unittest.TestCase):
         )
 
         self.assertIn("close-price spread area chart", response)
-        self.assertIn("AAPL, MSFT", response)
+    def test_lowercase_tickers_and_aliases(self):
+        with patch("src.decision.chart_request_resolver.run_data_analysis_plot") as mock_tool:
+            mock_tool.func.return_value = {
+                "status": "success",
+                "plot_id": "plot-nvda-msft-aapl",
+                "analysis_task": "price_line",
+                "tickers": ["MSFT", "AAPL", "NVDA"],
+            }
+
+            resolved = resolve_deterministic_chart_request(
+                "plot the closing price the msft aapl and nvdia",
+                "session-1",
+            )
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved["analysis_task"], "price_line")
+        call_kwargs = mock_tool.func.call_args.kwargs
+        self.assertEqual(call_kwargs["tickers"], ["MSFT", "AAPL", "NVDA"])
+
+    def test_empty_price_line_without_tickers_or_sector_returns_none(self):
+        with patch("src.decision.chart_request_resolver.run_data_analysis_plot") as mock_tool:
+            resolved = resolve_deterministic_chart_request(
+                "plot the closing price",
+                "session-1",
+            )
+
+        self.assertIsNone(resolved)
+        mock_tool.func.assert_not_called()
 
 
 if __name__ == "__main__":

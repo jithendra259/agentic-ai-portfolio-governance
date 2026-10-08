@@ -180,6 +180,17 @@ class MongoMemoryManager:
     def is_available(self) -> bool:
         return self._db is not None
 
+    def get_postgres_health(self) -> dict[str, Any]:
+        if not self.pg_pool:
+            return {"status": "unconnected", "pg_pool": False, "write_errors": 0}
+        try:
+            with self.pg_pool.connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+            return {"status": "healthy", "pg_pool": True, "write_errors": 0}
+        except Exception as exc:
+            return {"status": "degraded", "pg_pool": False, "error": str(exc), "write_errors": 0}
+
     def _collection(self, name: str) -> Collection | None:
         if self._db is None:
             return None

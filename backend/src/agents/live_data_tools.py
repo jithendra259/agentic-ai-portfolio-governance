@@ -4,6 +4,7 @@ import os
 import re
 import time
 import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 from functools import lru_cache
 from importlib import import_module
 from typing import Any, Optional
@@ -286,7 +287,7 @@ def _extract_price_frame(doc: dict, downsample: bool = False, keep_ohlcv: bool =
         for col in ["Open", "open", "High", "high", "Low", "low", "Volume", "volume"]:
             if col in df.columns:
                 cols_to_keep.append(col)
-        df = df[cols_to_keep].rename(columns={date_col: "Date", close_col: "Close"})
+        df = df[cols_to_keep].rename(columns={date_col: "Date", close_col: "Close"}).copy()
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_localize(None)
         df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
         for col in ["Open", "open", "High", "high", "Low", "low", "Volume", "volume"]:
@@ -294,7 +295,7 @@ def _extract_price_frame(doc: dict, downsample: bool = False, keep_ohlcv: bool =
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
     else:
-        df = df[[date_col, close_col]].rename(columns={date_col: "Date", close_col: "Close"})
+        df = df[[date_col, close_col]].rename(columns={date_col: "Date", close_col: "Close"}).copy()
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_localize(None)
         df["Close"] = pd.to_numeric(df["Close"], errors="coerce")
         df = df.dropna(subset=["Date", "Close"]).sort_values("Date").drop_duplicates(subset=["Date"], keep="last")
@@ -314,10 +315,17 @@ def _get_effective_price_on_or_before(df: pd.DataFrame, target_date: pd.Timestam
 
 def _normalize_tickers(tickers: Any) -> list[str]:
     if isinstance(tickers, str):
-        tickers = [tickers]
-    elif not isinstance(tickers, (list, tuple, set)):
+        raw_list = re.split(r"[,;]+|\s+", tickers.strip())
+    elif isinstance(tickers, (list, tuple, set)):
+        raw_list = []
+        for item in tickers:
+            if isinstance(item, str):
+                raw_list.extend(re.split(r"[,;]+|\s+", item.strip()))
+            elif item is not None:
+                raw_list.append(str(item).strip())
+    else:
         return []
-    return sorted({t.strip().upper() for t in tickers if isinstance(t, str) and t.strip()})
+    return sorted({t.strip().upper() for t in raw_list if t and t.strip()})
 
 
 def _build_price_frames(docs_by_ticker: dict[str, dict]) -> dict[str, pd.DataFrame]:
@@ -2736,7 +2744,7 @@ def get_stock_database_snapshot(tickers: list[str]) -> str:
         if not tickers:
             return "Unable to fetch stock database snapshot: no tickers were provided."
 
-        cleaned_tickers = sorted({t.strip().upper() for t in tickers if isinstance(t, str) and t.strip()})
+        cleaned_tickers = _normalize_tickers(tickers)
         if not cleaned_tickers:
             return "Unable to fetch stock database snapshot: no valid tickers were provided."
 

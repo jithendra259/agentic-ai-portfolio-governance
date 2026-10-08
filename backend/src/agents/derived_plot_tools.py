@@ -698,10 +698,10 @@ def run_data_analysis_plot(
         resolved_tickers = _normalize_tickers(tickers or ([ticker] if ticker else []))
         if task == "price_spread_area" and len(resolved_tickers) < 2:
             resolved_tickers = DEFAULT_SPREAD_TICKERS
-        elif not resolved_tickers:
+        elif not resolved_tickers and (sector or universe or analysis_cache_key):
             resolved_tickers = _resolve_tickers_for_missing_heatmap(None, sector, universe, analysis_cache_key)
-        if not resolved_tickers:
-            raise ValueError("No tickers could be resolved for this analysis.")
+        elif not resolved_tickers:
+            raise ValueError("No tickers could be resolved for this analysis. Please specify ticker symbol(s).")
 
         if task == "returns_correlation_heatmap":
             spec, summary = _returns_correlation_heatmap_spec(resolved_tickers, start_date, end_date, analysis_cache_key)

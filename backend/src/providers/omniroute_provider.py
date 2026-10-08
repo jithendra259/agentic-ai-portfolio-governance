@@ -81,7 +81,19 @@ def is_omniroute_model(model_name: str | None) -> bool:
     if not model_name:
         return False
     name = model_name.strip().lower()
-    return name.startswith("omniroute/") or name.startswith("omni/") or name == "omniroute"
+    return (
+        name.startswith("omniroute/")
+        or name.startswith("omni/")
+        or name.startswith("ddgw/")
+        or name.startswith("aug/")
+        or name.startswith("zc/")
+        or name.startswith("cxa/")
+        or name.startswith("tllm/")
+        or name.startswith("pol/")
+        or name.startswith("pollinations/")
+        or name.startswith("horde/")
+        or name == "omniroute"
+    )
 
 
 def get_omniroute_chat_llm(
