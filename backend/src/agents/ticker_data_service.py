@@ -190,6 +190,17 @@ def fetch_yfinance_snapshot(ticker: str) -> Optional[Dict[str, Any]]:
     }
 
 
+import time
+
+_PRICE_DOC_CACHE: Dict[Tuple[Tuple[str, ...], Optional[str], Optional[str], bool], Tuple[float, List[Dict[str, Any]]]] = {}
+_PRICE_DOC_CACHE_TTL: float = 60.0
+
+
+def clear_price_doc_cache() -> None:
+    """Clear in-memory cached price documents."""
+    _PRICE_DOC_CACHE.clear()
+
+
 def get_dynamic_price_documents(
     tickers: List[str],
     start_date: Optional[str] = None,
@@ -201,6 +212,13 @@ def get_dynamic_price_documents(
     cleaned = normalize_ticker_list(tickers)
     if not cleaned:
         return []
+
+    cache_key = (tuple(sorted(cleaned)), start_date, end_date, keep_ohlcv)
+    now = time.time()
+    if cache_key in _PRICE_DOC_CACHE:
+        cached_time, cached_docs = _PRICE_DOC_CACHE[cache_key]
+        if now - cached_time < _PRICE_DOC_CACHE_TTL:
+            return [dict(d) for d in cached_docs]
 
     docs: List[Dict[str, Any]] = []
 
@@ -245,5 +263,8 @@ def get_dynamic_price_documents(
                 valid_docs.append(yf_doc)
                 found_tickers.add(missing_ticker)
                 logger.info("Successfully fetched dynamic stock data for %s via yfinance (%d bars)", missing_ticker, len(yf_doc["historical_prices"]))
+
+    if valid_docs:
+        _PRICE_DOC_CACHE[cache_key] = (now, valid_docs)
 
     return valid_docs

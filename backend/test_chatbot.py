@@ -17,7 +17,7 @@ def run_test():
             if isinstance(chunk, dict):
                 for k, v in chunk.items():
                     safe_print(f"NODE: {k}")
-                    if "messages" in v:
+                    if isinstance(v, dict) and "messages" in v:
                         for m in v["messages"]:
                             safe_print(f"  {type(m).__name__}: {m.content}")
                             if hasattr(m, "tool_calls") and m.tool_calls:

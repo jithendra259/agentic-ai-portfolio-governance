@@ -1456,3 +1456,22 @@ class MongoMemoryManager:
         except PyMongoError as exc:
             logger.warning("Failed to claim legacy chat sessions: %s", exc)
             return {"claimed_rows": 0, "claimed_sessions": []}
+
+    def get_checkpointer(self):
+        """
+        Returns a LangGraph compatible checkpointer.
+        Uses PostgresSaver if POSTGRES_URL is configured and available; otherwise MemorySaver.
+        """
+        postgres_url = get_clean_postgres_url(os.getenv("POSTGRES_URL", ""))
+        if postgres_url and ConnectionPool is not None:
+            try:
+                from langgraph.checkpoint.postgres import PostgresSaver
+                pool = ConnectionPool(conninfo=postgres_url, max_size=10, timeout=5)
+                checkpointer = PostgresSaver(pool)
+                checkpointer.setup()
+                return checkpointer
+            except Exception as exc:
+                logger.warning("PostgresSaver initialization failed: %s; falling back to MemorySaver.", exc)
+
+        from langgraph.checkpoint.memory import MemorySaver
+        return MemorySaver()
