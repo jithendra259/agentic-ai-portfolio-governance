@@ -22,11 +22,39 @@ from src.agents.technical_indicators import (
     SupportResistanceCalculator, TrendAnalyzer, IndicatorResult
 )
 from src.agents.technical_report_generator import TechnicalReportGenerator
-from src.agents.live_data_tools import get_price_series_for_analysis
+from src.agents.ticker_data_service import get_dynamic_price_documents
 from src.agents.generate_dynamic_plot import generate_financial_plot
-from src.agents.plot_store import GLOBAL_PLOT_IDS
+from src.agents.plot_store import register_plot, GLOBAL_PLOT_IDS
 
 logger = logging.getLogger(__name__)
+
+
+def get_ticker_price_dataframe(ticker: str, days: int = 252) -> pd.DataFrame:
+    """Fetch historical OHLCV data for technical indicator calculations."""
+    start_dt = (datetime.utcnow() - timedelta(days=max(60, int(days * 1.6)))).strftime("%Y-%m-%d")
+    docs = get_dynamic_price_documents([ticker], start_date=start_dt, keep_ohlcv=True)
+    if not docs or not docs[0].get("historical_prices"):
+        return pd.DataFrame()
+    
+    hp = docs[0]["historical_prices"]
+    df = pd.DataFrame(hp)
+    df.columns = [c.lower() for c in df.columns]
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+    return df
+
+
+def _resolve_session_id(config: Any) -> str:
+    if not config:
+        return "default"
+    if isinstance(config, dict):
+        cfg = config.get("configurable", {})
+        return str(cfg.get("session_id") or cfg.get("thread_id") or "default")
+    cfg = getattr(config, "configurable", {})
+    if isinstance(cfg, dict):
+        return str(cfg.get("session_id") or cfg.get("thread_id") or "default")
+    return "default"
 
 
 # ============================================================================
@@ -54,7 +82,7 @@ def calculate_rsi_signals(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -86,9 +114,9 @@ def calculate_rsi_signals(
             ]
         }
         
-        session_id = config.configurable.get("session_id", "default") if config else "default"
-        plot_id = f"rsi_{ticker}_{datetime.utcnow().timestamp()}"
-        GLOBAL_PLOT_IDS[plot_id] = plot_data
+        session_id = _resolve_session_id(config)
+        plot_id = f"rsi_{ticker}_{int(datetime.utcnow().timestamp())}"
+        register_plot(plot_id, plot_data, session_id)
         
         return {
             "ticker": ticker,
@@ -138,7 +166,7 @@ def calculate_macd_crossovers(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -172,9 +200,9 @@ def calculate_macd_crossovers(
             ]
         }
         
-        session_id = config.configurable.get("session_id", "default") if config else "default"
-        plot_id = f"macd_{ticker}_{datetime.utcnow().timestamp()}"
-        GLOBAL_PLOT_IDS[plot_id] = plot_data
+        session_id = _resolve_session_id(config)
+        plot_id = f"macd_{ticker}_{int(datetime.utcnow().timestamp())}"
+        register_plot(plot_id, plot_data, session_id)
         
         return {
             "ticker": ticker,
@@ -226,7 +254,7 @@ def calculate_bollinger_bands(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -262,9 +290,9 @@ def calculate_bollinger_bands(
             ]
         }
         
-        session_id = config.configurable.get("session_id", "default") if config else "default"
-        plot_id = f"bb_{ticker}_{datetime.utcnow().timestamp()}"
-        GLOBAL_PLOT_IDS[plot_id] = plot_data
+        session_id = _resolve_session_id(config)
+        plot_id = f"bb_{ticker}_{int(datetime.utcnow().timestamp())}"
+        register_plot(plot_id, plot_data, session_id)
         
         return {
             "ticker": ticker,
@@ -318,7 +346,7 @@ def detect_support_resistance(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -391,7 +419,7 @@ def analyze_trends(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -427,9 +455,9 @@ def analyze_trends(
             ]
         }
         
-        session_id = config.configurable.get("session_id", "default") if config else "default"
-        plot_id = f"trend_{ticker}_{datetime.utcnow().timestamp()}"
-        GLOBAL_PLOT_IDS[plot_id] = plot_data
+        session_id = _resolve_session_id(config)
+        plot_id = f"trend_{ticker}_{int(datetime.utcnow().timestamp())}"
+        register_plot(plot_id, plot_data, session_id)
         
         return {
             "ticker": ticker,
@@ -484,7 +512,7 @@ def generate_technical_report(
     """
     try:
         # Get historical price data
-        price_data = get_price_series_for_analysis(ticker, days=data_days)
+        price_data = get_ticker_price_dataframe(ticker, days=data_days)
         if price_data is None or len(price_data) == 0:
             return {
                 "error": f"Unable to fetch price data for {ticker}",
@@ -496,9 +524,9 @@ def generate_technical_report(
         report = generator.generate_full_report(price_data)
         
         # Store report in session
-        session_id = config.configurable.get("session_id", "default") if config else "default"
-        report_id = f"ta_report_{ticker}_{datetime.utcnow().timestamp()}"
-        GLOBAL_PLOT_IDS[report_id] = report
+        session_id = _resolve_session_id(config)
+        report_id = f"ta_report_{ticker}_{int(datetime.utcnow().timestamp())}"
+        register_plot(report_id, report, session_id)
         
         return {
             "ticker": ticker,
