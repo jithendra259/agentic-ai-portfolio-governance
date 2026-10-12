@@ -130,6 +130,17 @@ def get_price_series_for_analysis(
             df = _cached_yfinance_history_frame(ticker, start_str, end_str)
         else:
             df = _extract_price_frame(doc, keep_ohlcv=True)
+            # If MongoDB data does not reach end_dt or has fewer than 5 rows in range, supplement from yfinance
+            if not df.empty:
+                max_mongo_date = df["Date"].max()
+                if max_mongo_date < (end_dt - pd.Timedelta(days=7)):
+                    yf_df = _cached_yfinance_history_frame(ticker, start_str, end_str)
+                    if not yf_df.empty:
+                        combined = pd.concat([df, yf_df]).sort_values("Date")
+                        df = combined.drop_duplicates(subset=["Date"], keep="last")
+            else:
+                df = _cached_yfinance_history_frame(ticker, start_str, end_str)
+
         if df.empty:
             missing.append(ticker)
             continue

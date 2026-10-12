@@ -7,7 +7,7 @@ class CFG:
 
     # ── Data ─────────────────────────────────────────────────
     START_DATE:        str   = "2005-01-01"
-    END_DATE:          str   = "2025-12-31"
+    END_DATE:          str   = "2026-12-31"
 
     # ── Rolling Windows ───────────────────────────────────────
     WINDOW_SIZE:       int   = 252      # trading days (~1 year)

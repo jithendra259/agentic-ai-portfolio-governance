@@ -219,19 +219,25 @@ class PDFKnowledgeIngestor:
         docs = list(
             collection.find(
                 {
-                    "$or": [{"source_type": source_type}, {"source_paper": "methodology"}],
-                    "$or": [{"embedding": {"$exists": False}}, {"embedding": []}],
+                    "$or": [
+                        {"embedding": {"$exists": False}},
+                        {"embedding": []},
+                        {"embedding": None},
+                    ]
                 },
                 {"_id": 0, "chunk_id": 1, "raw_text": 1},
             )
         )
         if not docs:
+            logger.info("All chunks already have embeddings.")
             return 0
 
+        logger.info("Found %d chunks needing embeddings. Processing in batches of %d...", len(docs), batch_size)
         updated = 0
-        for start in range(0, len(docs), max(1, int(batch_size))):
+        total = len(docs)
+        for start in range(0, total, max(1, int(batch_size))):
             batch = docs[start : start + max(1, int(batch_size))]
-            texts = [doc.get("raw_text", "") for doc in batch]
+            texts = [str(doc.get("raw_text") or "").strip() for doc in batch]
             embeddings = embedding_model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
 
             operations = []
@@ -252,6 +258,7 @@ class PDFKnowledgeIngestor:
             if operations:
                 collection.bulk_write(operations, ordered=False)
                 updated += len(operations)
+                logger.info("Embedded and updated %d/%d chunks (%.1f%%)", updated, total, (updated / total) * 100)
 
         return updated
 

@@ -47,6 +47,15 @@ class MethodologyVectorRAG:
         self._collection = None
         self._embedding_model = None
         self._embedding_attempted = False
+        self._cached_docs: list[dict[str, Any]] | None = None
+        self._cached_vector_docs: list[dict[str, Any]] | None = None
+        self._cached_matrix: np.ndarray | None = None
+
+    def invalidate_cache(self) -> None:
+        """Clear cached documents and precomputed vector matrices."""
+        self._cached_docs = None
+        self._cached_vector_docs = None
+        self._cached_matrix = None
 
     def search(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
         cleaned_query = str(query or "").strip()
@@ -92,10 +101,14 @@ class MethodologyVectorRAG:
 
         return "\n".join(lines)
 
-    def _load_chunk_docs(self) -> list[dict[str, Any]]:
+    def _load_chunk_docs(self, force_refresh: bool = False) -> list[dict[str, Any]]:
+        if not force_refresh and self._cached_docs is not None:
+            return self._cached_docs
+
         collection = self._get_collection()
         if collection is None:
-            return self._load_local_knowledge_docs()
+            self._cached_docs = self._load_local_knowledge_docs()
+            return self._cached_docs
 
         try:
             docs = list(
@@ -115,13 +128,18 @@ class MethodologyVectorRAG:
             )
         except Exception as exc:
             logger.warning("Methodology Mongo retrieval failed; using local knowledge fallback: %s", exc)
-            return self._load_local_knowledge_docs()
+            self._cached_docs = self._load_local_knowledge_docs()
+            return self._cached_docs
+
         local_docs = self._load_local_knowledge_docs()
         if docs:
             existing_ids = {doc.get("chunk_id") for doc in docs}
             docs.extend(doc for doc in local_docs if doc.get("chunk_id") not in existing_ids)
-            return docs
-        return local_docs
+            self._cached_docs = docs
+            return self._cached_docs
+
+        self._cached_docs = local_docs
+        return self._cached_docs
 
     def _load_local_knowledge_docs(self) -> list[dict[str, Any]]:
         docs: list[dict[str, Any]] = []
@@ -168,20 +186,46 @@ class MethodologyVectorRAG:
         if embedding_model is None:
             return []
 
+        # Build or reuse pre-stacked embedding matrix for vectorized BLAS similarity
         vector_docs = [doc for doc in docs if isinstance(doc.get("embedding"), list) and doc.get("embedding")]
         if not vector_docs:
             return []
 
+        if self._cached_matrix is None or self._cached_vector_docs is None or len(self._cached_vector_docs) != len(vector_docs):
+            try:
+                self._cached_matrix = np.asarray([d["embedding"] for d in vector_docs], dtype=np.float32)
+                self._cached_vector_docs = vector_docs
+            except Exception as exc:
+                logger.warning("Failed to stack embedding matrix: %s", exc)
+                self._cached_matrix = None
+                self._cached_vector_docs = None
+
         try:
             query_embedding = embedding_model.encode([query], normalize_embeddings=True, show_progress_bar=False)[0]
+            query_vec = np.asarray(query_embedding, dtype=np.float32)
         except Exception as exc:
             logger.warning("Vector query encoding failed: %s", exc)
             return []
 
+        if self._cached_matrix is not None and self._cached_vector_docs is not None:
+            try:
+                scores = np.dot(self._cached_matrix, query_vec)
+                k = min(max(1, int(top_k)), len(scores))
+                top_indices = np.argsort(-scores)[:k]
+                scored_docs = []
+                for idx in top_indices:
+                    enriched = dict(self._cached_vector_docs[idx])
+                    enriched["score"] = float(scores[idx])
+                    scored_docs.append(enriched)
+                return scored_docs
+            except Exception as exc:
+                logger.warning("Vectorized dot product search failed: %s", exc)
+
+        # Fallback to item-by-item calculation
         scored_docs = []
         for doc in vector_docs:
             try:
-                score = float(np.dot(np.asarray(doc["embedding"], dtype=float), query_embedding))
+                score = float(np.dot(np.asarray(doc["embedding"], dtype=float), query_vec))
             except Exception:
                 continue
 

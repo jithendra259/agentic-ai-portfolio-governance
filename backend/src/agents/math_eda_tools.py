@@ -29,17 +29,14 @@ def _fetch_price_df(tickers: list[str], start_date: str = "2020-01-01", end_date
 
     start_dt = pd.to_datetime(start_date, utc=True).tz_localize(None)
     end_dt = pd.to_datetime(end_date, utc=True).tz_localize(None)
+    
+    docs = _find_price_documents_with_retry(clean_tickers, start_date=start_date, end_date=end_date)
+    found_map = {str(d.get("ticker", "")).upper(): d for d in docs}
     series_dict = {}
 
     for ticker in clean_tickers:
-        frame = pd.DataFrame()
-        # 1. MongoDB
-        docs = _find_price_documents_with_retry([ticker])
-        if docs:
-            doc = docs[0] if isinstance(docs, list) and docs else (docs if isinstance(docs, dict) else None)
-            if doc:
-                frame = _extract_price_frame(doc)
-        # 2. yfinance fallback
+        doc = found_map.get(ticker)
+        frame = _extract_price_frame(doc) if doc else pd.DataFrame()
         if frame.empty:
             frame = _cached_yfinance_history_frame(ticker, start_date, end_date)
 
@@ -54,8 +51,7 @@ def _fetch_price_df(tickers: list[str], start_date: str = "2020-01-01", end_date
     if not series_dict:
         return pd.DataFrame()
 
-    df = pd.DataFrame(series_dict).sort_index().ffill().bfill().dropna(how="all")
-    return df
+    return pd.DataFrame(series_dict).sort_index().ffill().bfill().dropna(how="all")
 
 
 @tool("run_stationarity_and_econometric_tests")

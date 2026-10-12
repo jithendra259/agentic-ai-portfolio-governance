@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, lazy, Suspense } from 'react';
 import { ThemeProvider, createTheme, CssBaseline, Box, CircularProgress } from '@mui/material';
-import ChatInterface from './components/ChatInterface';
-import AnalyticsDashboard from './components/AnalyticsDashboard';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppProvider } from '@toolpad/core/AppProvider';
-import AuthPageContainer from './components/auth/AuthPageContainer';
+
+const ChatInterface = lazy(() => import('./components/ChatInterface'));
+const AnalyticsDashboard = lazy(() => import('./components/AnalyticsDashboard'));
+const AuthPageContainer = lazy(() => import('./components/auth/AuthPageContainer'));
 
 const darkTheme = createTheme({
   palette: {
@@ -126,7 +127,15 @@ function AuthWrapper() {
   }
 
   if (!session) {
-    return <AuthPageContainer />;
+    return (
+      <Suspense fallback={
+        <Box sx={{ display: 'flex', minHeight: '100vh', justifyContent: 'center', alignItems: 'center', bgcolor: '#0D0D0D' }}>
+          <CircularProgress sx={{ color: '#FFFFFF' }} />
+        </Box>
+      }>
+        <AuthPageContainer />
+      </Suspense>
+    );
   }
 
   const BRANDING = {
@@ -145,11 +154,17 @@ function AuthWrapper() {
       branding={BRANDING} 
       theme={darkTheme}
     >
-      {view === 'chat' ? (
-        <ChatInterface setView={setView} />
-      ) : (
-        <AnalyticsDashboard setView={setView} />
-      )}
+      <Suspense fallback={
+        <Box sx={{ display: 'flex', minHeight: '100vh', justifyContent: 'center', alignItems: 'center', bgcolor: '#0D0D0D' }}>
+          <CircularProgress sx={{ color: '#FFFFFF' }} />
+        </Box>
+      }>
+        {view === 'chat' ? (
+          <ChatInterface setView={setView} />
+        ) : (
+          <AnalyticsDashboard setView={setView} />
+        )}
+      </Suspense>
     </AppProvider>
   );
 }

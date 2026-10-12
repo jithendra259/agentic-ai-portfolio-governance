@@ -23,15 +23,22 @@ class GraphRAGAgent:
     def execute(self, universe_id):
         print(f"[Agent 2] Building graph context for {universe_id}")
 
-        cursor = self.collection.find(
-            {"universes": universe_id},
-            {"ticker": 1, "graph_relationships.institutional_holders": 1},
-        )
+        from src.agents.ticker_data_service import normalize_ticker_list, get_dynamic_price_documents
+        tickers = normalize_ticker_list(universe_id) if isinstance(universe_id, (list, tuple, set)) or "," in str(universe_id) else []
+        if tickers:
+            docs = get_dynamic_price_documents(tickers)
+        else:
+            docs = list(self.collection.find(
+                {"universes": universe_id},
+                {"ticker": 1, "graph_relationships.institutional_holders": 1},
+            ))
+            if not docs:
+                docs = get_dynamic_price_documents([str(universe_id)])
 
         bipartite_graph = nx.Graph()
         stocks = []
 
-        for doc in cursor:
+        for doc in docs:
             ticker = doc.get("ticker")
             if not ticker:
                 continue

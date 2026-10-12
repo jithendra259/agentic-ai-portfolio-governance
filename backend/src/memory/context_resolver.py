@@ -733,7 +733,7 @@ def _build_direct_response(
                 "To calculate real ticker concentration, I need your holdings: shares per ticker, "
                 "invested amount per ticker, or stored current portfolio weights.\n"
                 "I can either:\n"
-                "1. list U1 tickers,\n"
+                "1. use your active tickers,\n"
                 "2. use equal-weight proxy for testing,\n"
                 "3. use latest advisory weights, clearly labeled as advisory, not current."
             ),

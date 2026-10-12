@@ -21,28 +21,41 @@ def setup_indexes():
     
     print("Setting up MongoDB indexes for Agentic AI Portfolio Governance...")
     
+    def safe_create_index(col, keys, **kwargs):
+        try:
+            col.create_index(keys, **kwargs)
+        except pymongo.errors.OperationFailure as e:
+            if getattr(e, "code", None) == 85:
+                pass
+            else:
+                raise
+
     # 1. TTL on graph_snapshots (e.g. 30 days expiration)
     if "graph_snapshots" not in db.list_collection_names():
         db.create_collection("graph_snapshots")
-    db["graph_snapshots"].create_index("created_at", expireAfterSeconds=30*24*60*60)
-    print(" - Created TTL index on graph_snapshots.created_at")
+    safe_create_index(db["graph_snapshots"], "created_at", expireAfterSeconds=30*24*60*60)
+    print(" - Configured TTL index on graph_snapshots.created_at")
     
     # 2. Compound on hitl_decisions
     if "hitl_decisions" not in db.list_collection_names():
         db.create_collection("hitl_decisions")
-    db["hitl_decisions"].create_index([("universe_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
-    print(" - Created compound index on hitl_decisions (universe_id, timestamp)")
+    safe_create_index(db["hitl_decisions"], [("universe_id", pymongo.ASCENDING), ("timestamp", pymongo.DESCENDING)])
+    print(" - Configured compound index on hitl_decisions (universe_id, timestamp)")
     
     # 3. Text index on pdf_chunks
     if "pdf_chunks" not in db.list_collection_names():
         db.create_collection("pdf_chunks")
-    db["pdf_chunks"].create_index([("raw_text", pymongo.TEXT)])
-    print(" - Created TEXT index on pdf_chunks.raw_text")
+    safe_create_index(db["pdf_chunks"], [("raw_text", pymongo.TEXT)])
+    print(" - Configured TEXT index on pdf_chunks.raw_text")
 
-    # 4. Standard lookups (optional but good practice)
-    db["blackboard_mpi"].create_index("universe_id")
-    db["regime_transitions"].create_index("universe_id")
-    db["backtest_results"].create_index("universe_id")
+    # 4. Standard lookups and ticker fast indexing
+    if "ticker" in db.list_collection_names():
+        safe_create_index(db["ticker"], "ticker")
+        safe_create_index(db["ticker"], "universes")
+        print(" - Configured indexes on ticker.ticker and ticker.universes")
+    safe_create_index(db["blackboard_mpi"], "universe_id")
+    safe_create_index(db["regime_transitions"], "universe_id")
+    safe_create_index(db["backtest_results"], "universe_id")
     
     print("Done. All necessary indexes are configured.")
 

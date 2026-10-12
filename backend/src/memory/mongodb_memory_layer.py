@@ -161,7 +161,7 @@ class MongoMemoryManager:
                     appname="agentic-ai-portfolio-governance-memory",
                 )
                 self._client.admin.command("ping")
-            except PyMongoError as exc:
+            except Exception as exc:
                 logger.warning("MongoMemoryManager initialization failed: %s", exc)
                 self._client = None
 

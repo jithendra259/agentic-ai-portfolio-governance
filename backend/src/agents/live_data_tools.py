@@ -180,50 +180,60 @@ def _find_price_documents_with_retry(
     if not cleaned:
         return []
 
-    if start_date and end_date:
-        date_expr = {"$ifNull": ["$$hp.Date", "$$hp.date"]}
-        cond = {
-            "$and": [
-                {"$gte": [date_expr, str(start_date)]},
-                {"$lte": [date_expr, str(end_date)]},
-            ]
-        }
-        projection = {
-            "ticker": 1,
-            "historical_prices": {
-                "$filter": {
-                    "input": "$historical_prices",
-                    "as": "hp",
-                    "cond": cond,
-                }
-            },
-        }
-    else:
-        projection = {
-            "ticker": 1,
-            "historical_prices.Date": 1,
-            "historical_prices.date": 1,
-            "historical_prices.Close": 1,
-            "historical_prices.close": 1,
-        }
+    def _mongo_finder(tkrs, start_date=None, end_date=None, keep_ohlcv=False):
+        if start_date and end_date:
+            date_expr = {"$ifNull": ["$$hp.Date", "$$hp.date"]}
+            cond = {
+                "$and": [
+                    {"$gte": [date_expr, str(start_date)]},
+                    {"$lte": [date_expr, str(end_date)]},
+                ]
+            }
+            projection = {
+                "ticker": 1,
+                "historical_prices": {
+                    "$filter": {
+                        "input": "$historical_prices",
+                        "as": "hp",
+                        "cond": cond,
+                    }
+                },
+            }
+        else:
+            projection = {
+                "ticker": 1,
+                "historical_prices.Date": 1,
+                "historical_prices.date": 1,
+                "historical_prices.Close": 1,
+                "historical_prices.close": 1,
+            }
 
-    if keep_ohlcv and not (start_date and end_date):
-        projection.update({
-            "historical_prices.Open": 1,
-            "historical_prices.open": 1,
-            "historical_prices.High": 1,
-            "historical_prices.high": 1,
-            "historical_prices.Low": 1,
-            "historical_prices.low": 1,
-            "historical_prices.Volume": 1,
-            "historical_prices.volume": 1,
-        })
+        if keep_ohlcv and not (start_date and end_date):
+            projection.update({
+                "historical_prices.Open": 1,
+                "historical_prices.open": 1,
+                "historical_prices.High": 1,
+                "historical_prices.high": 1,
+                "historical_prices.Low": 1,
+                "historical_prices.low": 1,
+                "historical_prices.Volume": 1,
+                "historical_prices.volume": 1,
+            })
 
-    return _find_documents_with_retry(
-        {"ticker": {"$in": cleaned}},
-        projection,
-        batch_size=50,
-        max_time_ms=20000,
+        return _find_documents_with_retry(
+            {"ticker": {"$in": tkrs}},
+            projection,
+            batch_size=50,
+            max_time_ms=20000,
+        )
+
+    from src.agents.ticker_data_service import get_dynamic_price_documents
+    return get_dynamic_price_documents(
+        cleaned,
+        start_date=start_date,
+        end_date=end_date,
+        keep_ohlcv=keep_ohlcv,
+        mongo_docs_finder=_mongo_finder,
     )
 
 
@@ -2271,7 +2281,6 @@ def _format_stock_record(doc: dict) -> str:
     lines = [
         f"Ticker: {ticker}",
         f"- Company: {company_name}",
-        f"- Universes: {', '.join(universes) if universes else 'None stored'}",
         f"- Sector: {info.get('sector', 'Unknown')}",
         f"- Industry: {info.get('industry', 'Unknown')}",
         f"- Country: {info.get('country', 'Unknown')}",
@@ -3357,17 +3366,7 @@ def run_full_governance_pipeline(
                 )
             )
 
-        docs = _find_documents_with_retry(
-            {"ticker": {"$in": cleaned_tickers}},
-            {
-                "ticker": 1,
-                "historical_prices.Date": 1,
-                "historical_prices.date": 1,
-                "historical_prices.Close": 1,
-                "historical_prices.close": 1,
-                "graph_relationships.institutional_holders": 1,
-            },
-        )
+        docs = _find_price_documents_with_retry(cleaned_tickers)
         docs_by_ticker = {str(doc.get("ticker", "")).upper(): doc for doc in docs}
         price_frames = _build_price_frames(docs_by_ticker)
         prepared = _prepare_portfolio_inputs(

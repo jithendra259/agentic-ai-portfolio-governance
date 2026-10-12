@@ -311,12 +311,13 @@ class IntentRouter:
 
     def _greeting_help(self) -> str:
         return (
-            "Hi. You can ask for things like:\n"
-            "- sectors\n"
-            "- stocks in U1\n"
-            "- show me tech stocks\n"
-            "- analyze AAPL, MSFT, NVDA for 2008-10-15\n"
-            "- how does G-CVaR work?"
+            "Hi! I am your AI Financial & Portfolio Assistant. You can ask me to:\n"
+            "- Analyze any stocks: 'analyze AAPL, MSFT, NVDA'\n"
+            "- Plot historical prices: 'plot historical prices for TSLA, GOOGL'\n"
+            "- Compare risk and volatility: 'compare volatility of AMD vs INTC'\n"
+            "- Check stock fundamentals: 'snapshot and details for AMZN'\n"
+            "- Run portfolio optimization: 'optimize portfolio of AAPL, MSFT, GOOGL for 2024-01-01'\n"
+            "- Explain methodologies: 'how does G-CVaR optimization work?'"
         )
 
     def _format_stock_snapshot_response(self, user_message: str, raw_snapshot: Any) -> Any:
