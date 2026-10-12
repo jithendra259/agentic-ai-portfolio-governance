@@ -230,9 +230,13 @@ def _build_line_spec(data: dict, title: str) -> dict:
 
     series = []
     total_points = 0
+    dates_fallback = data.get("dates") or []
     for i, (name, rows) in enumerate(raw.items()):
         if isinstance(rows, dict):
             rows = [{"date": k, "close": v} for k, v in rows.items()]
+        elif isinstance(rows, list) and rows and not isinstance(rows[0], (dict, list)):
+            if dates_fallback and len(dates_fallback) >= len(rows):
+                rows = [{"date": d, "close": v} for d, v in zip(dates_fallback, rows)]
         if not isinstance(rows, list) or not rows:
             continue
         frame = pd.DataFrame(rows)
@@ -1253,12 +1257,16 @@ def _build_gauge_spec(data: dict, title: str) -> dict:
 
 
 def _build_radial_series_spec(data: dict, title: str, plot_type: str) -> dict:
-    categories = data.get("categories") or data.get("rotationAxis", [{}])[0].get("data")
+    categories = data.get("categories") or (data.get("rotationAxis", [{}])[0].get("data") if data.get("rotationAxis") else None)
     raw_series = data.get("series") or []
     if not categories and raw_series:
         first = raw_series[0]
-        if isinstance(first, dict) and isinstance(first.get("data"), dict):
-            categories = list(first["data"].keys())
+        if isinstance(first, dict):
+            if isinstance(first.get("data"), dict):
+                categories = list(first["data"].keys())
+            elif "label" in first and "value" in first:
+                categories = [str(s.get("label", "")) for s in raw_series if isinstance(s, dict)]
+                raw_series = [{"name": title, "data": [s.get("value", 0.0) for s in raw_series if isinstance(s, dict)]}]
     if not categories:
         raise ValueError(f"{plot_type} chart data must include categories.")
 
